@@ -1,0 +1,329 @@
+#+title: Appkit compose surfaces
+#+options: toc:3 num:nil
+
+Appkit separates protocol-neutral editing authority, owner-bound child
+editors, chat-specific multi-part geometry, and source-markup interpretation.
+The layers are implemented by ~appkit-compose.el~,
+~appkit-compose-edit.el~, ~appkit-chat-compose.el~, and
+~appkit-markup-compose.el~ in Appkit 0.3.0.
+
+* Ownership
+
+A /compose session/ is protocol-neutral editing authority attached to a
+client-owned document buffer.  Appkit owns:
+
+- one monotonic semantic source generation;
+- immutable client-owned capture at an exact generation;
+- one view-local compose operation owner;
+- stale-owner and duplicate-callback fencing;
+- cancellation request delivery;
+- optional operation label and progress presentation.
+
+The client owns:
+
+- document meaning and validation;
+- persistent drafts and workspaces;
+- autosave, scheduling, and close policy;
+- attachments and protocol identities;
+- transport and reconciliation;
+- accepted, rejected, unknown, saved, and cancelled outcomes.
+
+/Client semantics/ means those protocol-specific capabilities, validation,
+persistence, transport, and error rules.  An Appkit operation owner never
+records client semantics.
+
+A /chat compose surface/ is the separate chatbuf-based multi-part editor.
+Committed parts are generated timeline rows and the trailing composer edits one
+current part.  It is suitable for social post threads; it is not a universal
+document editor or draft model.
+
+* Owner-bound child editor
+
+~appkit-compose-edit-buffer~ opens a temporary native-mode editor for one
+client-owned string:
+
+#+begin_src emacs-lisp
+(appkit-compose-edit-buffer
+ view initial-text
+ :mode #'emacs-lisp-mode
+ :buffer-name "*Client Code Block*"
+ :display-action '((display-buffer-below-selected))
+ :validation-function #'client-check-code)
+#+end_src
+
+The editor layers protocol-neutral finish keys (~C-c C-c~ and ~C-x C-s~) and
+cancel keys (~C-c C-k~ and ~C-c C-z~) over the selected major-mode map.  It
+returns the accepted property-free string or nil after cancellation.  Its
+buffer is an exact OWNER handle, so owner shutdown cancels the recursive edit
+and removes the buffer.
+
+Appkit does not select a language, compile the returned string into a document,
+or assign transport semantics.  The client supplies the mode, validation,
+content-free buffer name, display policy, and final structured-object or wire
+representation.
+
+* Generic compose session
+
+** Setup
+
+~appkit-compose-setup~ attaches compose primitives to the current buffer without
+changing its major mode:
+
+#+begin_src emacs-lisp
+(appkit-compose-setup
+ :snapshot-function #'client-compose-snapshot
+ :source-bounds-function #'client-compose-source-bounds
+ :state-change-function #'client-compose-state-changed
+ :generation 0)
+#+end_src
+
+The snapshot function returns an owned client value.  It may return a plain
+string, a property-preserving string, or a client document.  Appkit does not
+inspect it.
+
+The optional source-bounds function returns the editable semantic region.  The
+whole buffer is tracked when it is absent.  Bounds must remain inside the
+current buffer and may be empty when the client has no semantic source region.
+
+The state-change callback receives the session after generation or operation
+state changes.  It updates client-owned presentation only; it does not transfer
+document ownership to Appkit.
+
+~appkit-compose-session-mode~ installs buffer-local change and kill hooks.
+Disabling the mode or killing the buffer invalidates the current operation and
+requests cancellation of its live handle or function.
+
+** Semantic generation
+
+An edit overlapping source bounds advances ~appkit-compose-generation~ exactly
+once through the buffer change hook.  A semantic change outside editable text,
+such as selecting an attachment or audience, calls ~appkit-compose-touch~
+exactly once.
+
+Generated chrome and projection refreshes use:
+
+#+begin_src emacs-lisp
+(appkit-compose-without-tracking
+  ...generated buffer mutation...)
+#+end_src
+
+The form suppresses generation changes; it does not make an otherwise semantic
+edit observational.
+
+Loading another client document uses ~appkit-compose-reset~ with its starting
+generation.  Reset invalidates and cancels the active operation before replacing
+the generation and clearing the buffer-modified flag.
+
+** Capture
+
+~appkit-compose-capture~ returns:
+
+#+begin_src emacs-lisp
+(:generation GENERATION :value OWNED-CLIENT-VALUE)
+#+end_src
+
+The capture is the immutable authority used by one client operation.  A client
+does not rebuild transport input from the live buffer after beginning a write.
+Appkit does not copy or interpret the captured value; the snapshot function must
+return owned data.
+
+** Source-backed markup capture
+
+~appkit-markup-compose-setup~ configures a client-owned ordered codec list,
+active codec, context function, structured-object classifier, and object
+printer on top of the generic session.  Changing the persistent active codec is
+a semantic state change and advances the generic compose generation exactly
+once.
+
+~appkit-markup-compose-capture~ consumes one generic capture and freezes:
+
+- generation and selected source codec;
+- codec context and object-printer identity;
+- normalized Document, diagnostics, and side channels.
+
+Pure preview and provider output consume that same capture; neither rereads the
+live source.  A universal prefix may select another configured codec for one
+capture without changing the persistent active codec.  See
+[[file:markup.org][markup documents]] for parsing, printing, object fencing,
+codec selection, and semantic-loss handling.
+
+** Compose operation
+
+A /compose operation/ is one view-local effect frozen at a semantic generation
+and owned by an opaque token:
+
+#+begin_src emacs-lisp
+(let ((owner
+       (appkit-compose-operation-begin
+        'submitting
+        :generation generation
+        :label "Sending"
+        :progress 0.0
+        :cancel-function handle)))
+  ...)
+#+end_src
+
+Only that exact owner may update or finish the current operation.  A stale owner
+has no effect.  Beginning a second operation while one is active is a user
+error.
+
+~KIND~ is a client-supplied symbol without protocol meaning.  The operation
+generation may be the current or an earlier captured generation, but never a
+future generation.  Label and progress are presentation only; progress is nil
+or a number from 0 through 1.
+
+~appkit-compose-operation-update~ can replace the label, progress, or
+cancellation object while the owner remains current.  Replacing an Appkit handle
+retires the old handle.  If cancellation was already requested, a newly
+installed cancellation object is cancelled immediately.
+
+~appkit-compose-cancel-operation~ records a cancellation request and invokes the
+current handle or zero-argument function once.  Ownership remains current until
+the client settles and calls ~appkit-compose-operation-finish~.  Cancellation is
+a request, not a durable outcome.
+
+Finishing an owner clears presentation and retires its cancellation handle.  It
+does not mark a document sent, saved, rejected, or cancelled.
+
+** Status presentation
+
+A /status field/ is a client-provided plist with ~:label~, optional ~:value~,
+and optional zero-argument ~:action~.  It describes one current compose setting
+without assigning that setting cross-protocol meaning.
+
+~appkit-compose-status-field-string~ and
+~appkit-compose-status-fields-string~ render fields.  An action belongs to the
+field span; Appkit does not create a client keymap or Transient dependency.
+
+~appkit-compose-status-text~ combines operation label and optional percentage.
+~appkit-compose-progress-bar~ supplies fixed presentation geometry only.
+
+* Chat compose surface
+
+~appkit-chat-compose-mode~ derives from ~appkit-chatbuf-mode~ and adds a
+chat-specific sequence of parts.  It uses the generic compose generation for
+structural changes but does not use generic operation state as a transport
+outcome.
+
+** Parts and items
+
+A /compose part/ is one ordered item.  Committed items render as generated rows;
+the live trailing composer is merged into the item currently being edited or
+appended as a new item.
+
+Each item is a plist with:
+
+- internal stable ~:id~;
+- optional ~:text~;
+- arbitrary client-owned metadata such as ~:attachments~.
+
+~appkit-chat-compose-set-items~ replaces the complete sequence.  The last item
+becomes live input and earlier items become committed rows.  The operation is a
+document load: generated changes are untracked and the generic compose
+generation resets to zero.
+
+~appkit-chat-compose-items~ is the authoritative ordered snapshot.  Clients do
+not mirror the sequence in another variable.  Committed metadata is retained
+and the live body is merged into the corresponding item.
+
+~appkit-chat-compose-update-current-item~ updates client metadata and advances
+the semantic generation once.  ~appkit-chat-compose-add-item~ and
+~appkit-chat-compose-drop-item~ each perform one structural generation change.
+Navigation between parts is observational.
+
+An empty text body remains an item when client metadata is present.  This allows
+attachment-only parts without assigning attachment meaning to Appkit.
+
+** Current text representation
+
+The current 0.2.18 chat compose surface stores part bodies as plain strings.
+~appkit-chat-compose-body~ and the internal item merge deliberately remove text
+properties.  Structured chatbuf input objects therefore do not survive a
+commit into an ~appkit-chat-compose~ item.
+
+The first Slackit and Disco markup integrations use their existing
+~appkit-chatbuf-mode~ composers, whose canonical input preserves properties.
+Property-preserving multi-part bodies require a separate source change and are
+not implied by the markup design.
+
+** Generated geometry
+
+~appkit-chat-compose-setup~ accepts client callbacks for:
+
+- context text;
+- status fields;
+- one attachment section or a part-aligned part list;
+- generated footer text;
+- an optional client-owned Appkit application.
+
+Callbacks own all protocol meaning.  ~PARTS-FUNCTION~ replaces the single
+attachment callback and returns part plists with optional title and attachment
+presentation.
+
+Refresh reconciles committed rows through ~appkit-chat-timeline~, rebuilds only
+generated frame content, and rebinds the trailing input without rewriting its
+live text.  Generated refreshes run under ~appkit-compose-without-tracking~ and
+do not add undo entries to the editable composer.
+
+When no application is supplied, the compose buffer starts and owns a private
+~appkit-chat-compose~ application and stops it when the buffer dies.
+
+* Structured input and markup
+
+~appkit-chatbuf~ is the property-preserving compose surface used by the first
+markup clients.  Its canonical input state, live input string, setters, and
+copies preserve text properties and compare them with
+~equal-including-properties~.
+
+Each structured input occurrence has:
+
+- opaque semantic payload;
+- unique occurrence span identity;
+- original visible text;
+- start and end sentinels.
+
+Equal adjacent payloads remain distinct occurrences.  Atomic deletion expands
+to complete occurrence bounds, and the repair pass removes an occurrence whose
+sentinels or visible interior were damaged.
+
+Mixed object/text history is not implemented in 0.2.18.  The shared chatbuf
+history intentionally skips entries containing structured objects.  Markup
+integration must not document object-bearing history until that behavior is
+designed and implemented.
+
+The accepted markup design and its implementation status are in
+[[file:markup.org][markup documents]].
+
+* Compact presentation terms
+
+A /one-line preview/ is bounded protocol-neutral content for a compact container.
+It may combine atomic visual content with text and a textual fallback, but it
+excludes the surrounding row, action, and resource lifecycle.
+
+A /media attachment view/ is presentation for one attached item: preview, label,
+description, transfer state, and available actions.  It is distinct from the
+media resource that can be read, opened, or displayed.
+
+A /transfer control/ presents one in-flight or available byte transfer with
+direction, state, optional progress, optional byte counts, and one client
+action.  It is not an HTTP request, upload model, job, or resource.
+
+* Verification contracts
+
+The current compose tests prove:
+
+- generated edits do not advance semantic generation;
+- capture contains the exact generation and client value;
+- stale operation owners cannot update or finish a newer operation;
+- cancellation remains a request until client settlement;
+- reset invalidates and cancels an old owner;
+- generated chat chrome stays outside editable input;
+- refresh preserves live bodies and does not duplicate undo;
+- multi-part add, edit, drop, and navigation preserve order;
+- attachment-only metadata remains an item;
+- each structural edit advances generation exactly once.
+
+A future property-preserving chat-compose change needs new tests through
+~appkit-chat-compose-set-items~, part navigation, commit, edit, and
+~appkit-chat-compose-items~.  Existing chatbuf object tests are not sufficient
+for that surface.

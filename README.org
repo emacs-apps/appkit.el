@@ -1,0 +1,66 @@
+#+title: appkit.el
+#+options: toc:nil num:nil
+
+* What it is
+
+Appkit is a protocol-neutral runtime for stateful Emacs clients.  Its vNext
+control plane owns serialized App and Surface models, finite keyed Effects,
+generated-buffer lifecycle, and presentation commit ordering.  Reusable
+projection, compose, chat, media, markup, and geometry modules remain
+presentation mechanisms beneath that runtime.  Client packages own protocol
+types, transport adapters, domain transitions, and branding.
+
+Client packages supply protocol models, transport adapters, domain
+transitions, and branding.  Appkit does not define Discord, QQ, Slack,
+channel, or message models.
+
+* Install
+
+#+begin_src emacs-lisp
+;; straight.el
+(use-package appkit
+  :straight (:host github :repo "emacs-im/appkit.el"))
+
+;; package-vc (Emacs 29+)
+(use-package appkit
+  :vc (:url "https://github.com/emacs-im/appkit.el"))
+#+end_src
+
+* Requirements
+
+- Emacs 32.0+
+- ~plz~ 0.8+
+- ~video.el~ 0.1+ with its native module built
+
+* Depend
+
+Sibling packages load it as a local file dependency:
+
+#+begin_src emacs-lisp
+(depends-on "appkit" :file "../appkit.el")
+#+end_src
+
+No consumer compatibility aliases are provided.  Use the public
+~appkit-*-~ namespaces directly.
+
+* Documentation
+
+Human-facing, integration, and accepted design documentation uses Org.  Keep one
+Org source for each design surface and do not add a parallel ~README.md~ that
+would hide this landing page.
+
+- [[file:docs/integrator.org][Integrator guide]] — vNext ownership, closed transitions, generated Surfaces, and tests
+- [[file:docs/compose.org][Compose surfaces]] — implemented compose lifecycle and chat-specific geometry
+- [[file:docs/markup.org][Markup documents]] — accepted markup design and Slackit/Disco adaptation
+
+* Development
+
+Eask owns package activation and load paths:
+
+#+begin_src sh
+eask recompile
+scripts/eask-ert-brief test/*.el
+#+end_src
+
+The brief runner recompiles immediately before testing and forwards
+its arguments to ~eask test ert~.

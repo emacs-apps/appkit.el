@@ -1,0 +1,487 @@
+#+title: Appkit integrator guide
+#+options: toc:2 num:nil
+
+This guide is for authors of Appkit clients.  It is not an end-user manual.
+Detailed accepted designs live in [[file:compose.org][compose surfaces]] and
+[[file:markup.org][markup documents]].  Terms are defined at the surface that
+owns them rather than in a separate glossary.
+
+* Ownership
+
+Appkit owns lifecycle, update mechanics, and reusable presentation.
+Clients own application state, protocol adaptation, and branding.
+
+/Client semantics/ means protocol-specific meaning, validation, capability,
+persistence, transport, and error behavior.  Appkit owns reusable mechanisms;
+it does not turn client semantics into global policy.
+
+** Appkit
+
+- Application sessions, buffer views, and owned timers, hooks, and
+  processes
+- Owner-scoped keyed FIFO task queues with bounded concurrency
+- Stable-key read-only projections with presentation dependency
+  indexing, coalesced invalidation, and semantic position preservation
+- Generated-content, property-only, and editable transactions
+- Stable-key EWOC reconciliation and independent semantic point and
+  viewport
+- Mode-neutral compose sessions, chat composers, discussion rows,
+  directories, action spans, transfer controls, and name coloring
+- HTTPS-only media acquisition, preview processes, and media-card
+  actions
+- Optional Evil bindings without a runtime Evil dependency
+
+** Clients
+
+- Protocol objects, validation, persistence, and error meaning
+- Transport, including how progress is measured and how cancel aborts
+  that transport
+- Identity keys, faces, and self or system color overrides
+- Cursor and page semantics, remote-frontier observations, and when a
+  response reaches latest
+- Logical media cache keys and wire-resource state
+
+* Surfaces
+
+** Action spans
+
+An action span is one buffer region carrying a client-supplied zero-argument
+action.  ~appkit-ui-add-action~ makes it activatable by ~RET~ or primary click.
+Help text describes the action itself; Appkit does not infer a protocol target
+or install a client keymap.
+
+** Compose primitives
+
+The exact source-backed contract is documented in
+[[file:compose.org][compose surfaces]].
+
+~appkit-compose-setup~ attaches protocol-neutral editing primitives to the
+current buffer without changing its major mode or document model.  The client
+supplies an owned snapshot function and, when only part of the buffer is
+semantic source, editable source bounds.
+
+Appkit owns exactly two reusable mechanisms:
+
+- a monotonic semantic generation and immutable
+  ~appkit-compose-capture~ result;
+- one view-local effect owner with stale-callback fencing, optional progress,
+  and cancellation request handling.
+
+Appkit does not save drafts, schedule autosave, decide close policy, persist an
+outcome, or classify completion as accepted, rejected, unknown, cancelled, or
+saved.  Those meanings belong to the client reducer.  Finishing an owner only
+retires its view-local authority.
+
+Generated chrome must use ~appkit-compose-without-tracking~.  Semantic changes
+outside editable text, such as an attachment or identity selection, call
+~appkit-compose-touch~ exactly once.  A client may compare the captured
+generation with its own durable revision, but Appkit does not own that durable
+frontier.
+
+** Child compose editors
+
+Use ~appkit-compose-edit-buffer~ when one client-owned string needs a temporary
+native major-mode editor.  Pass the exact live app/view owner and a content-free
+buffer name.  Appkit owns recursive finish/cancel interaction and buffer
+lifecycle only; language selection, validation rules, structured-object
+insertion, and wire encoding remain client responsibilities.
+
+** Chat compose
+
+~appkit-chat-compose-mode~ is the chat-specific multi-part editor.  Committed
+items are generated timeline rows and the trailing chatbuf composer edits one
+item at a time.  Use it for ordered social post threads, not as the universal
+Compose model.
+
+The client owns each item’s protocol metadata.  Appkit owns the single ordered
+item sequence, row/input geometry, and structural revisions.  Load a complete
+draft with ~appkit-chat-compose-set-items~ and read it with
+~appkit-chat-compose-items~; do not mirror that sequence in another buffer-local
+variable.  Status fields use the generic ~appkit-compose-*~ presentation
+functions.
+
+Part bodies remain plain strings in Appkit 0.3.0; the chat-compose item merge
+removes text properties.  Use the property-preserving ~appkit-chatbuf~ input
+state directly when structured objects must survive capture.
+
+** Markup documents
+
+[[file:markup.org][Markup documents]] define the semantic model, native UI,
+codec registry, structured-object fencing, codec selection, preview, and
+plain-text export contracts.
+
+Appkit 0.3.0 ships ~appkit-markup~, ~appkit-markup-ui~,
+~appkit-markup-codec~, ~appkit-markup-codecs~, and
+~appkit-markup-compose~.  Direct provider adapters still construct Documents
+without printing and reparsing provider data.
+
+Source-backed compose setup layers on an existing generic compose session:
+
+#+begin_src emacs-lisp
+(appkit-compose-setup
+ :snapshot-function #'client-property-preserving-source
+ :source-bounds-function #'client-source-bounds)
+
+(appkit-markup-compose-setup
+ :codecs '(markdown org plain)
+ :active-codec 'markdown
+ :object-classifier #'client-classify-object
+ :object-printer #'client-print-object)
+#+end_src
+
+~appkit-markup-compose-capture~ freezes generation, selected source codec,
+context, object-printer identity, parsed Document, diagnostics, and side
+channels.  Use that same capture for
+~appkit-markup-compose-preview~ and ~appkit-markup-compose-output~.  Inspect
+losses before transport; never silently flatten unsupported semantics.
+
+~org~ uses built-in ~org-element~ without enabling Org mode or hooks.
+~markdown~ directly uses the pinned GNU Emacs block and inline Tree-sitter
+grammars without enabling ~markdown-ts-mode~ or installing grammars during
+parse.  ~plain~ treats syntax markers literally.  Universal prefixes select
+later configured codecs in the same order as Telega.  One active-codec change
+calls ~appkit-compose-touch~.
+
+For incoming presentation, construct a normalized Document and call
+~appkit-markup-ui-insert-document~.  Use ~:interactive-p nil~ for previews;
+Appkit then invokes no link/object/code callback and traverses stored fallback.
+
+** Transfer control
+
+A timeline transfer control presents one upload or download.  The
+client supplies direction, state, optional 0-1 progress, optional
+byte counts, and a cancel or download action.  Appkit draws the bar
+and measure.  It does not own a file, HTTP request, or job model.
+
+** Chat buffers
+
+~appkit-chatbuf-mode~ is the writable base.  Clients register a
+timeline-only minor mode with ~appkit-chatbuf-use-timeline-mode~.
+Appkit clamps prompt motion, repairs structured input objects, and
+keeps generated content read-only even when the composer is hidden.
+
+Set ~appkit-chatbuf-input-sync-function~ to synchronize
+protocol-specific draft state.  Do not install a second after-change
+controller.
+
+Canonical chatbuf input and ~appkit-chatbuf-input-string~ preserve text
+properties.  Structured input objects carry opaque payload, unique occurrence
+identity, original visible text, and boundary sentinels.  Atomic deletion and
+repair operate on complete occurrences.  Shared input history currently skips
+object-bearing entries.
+
+Construct compact content with
+~appkit-ui-one-line-preview-create~.  Its optional propertized prefix
+is atomic, uses its underlying text as the terminal fallback, and
+declares its graphical width with ~:prefix-columns~.  Appkit preserves
+display properties, styles only the textual leading span, and bounds the
+combined fragment through ~appkit-ui-render-one-line-preview~.
+
+Pass the same preview model as ~:preview~ to
+~appkit-presentation-one-line-row-create~ or ~appkit-chatbuf-aux-render~.  The
+directory renderer places it in one row column; the chatbuf renderer
+places it on the second line of the reply/edit card.  One-line rows accept
+~:context-open~ and ~:context-close~ delimiters; Appkit measures their actual
+display widths and owns their geometry while the client selects their
+presentation meaning.  Clients retain protocol objects, media selection and
+acquisition, labels, identity faces, and resource invalidation.
+
+** Discussion
+
+/Discussion depth/ is visual reply nesting under a parent.  A /discussion
+connector/ continues or ends a linear ancestor chain without changing that
+depth.  Discussion rows accept both plus optional pre-heading context.  Clients
+supply the context text; Appkit does not interpret it as a Renote, reply, quote,
+or protocol thread.
+
+~appkit-discussion-connector-style~ selects ~fringe~ (the graphical default
+with a terminal text fallback), ~text~, or ~none~.  Customize
+~appkit-discussion-fringe-connector~ for foreground/background color and
+~appkit-discussion-fringe-bar-width~ or
+~appkit-discussion-fringe-bar-position~ for generated geometry.  Advanced
+configurations may register a bitmap with ~define-fringe-bitmap~ and assign its
+symbol to ~appkit-discussion-fringe-bitmap~.
+
+** History
+
+The shared history controller owns exact buffer-local window edges,
+unknown, partial, loading, and authoritative-empty state, opaque
+request ownership, strict slicing, automatic edge gates, and passive
+delimiter geometry.
+
+** Scroll edges
+
+Use ~appkit-scroll-observer-install~ when a view pages application-owned
+content near a visible buffer edge.  The observer unifies buffer-local
+~post-command-hook~ and ~window-scroll-functions~ handling, validates the
+owning view and every displayed window, and reports visible start and end
+positions clamped by optional boundary functions.  Edge callbacks own
+thresholds, cursors, loading and exhaustion gates, requests, and retry policy.
+
+~appkit-scroll-near-start-p~ and ~appkit-scroll-near-end-p~ implement the
+shared character-distance convention; a nil threshold disables the check.
+After committing a page and synchronizing its projection, call
+~appkit-scroll-observer-check~ so a short page can request another eligible
+page.  The request callback must close its loading gate synchronously before
+starting asynchronous work.
+
+** Media
+
+Callers adapt backend objects into canonical resource descriptors and explicit
+preview metadata.  Appkit owns HTTPS-only atomic acquisition for explicit
+image and file transfers, byte-level image cache finalization, lifecycle-bound
+video sessions and presentation surfaces, and protocol-restricted preview and
+audio-player processes.
+
+A media attachment view is one item's preview, label, description, transfer
+state, and actions.  It is presentation, not the readable or displayable media
+resource and not a client attachment model.
+
+For row-sliced image montages, use
+~appkit-media-cropped-preview-image-from-file~ to center-crop a local file into
+an exact box.  Its optional ~(TOP RIGHT BOTTOM LEFT)~ transparent insets
+reserve pixel gutters without changing the box or its line-slice geometry.
+
+Use ~appkit-media-horizontal-strip-image~ when several files must remain one
+unbreakable display object.  It preserves a shared height, reserves explicit
+pixel gutters and missing-file geometry, and exposes each item as an image-map
+hot spot.  Items may override their display width, request center-cover instead
+of natural-ratio containment, and add the shared translucent circle-and-triangle
+video marker with ~:play-icon~.  The optional pixel offset moves the SVG
+~viewBox~ while keeping display width fixed; hot spots are clipped and
+translated into visible coordinates.
+
+Use ~appkit-media-video-session-create~ when an application may present one
+video in more than one place.  The Appkit wrapper owns the canonical resource,
+stable cache identity, cache policy, and cache-completion update; its embedded
+video.el ~video-session~ owns the single player and presentation leases.
+~:request-headers~ configures playback transport without entering canonical
+resource or cache identity.  ~:live t~ forces live, non-seekable behavior when
+protocol discovery is ambiguous.  Sessions are intentionally not globally
+deduplicated by cache key: separate user activations have independent playback
+state.
+
+Create an in-buffer surface with ~appkit-media-video-inline-create~.  Promote
+that exact surface with ~appkit-media-present-video-inline~, or present its
+Appkit session with ~appkit-media-present-video-session~.  Both paths retain
+one video.el session, so playback position, desired play/pause state, canonical
+mute, rate, buffering ranges, and sparse network cache remain continuous.
+Closing either surface does not interrupt the other; video.el closes the player
+after its last inline or dedicated lease disappears.  A client's optional
+~:close-function~ runs exactly once after video.el retires the inline surface.
+
+~appkit-media-play-video-source~ remains the one-call dedicated-viewer
+convenience API.  Remote playback starts immediately through video.el; finite
+media remains range-seekable.  It never waits for a full attachment download.
+Under the default ~automatic~ cache policy, Appkit gives video.el an atomic
+destination under ~appkit-media-video-cache-directory~ and retains the sparse
+progressive buffer only when it naturally becomes complete.  Existing complete
+entries are opened locally.  Use ~:cache-policy 'none~ for live playback and
+other streams that must leave all buffering session-local.
+
+Clients provide a stable ~:cache-key~ based on protocol resource identity so
+rotating signed URLs address the same complete cache.  A cache is transparent
+and may remain incomplete; an explicit download is a separate user action
+implemented with ~appkit-media-copy-or-download-resource-async~.
+
+The boundary is strict: video.el owns GStreamer, canonical player state,
+temporary sparse buffering, render targets, Canvas transport, waiting UI,
+session presentation leases, dedicated buffers, and close-on-last-surface
+behavior.  Appkit owns canonical resources, persistent cache policy and
+identity, App/View owner handles, and thin resource-aware wrappers around
+video.el sessions.  Applications provide resource adaptation and host geometry;
+they must pass the active surface or session instead of creating a second
+player for a dedicated-reader transition.
+
+Finite local audio playback uses ~appkit-media-player-start-file~.  One
+~appkit-media-player-session~ owns its process, progress timer, pause/resume
+position, and optional Appkit owner handle.  Its lifecycle follows Telega's
+ffplay model: parse player progress, pause by terminating the current process,
+and resume with a fresh process at the retained timestamp.  MPV sessions
+override inherited ~idle~ and ~keep-open~ settings so terminal cleanup remains
+authoritative.  Clients provide local-file acquisition, duration metadata,
+resource invalidation callbacks, and protocol identity; they do not own player
+processes or sentinels.
+
+** Completion
+
+Appkit owns token bounds, candidate metadata, CAPF and picker
+presentation, atomic commit, and ordered TAB dispatch.  Clients own
+member and server-emoji lookup, avatar acquisition, protocol objects,
+and insertion callbacks.  A selected mention remains a client-defined
+structured composer object.
+
+Bounded image catalogs use ~appkit-chat-completion-read-visual~.  It
+keeps the label and hidden search aliases in the native alist completion
+title, supplies each preview through the native ~affixation-function~,
+and maps the selected title back to the opaque candidate.  Prefixes may
+be strings or functions of the candidate; function prefixes let clients
+consult their own image cache only when the completion UI requests an
+affix.  Clients remain responsible for resource acquisition and cache
+invalidation.  Frontends may strip candidate text properties without
+discarding the independently affixed preview.
+Keep dynamic or large nonvisual catalogs on
+~appkit-chat-completion-read~.  Candidate ~group~ metadata becomes the
+native completion ~group-function~, so capable frontends render sections
+without a Consult dependency.
+
+On Emacs versions that provide the built-in emoji database,
+~appkit-chat-emoji-*~ adds shared ~:unicode_name:~ candidates grouped by
+the database's top-level Unicode categories.
+
+* Runtime update model
+
+An application defines one immutable ~appkit-app-type~.  Its ~init~ and
+~update~ callbacks return ~appkit-next~ values: the next canonical model, an
+explicit render disposition, and a bounded list of closed commands.  Appkit
+serializes each accepted transition, advances the revision, folds commands,
+then commits post messages and starts finite keyed Effects.  Callbacks never
+receive the mutable loop or registry.
+
+A generated buffer defines one ~appkit-surface-type~ and one
+~appkit-generated-renderer~.  The Surface owns its local model; its parent App
+is exposed only as a pass-scoped read view.  Rendering runs after the final
+model commit for the pass, in the exact host buffer.  A renderer may merge
+requests and recover once, but may not mutate the domain model, post messages,
+or start work.
+
+Use ~appkit-app-send~ / ~appkit-surface-send~ for a synchronous external
+transition and ~appkit-app-post~ / ~appkit-surface-post~ for asynchronous
+external admission.  Neither public post path is legal while any Appkit loop
+is draining.  An ~init~, ~update~, renderer, Effect starter, or mapper that
+needs later work must return an ~appkit-command-post-message~ or
+~appkit-command-start-effect~ through ~appkit-next~ instead.  Expected domain
+rejection returns ~appkit-next-reject~; ~appkit-loop-reject~ is an internal
+state-machine result, not a client API.
+
+An Effect starter receives owned input and observe/resolve/reject gates.
+Synchronous gate calls only stage payload; their mappers run in later passes.
+Replacing an equal Effect key revokes callback authority before physical
+cancellation.  Each Effect runtime coalesces ready instances behind one
+control wake, so synchronous completion cannot consume one control slot per
+active Effect.
+
+An App or Surface type may provide a pure ~sources(model)~ callback returning a
+bounded desired set of ~appkit-source-spec~ values.  Source keys are unique;
+an unchanged key and identity retains the current long-lived producer, while
+an identity change revokes it before admitting a successor.  Terminal
+instances remain tombstones until their identity changes or the key is absent
+from one desired set.  Use ~lossless~, ~latest~, or ~coalesce-by-key~ emission
+policy with the required positive pending bound.  Event and close callbacks
+only enter the runtime gate; their mappers execute in later passes.
+
+Bidirectional Sources expose transport sends only through
+~appkit-command-source-intent~.  The command names the expected Source identity,
+owned payload, and a function-symbol result mapper.  Outcomes are
+~accepted~, ~backpressured~, ~closed~, or ~stale~ and always map in a later
+pass.  A ~quiescent-transport~ Source delays replacement until its concrete
+cancellation capability reports physical quiescence.
+
+Projection rows may return bounded ~appkit-resource-demand~ values.  The
+standard projection renderer commits their interests only after successful
+buffer mutation.  Resource completion passes through the App coordinator and
+exact Surface incarnation, then redraws only retained dependency rows without
+calling the projector or advancing a domain revision.
+
+The host buffer is persistent ownership; windows are temporary viewports.
+Major mode setup precedes attachment.  Killing the exact buffer or changing
+its major mode synchronously stops the Surface.  Renaming, burying, hiding all
+windows, or killing an indirect clone does not.  Generated structural edits
+are undo-free; editable document state remains governed by the compose/editor
+module that owns it.
+
+Width-sensitive Generated Surfaces should call
+~appkit-surface-enable-responsive-geometry~ with a callback that posts their
+bounded geometry render request, then call
+~appkit-surface-refresh-responsive-geometry~ after the host is displayed.
+Renderers read the measured canonical-window width through
+~appkit-surface-responsive-width~.  Window and line-number changes notify only
+when the measurement changes; a no-argument text-scale hook always notifies so
+clients can retire pixel caches and rebuild images for the new face metrics.
+
+Topic publish, terminal reset, existing-Surface policies, and editable/hybrid
+Surface control are later protocol layers.  Do not reproduce them with direct
+callbacks or restore the removed App/View control plane.
+
+* Source-preserving display markers
+
+Generated readers may keep protocol source markers in the buffer while replacing
+them visually.  Use ~appkit-ui-apply-source-line-prefix~ with one presentation
+character for every literal source character.  The one-to-one projection keeps
+real visual columns for cursor motion while the original prefix remains
+copyable; soft wraps receive the supplied continuation prefix without changing
+an outer ~line-prefix~.  Install ~appkit-ui-buffer-substring-filter~ as the
+buffer-local ~filter-buffer-substring-function~.  The copied text then keeps the
+original source while dropping ~display~, ~line-prefix~, and ~wrap-prefix~
+properties.  ~appkit-ui-vbar-string~ supplies a GUI/terminal vertical marker;
+~appkit-ui-tinted-background-face~ derives a subtle background from an existing
+accent face without changing the text foreground.
+
+* Task queues
+
+The shared task queue deduplicates equal keys across active and
+waiting work, starts tasks in FIFO order up to a live adjustable
+limit, and guards every completion with a one-shot token.  A starter
+may return an ~appkit-handle~ or a zero-argument cancellation
+function.  Killing the owning app or view closes the queue and makes
+stale completions inert.
+
+~appkit-task-queue-cancel-keys~ retires all matching work before it
+frees a slot.  Synchronous completion is delivered only after the
+starter returns its handle.
+
+* Evil adapters
+
+Keep ordinary mode maps as the Emacs-state contract.  Use
+~appkit-evil-map~ for client modal bindings: its Doom-style ~:n~, ~:m~, and
+combined state shorthands group string key descriptions under an explicit
+~:map~ without adding a Doom or General dependency.  The underlying installer
+defers until both Evil and the target map exist.
+
+Read-only surfaces may add ~appkit-evil-define-readonly-keys~.  Chat timelines
+can bind ~i~ to ~appkit-evil-chatbuf-enter-input~; it moves to the Appkit-owned
+composer and enters insert state in one command.  Timeline-only bindings must
+remain on the point-sensitive timeline minor map so they disappear in editable
+input.  Use ~appkit-evil-set-initial-states~ and
+~appkit-evil-normalize-buffers~ for client lifecycle setup.
+
+* Namespaces
+
+Use these runtime prefixes directly:
+
+- ~appkit-app-*~
+- ~appkit-surface-*~
+- ~appkit-command-*~
+- ~appkit-effect-*~
+- ~appkit-context-*~
+
+Presentation and interaction helpers retain their focused namespaces:
+
+- ~appkit-task-queue-*~
+- ~appkit-projection-*~
+- ~appkit-compose-*~
+- ~appkit-chatbuf-*~
+- ~appkit-chat-history-*~
+- ~appkit-chat-timeline-*~
+- ~appkit-scroll-*~
+- ~appkit-ui-*~
+- ~appkit-geometry-*~
+- ~appkit-chat-completion-*~
+- ~appkit-chat-ins-*~
+- ~appkit-discussion-*~
+- ~appkit-directory-*~
+- ~appkit-name-color-*~
+- ~appkit-evil-*~
+- ~appkit-media-*~
+
+* Development
+
+#+begin_src sh
+eask recompile
+scripts/eask-ert-brief test/*.el
+#+end_src
+
+The brief runner recompiles immediately before testing, preserves
+compiler diagnostics or ERT failure backtraces, and forwards its
+arguments to ~eask test ert~.  Sibling clients can invoke it from
+their own package directory.
