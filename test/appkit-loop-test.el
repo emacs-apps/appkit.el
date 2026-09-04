@@ -220,6 +220,89 @@
                               (error-message-string condition)))
       (should (= (appkit-loop-pending-count loop) 0)))))
 
+
+(ert-deftest appkit-loop-after-pass-sees-final-committed-state-once ()
+  (let (passes models)
+    (appkit-loop-test--with-loop
+        (loop
+         :model nil
+         :update
+         (lambda (model message)
+           (if (eq message 'reject)
+               (appkit-loop-reject 'ignored)
+             (appkit-loop-accept (append model (list message)))))
+         :after-pass
+         (lambda (current pass)
+           (push pass passes)
+           (push (copy-sequence (appkit-loop-model current)) models)))
+      (dolist (message '(first reject second))
+        (appkit-loop-post loop message))
+      (should (= (appkit-loop-run-pass loop) 3))
+      (should (= (length passes) 1))
+      (let ((pass (car passes)))
+        (should (= (appkit-loop-pass-processed pass) 3))
+        (should (= (appkit-loop-pass-accepted pass) 2))
+        (should (= (appkit-loop-pass-start-revision pass) 0))
+        (should (= (appkit-loop-pass-end-revision pass) 2)))
+      (should (equal models '((first second)))))))
+
+(ert-deftest appkit-loop-after-pass-message-waits-for-next-pass ()
+  (let (loop after-runs)
+    (setq loop
+          (appkit-loop-create
+           :model nil
+           :update
+           (lambda (model message)
+             (appkit-loop-accept (append model (list message))))
+           :after-pass
+           (lambda (_current _pass)
+             (setq after-runs (1+ (or after-runs 0)))
+             (when (= after-runs 1)
+               (appkit-loop-post loop 'later)))))
+    (unwind-protect
+        (progn
+          (appkit-loop-post loop 'first)
+          (should (= (appkit-loop-run-pass loop) 1))
+          (should (equal (appkit-loop-model loop) '(first)))
+          (should (= (appkit-loop-pending-count loop) 1))
+          (should (= (appkit-loop-run-pass loop) 1))
+          (should (equal (appkit-loop-model loop) '(first later)))
+          (should (= after-runs 2)))
+      (appkit-loop-stop loop))))
+
+(ert-deftest appkit-loop-after-pass-failure-faults-accepted-send ()
+  (appkit-loop-test--with-loop
+      (loop
+       :model nil
+       :update
+       (lambda (model message)
+         (appkit-loop-accept (cons message model)))
+       :after-pass
+       (lambda (_current _pass) (error "after-pass failed")))
+    (let ((condition
+           (should-error (appkit-loop-send loop 'commit) :type 'error)))
+      (should (string-match-p "after-pass failed"
+                              (error-message-string condition))))
+    (should (eq (appkit-loop-status loop) 'faulted))
+    (should (= (appkit-loop-revision loop) 1))
+    (should (equal (appkit-loop-model loop) '(commit)))))
+
+(ert-deftest appkit-loop-after-pass-nonlocal-exit-still-faults ()
+  (appkit-loop-test--with-loop
+      (loop
+       :model nil
+       :update
+       (lambda (model message)
+         (appkit-loop-accept (cons message model)))
+       :after-pass
+       (lambda (_current _pass) (throw 'escape 'escaped)))
+    (should (eq (catch 'escape (appkit-loop-send loop 'commit)) 'escaped))
+    (should (eq (appkit-loop-status loop) 'faulted))
+    (should (= (appkit-loop-revision loop) 1))
+    (should (string-match-p
+             "after-pass exited nonlocally"
+             (error-message-string
+              (appkit-loop-fault-condition (appkit-loop-fault loop)))))))
 (provide 'appkit-loop-test)
 
 ;;; appkit-loop-test.el ends here

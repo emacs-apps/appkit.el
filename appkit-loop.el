@@ -56,11 +56,21 @@
   payload
   revision)
 
+(cl-defstruct (appkit-loop-pass
+               (:constructor appkit-loop--pass-create)
+               (:copier nil))
+  "Committed transition statistics for one completed input pass."
+  processed
+  accepted
+  start-revision
+  end-revision)
+
 (cl-defstruct (appkit-loop
                (:constructor appkit-loop--create)
                (:copier nil)
                (:conc-name appkit-loop--))
   update
+  after-pass
   model
   incarnation
   revision
@@ -75,6 +85,7 @@
   sync-driving-p
   scheduled-handle
   status
+  pass-tickets
   fault)
 
 (defun appkit-loop--check (loop)
@@ -113,17 +124,21 @@
   (appkit-loop--data-count (appkit-loop--check loop)))
 
 (cl-defun appkit-loop-create
-    (&key model update (mailbox-capacity 64) (send-reserve 1)
+    (&key model update after-pass (mailbox-capacity 64) (send-reserve 1)
           (message-limit 32))
   "Create a running UI-free loop with initial MODEL and UPDATE.
 
 UPDATE receives the current model and one message.  It must return either
-`appkit-loop-accept' or `appkit-loop-reject'.  MAILBOX-CAPACITY bounds ordinary
-posts.  SEND-RESERVE provides additional admission reserved for synchronous
-barrier sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
+`appkit-loop-accept' or `appkit-loop-reject'.  AFTER-PASS, when non-nil,
+receives the loop and committed `appkit-loop-pass' statistics after a pass
+accepts at least one transition.  MAILBOX-CAPACITY bounds ordinary posts.
+SEND-RESERVE provides additional admission reserved for synchronous barrier
+sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
   (appkit-loop--assert-main-thread)
   (unless (functionp update)
     (signal 'wrong-type-argument (list 'functionp update)))
+  (unless (or (null after-pass) (functionp after-pass))
+    (signal 'wrong-type-argument (list 'functionp after-pass)))
   (dolist (entry `((,mailbox-capacity . mailbox-capacity)
                    (,send-reserve . send-reserve)
                    (,message-limit . message-limit)))
@@ -132,6 +147,7 @@ barrier sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
              (cdr entry) (car entry))))
   (appkit-loop--create
    :update update
+   :after-pass after-pass
    :model model
    :incarnation 1
    :revision 0
@@ -146,6 +162,7 @@ barrier sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
    :sync-driving-p nil
    :scheduled-handle nil
    :status 'running
+   :pass-tickets nil
    :fault nil))
 
 (defun appkit-loop--cancel-scheduled (loop)
@@ -244,6 +261,15 @@ admission does not allocate a sequence number."
        (appkit-loop-envelope-ticket (car cell)) ticket-state outcome)
       (setq cell (cdr cell)))))
 
+(defun appkit-loop--complete-pass-tickets (loop state outcome)
+  "Complete LOOP's accepted pass tickets with STATE and OUTCOME."
+  (let ((entries (nreverse (appkit-loop--pass-tickets loop))))
+    (setf (appkit-loop--pass-tickets loop) nil)
+    (dolist (entry entries)
+      (appkit-loop--complete-ticket
+       (car entry) state outcome
+       (and (eq state 'accepted) (cdr entry))))))
+
 (defun appkit-loop--enter-fault (loop condition envelope)
   "Fault LOOP for CONDITION while processing ENVELOPE."
   (unless (memq (appkit-loop--status loop) '(faulted stopping stopped))
@@ -260,6 +286,7 @@ admission does not allocate a sequence number."
       (when envelope
         (appkit-loop--complete-ticket
          (appkit-loop-envelope-ticket envelope) 'faulted fault))
+      (appkit-loop--complete-pass-tickets loop 'faulted fault)
       (appkit-loop--purge loop 'faulted fault)))
   (appkit-loop--fault loop))
 
@@ -289,24 +316,48 @@ admission does not allocate a sequence number."
         (appkit-loop--enter-fault loop condition envelope))
        ((not (eq (appkit-loop--status loop) 'running)) nil)
        ((appkit-loop-accepted-p result)
-        (let ((revision (1+ (appkit-loop--revision loop))))
+        (let ((revision (1+ (appkit-loop--revision loop)))
+              (ticket (appkit-loop-envelope-ticket envelope)))
           (setf (appkit-loop--model loop)
                 (appkit-loop-accepted-model result)
                 (appkit-loop--revision loop) revision)
-          (appkit-loop--complete-ticket
-           (appkit-loop-envelope-ticket envelope)
-           'accepted nil revision)))
+          (when ticket
+            (push (cons ticket revision) (appkit-loop--pass-tickets loop)))
+          'accepted))
        ((appkit-loop-rejected-p result)
         (appkit-loop--complete-ticket
          (appkit-loop-envelope-ticket envelope)
-         'rejected (appkit-loop-rejected-reason result)))
+         'rejected (appkit-loop-rejected-reason result))
+        'rejected)
        (t
         (appkit-loop--enter-fault
          loop
          (list 'error
                (format "Appkit loop update returned invalid result: %S"
                        result))
-         envelope))))))
+         envelope)
+        'faulted)))))
+
+(defun appkit-loop--finish-pass (loop pass)
+  "Run LOOP's post-commit phase for PASS and complete accepted tickets."
+  (let (completed-p condition)
+    (unwind-protect
+        (condition-case err
+            (progn
+              (when-let* ((after-pass (appkit-loop--after-pass loop)))
+                (funcall after-pass loop pass))
+              (setq completed-p t))
+          ((error quit)
+           (setq condition err
+                 completed-p t)))
+      (unless completed-p
+        (appkit-loop--enter-fault
+         loop '(error "Appkit loop after-pass exited nonlocally") nil)))
+    (cond
+     (condition
+      (appkit-loop--enter-fault loop condition nil))
+     ((eq (appkit-loop--status loop) 'running)
+      (appkit-loop--complete-pass-tickets loop 'accepted nil)))))
 
 (defun appkit-loop-run-pass (loop)
   "Run at most one frozen, bounded mailbox pass for LOOP.
@@ -324,19 +375,34 @@ remain for a later pass even when the count limit has not been reached."
            (when-let* ((tail (appkit-loop--data-tail loop)))
              (appkit-loop-envelope-sequence (car tail))))
           (limit (appkit-loop--message-limit loop))
-          (processed 0))
+          (start-revision (appkit-loop--revision loop))
+          (processed 0)
+          (accepted 0))
       (setf (appkit-loop--draining-p loop) t)
+      (setf (appkit-loop--pass-tickets loop) nil)
       (unwind-protect
-          (while (and cutoff
+          (progn
+            (while (and cutoff
                       (eq (appkit-loop--status loop) 'running)
                       (< processed limit)
                       (appkit-loop--data-head loop)
                       (<= (appkit-loop-envelope-sequence
                            (car (appkit-loop--data-head loop)))
                           cutoff))
-            (let ((envelope (appkit-loop--dequeue loop)))
+            (let* ((envelope (appkit-loop--dequeue loop))
+                   (outcome (appkit-loop--apply-transition loop envelope)))
               (setq processed (1+ processed))
-              (appkit-loop--apply-transition loop envelope)))
+              (when (eq outcome 'accepted)
+                  (setq accepted (1+ accepted)))))
+          (when (and (> accepted 0)
+                     (eq (appkit-loop--status loop) 'running))
+            (appkit-loop--finish-pass
+             loop
+             (appkit-loop--pass-create
+              :processed processed
+              :accepted accepted
+              :start-revision start-revision
+              :end-revision (appkit-loop--revision loop)))))
         (setf (appkit-loop--draining-p loop) nil)
         (appkit-loop--schedule loop))
       processed)))
