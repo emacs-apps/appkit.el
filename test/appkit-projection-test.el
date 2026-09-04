@@ -218,6 +218,43 @@
       (should (= 2 prints))
       (funcall (appkit-generated-renderer-unmount renderer) surface))))
 
+(ert-deftest appkit-projection-renderer-geometry-redraws-retained-rows ()
+  (appkit-test-with-surface
+    (let ((surface (appkit-current-surface)))
+      (dolist (mode '(redraw reproject))
+        (let ((projects 0)
+              (prints 0)
+              renderer)
+          (setq renderer
+                (appkit-projection-renderer-create
+                 :project-all
+                 (lambda (_surface _app-read-view _model)
+                   (setq projects (1+ projects))
+                   (list (appkit-projection-row-create
+                          :key 'row :payload 'stable)))
+                 :printer
+                 (lambda (_surface app-read-view _row)
+                   (setq prints (1+ prints))
+                   (insert (format "%s\n" app-read-view)))
+                 :anchor-property 'test-projection-key
+                 :geometry-mode mode
+                 :no-separator-p t))
+          (funcall (appkit-generated-renderer-mount renderer)
+                   surface 'before nil)
+          (unwind-protect
+              (progn
+                (funcall (appkit-generated-renderer-render renderer)
+                         surface 'before nil
+                         (appkit-projection-change-create :full-p t))
+                (funcall (appkit-generated-renderer-render renderer)
+                         surface 'after nil
+                         (appkit-projection-change-create :geometry-p t))
+                (should (= prints 2))
+                (should (= projects (if (eq mode 'reproject) 2 1)))
+                (should (equal "after\n" (buffer-string))))
+            (funcall
+             (appkit-generated-renderer-unmount renderer) surface)))))))
+
 (provide 'appkit-projection-test)
 
 ;;; appkit-projection-test.el ends here

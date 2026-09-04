@@ -405,23 +405,19 @@ and position without inspecting ROWS."
 
 (defun appkit-projection--render-plan
     (projection change geometry-mode)
-  "Return `(RECONCILE-P FORCE-KEYS POSITION)' for CHANGE."
-  (let* ((full-p
-          (or (appkit-projection-change-full-p change)
-              (appkit-projection-change-keys change)
-              (appkit-projection-change-rekeys change)
-              (and (appkit-projection-change-geometry-p change)
-                   (eq geometry-mode 'reproject))))
-         (redraw-keys
-          (delete-dups
-           (append
-            (copy-sequence
-             (appkit-projection-change-resources change))
-            (and (appkit-projection-change-geometry-p change)
-                 (eq geometry-mode 'redraw)
-                 (appkit-projection-keys projection))))))
-    (list full-p redraw-keys
-          (or (appkit-projection-change-position change) 'preserve))))
+  "Return `(RECONCILE-P FORCE-KEYS DEPENDENCIES POSITION)' for CHANGE."
+  (let ((geometry-p (appkit-projection-change-geometry-p change)))
+    (list
+     (or (appkit-projection-change-full-p change)
+         (appkit-projection-change-keys change)
+         (appkit-projection-change-rekeys change)
+         (and geometry-p (eq geometry-mode 'reproject)))
+     (delete-dups
+      (append
+       (copy-sequence (appkit-projection-change-keys change))
+       (and geometry-p (appkit-projection-keys projection))))
+     (copy-sequence (appkit-projection-change-resources change))
+     (or (appkit-projection-change-position change) 'preserve))))
 
 (defun appkit-projection--resource-result (rows)
   "Return a replacing Resource companion result discovered from ROWS."
@@ -513,8 +509,9 @@ pass-scoped App read view, and one row.  GEOMETRY-MODE is `redraw' or
                       (appkit-projection--render-plan
                        projection effective geometry-mode))
                      (reconcile-p (nth 0 plan))
-                     (resource-keys (nth 1 plan))
-                     (position (nth 2 plan))
+                     (force-keys (nth 1 plan))
+                     (changed-dependencies (nth 2 plan))
+                     (position (nth 3 plan))
                      (frame
                       (if (or force-full-p
                               (appkit-projection-change-frame-p effective))
@@ -529,10 +526,8 @@ pass-scoped App read view, and one row.  GEOMETRY-MODE is `redraw' or
                  surface projection rows
                  :header (car frame)
                  :footer (cdr frame)
-                 :force-keys
-                 (and reconcile-p
-                      (appkit-projection-change-keys effective))
-                 :changed-dependencies resource-keys
+                 :force-keys (and reconcile-p force-keys)
+                 :changed-dependencies changed-dependencies
                  :rekeys
                  (and reconcile-p
                       (appkit-projection-change-rekeys effective))
@@ -542,8 +537,11 @@ pass-scoped App read view, and one row.  GEOMETRY-MODE is `redraw' or
                   (appkit-with-content-update surface
                     (appkit-projection--invalidate
                      projection
-                     (appkit-projection-dependent-keys
-                      projection resource-keys))))
+                     (delete-dups
+                      (append
+                       force-keys
+                       (appkit-projection-dependent-keys
+                        projection changed-dependencies))))))
                 (if reconcile-p
                     (appkit-projection--resource-result rows)
                   nil))
