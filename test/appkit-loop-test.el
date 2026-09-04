@@ -303,6 +303,38 @@
              "after-pass exited nonlocally"
              (error-message-string
               (appkit-loop-fault-condition (appkit-loop-fault loop)))))))
+
+(ert-deftest appkit-loop-fault-hook-runs-after-admission-closes ()
+  (let (observed)
+    (appkit-loop-test--with-loop
+        (loop
+         :model nil
+         :update (lambda (_model _message) (error "update failed"))
+         :on-fault
+         (lambda (current fault)
+           (setq observed
+                 (list (appkit-loop-status current)
+                       (appkit-loop-post current 'late)
+                       (appkit-loop-fault-condition fault)))))
+      (should-error (appkit-loop-send loop 'fail) :type 'error)
+      (should (equal observed
+                     '(faulted faulted (error "update failed")))))))
+
+(ert-deftest appkit-loop-records-fault-hook-cleanup-failure ()
+  (appkit-loop-test--with-loop
+      (loop
+       :model nil
+       :update (lambda (_model _message) (error "primary"))
+       :on-fault (lambda (_current _fault) (error "cleanup")))
+    (let ((condition
+           (should-error (appkit-loop-send loop 'fail) :type 'error)))
+      (should (equal (error-message-string condition) "primary")))
+    (should
+     (equal
+      (mapcar #'error-message-string
+              (appkit-loop-fault-secondary-conditions
+               (appkit-loop-fault loop)))
+      '("cleanup")))))
 (provide 'appkit-loop-test)
 
 ;;; appkit-loop-test.el ends here

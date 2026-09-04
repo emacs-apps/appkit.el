@@ -56,6 +56,47 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(defmacro appkit-surface-test--with-surface (binding &rest body)
+  "Open the Surface described by BINDING and evaluate BODY with cleanup."
+  (declare (indent 1) (debug ((symbolp form &rest form) body)))
+  (let ((surface (car binding))
+        (type (cadr binding))
+        (arguments (cddr binding)))
+    `(let (,surface)
+       (unwind-protect
+           (progn
+             (setq ,surface
+                   (appkit-open-generated-surface ,type ,@arguments))
+             ,@body)
+         (appkit-surface-test--cleanup ,surface)))))
+
+(cl-defun appkit-surface-test--effect
+    (key record &key synchronous label cancel-error)
+  "Create a test Effect under KEY reporting lifecycle through RECORD.
+
+SYNCHRONOUS resolves during startup.  LABEL distinguishes instances sharing
+KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
+  (let ((name (or label key)))
+    (appkit-effect-create
+     :key key
+     :input key
+     :start
+     (lambda (_context _input _observe resolve _reject)
+       (funcall record (list 'start name))
+       (if synchronous
+           (progn
+             (funcall resolve 'ready)
+             nil)
+         (appkit-cancellation-create
+          :kind 'logical
+          :cancel
+          (lambda ()
+            (funcall record (list 'cancel name))
+            (when cancel-error
+              (error "%s cancellation failed" name))))))
+     :success (lambda (owned value) (list 'effect-done owned value))
+     :failure (lambda (owned reason) (list 'effect-failed owned reason)))))
+
 (ert-deftest appkit-surface-initializes-mode-before-attachment ()
   (let (events init-mode init-owner surface)
     (unwind-protect
@@ -67,10 +108,10 @@
                   (lambda (_surface input)
                     (setq init-mode major-mode
                           init-owner (appkit-current-surface))
-                    (appkit-surface-next input 'initial))
+                    (appkit-next :model input :render 'initial))
                   :update
                   (lambda (_surface model _message)
-                    (appkit-surface-next model appkit-render-none))
+                    (appkit-next :model model :render appkit-render-none))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer
@@ -94,11 +135,12 @@
                 (appkit-open-generated-surface
                  (appkit-surface-test--type
                   :init (lambda (_surface _input)
-                          (appkit-surface-next nil appkit-render-none))
+                          (appkit-next :model nil :render appkit-render-none))
                   :update
                   (lambda (_surface model message)
-                    (appkit-surface-next
-                     (append model (list message)) (list message)))
+                    (appkit-next
+                     :model (append model (list message))
+                     :render (list message)))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer
@@ -120,10 +162,10 @@
                 (appkit-open-generated-surface
                  (appkit-surface-test--type
                   :init (lambda (_surface _input)
-                          (appkit-surface-next 'initial appkit-render-none))
+                          (appkit-next :model 'initial :render appkit-render-none))
                   :update
                   (lambda (_surface _model _message)
-                    (appkit-surface-next 'changed appkit-render-none))
+                    (appkit-next :model 'changed :render appkit-render-none))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer
@@ -142,10 +184,10 @@
                 (appkit-open-generated-surface
                  (appkit-surface-test--type
                   :init (lambda (_surface _input)
-                          (appkit-surface-next 'initial appkit-render-none))
+                          (appkit-next :model 'initial :render appkit-render-none))
                   :update
                   (lambda (_surface _model message)
-                    (appkit-surface-next message 'render))
+                    (appkit-next :model message :render 'render))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer
@@ -169,10 +211,10 @@
                 (appkit-open-generated-surface
                  (appkit-surface-test--type
                   :init (lambda (_surface _input)
-                          (appkit-surface-next 'initial appkit-render-none))
+                          (appkit-next :model 'initial :render appkit-render-none))
                   :update
                   (lambda (_surface _model message)
-                    (appkit-surface-next message 'render))
+                    (appkit-next :model message :render 'render))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer
@@ -202,7 +244,7 @@
                 (appkit-open-generated-surface
                  (appkit-surface-test--type
                   :init (lambda (_surface _input)
-                          (appkit-surface-next 'initial appkit-render-none))
+                          (appkit-next :model 'initial :render appkit-render-none))
                   :update
                   (lambda (_surface _model _message)
                     (appkit-loop-reject 'not-allowed))
@@ -225,9 +267,9 @@
      (appkit-open-generated-surface
       (appkit-surface-test--type
        :init (lambda (_surface _input)
-               (appkit-surface-next nil appkit-render-none))
+               (appkit-next :model nil :render appkit-render-none))
        :update (lambda (_surface model _message)
-                 (appkit-surface-next model appkit-render-none))
+                 (appkit-next :model model :render appkit-render-none))
        :renderer-factory
        (lambda (_surface)
          (appkit-generated-renderer-create
@@ -247,9 +289,9 @@
           (appkit-open-generated-surface
            (appkit-surface-test--type
             :init (lambda (_surface _input)
-                    (appkit-surface-next nil appkit-render-none))
+                    (appkit-next :model nil :render appkit-render-none))
             :update (lambda (_surface model _message)
-                      (appkit-surface-next model appkit-render-none))
+                      (appkit-next :model model :render appkit-render-none))
             :renderer-factory
             (lambda (_surface)
               (appkit-surface-test--renderer
@@ -267,10 +309,10 @@
                 (appkit-open-generated-surface
                  (appkit-surface-test--type
                   :init (lambda (_surface _input)
-                          (appkit-surface-next nil appkit-render-none))
+                          (appkit-next :model nil :render appkit-render-none))
                   :update
                   (lambda (_surface model message)
-                    (appkit-surface-next (cons message model) 'full))
+                    (appkit-next :model (cons message model) :render 'full))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer
@@ -283,6 +325,233 @@
             (should (equal (buffer-string) "(timer)"))))
       (appkit-surface-test--cleanup surface))))
 
+
+(ert-deftest appkit-surface-starts-initial-effects-after-render ()
+  (let* (events
+         (record (lambda (event) (push event events)))
+         (effect (appkit-surface-test--effect 'initial record)))
+    (appkit-surface-test--with-surface
+     (surface
+      (appkit-surface-test--type
+       :init
+       (lambda (_surface _input)
+         (appkit-next
+          :model 'ready
+          :render 'initial
+          :commands (list (appkit-command-start-effect effect))))
+       :update
+       (lambda (_surface model _message)
+         (appkit-next :model model :render appkit-render-none))
+       :renderer-factory
+       (lambda (_surface)
+         (appkit-surface-test--renderer record))))
+     (should (equal (nreverse events)
+                    '((mount ready) (render ready initial)
+                      (start initial))))
+     (should (= (appkit-effect-runtime-count
+                 (appkit-surface-effect-runtime surface))
+                1)))))
+
+(ert-deftest appkit-surface-folds-effect-commands-before-startup ()
+  (let* (events
+         (record (lambda (event) (push event events)))
+         (old-a (appkit-surface-test--effect 'a record :label 'old-a))
+         (effect-b (appkit-surface-test--effect 'b record :label 'b))
+         (new-a (appkit-surface-test--effect 'a record :label 'new-a)))
+    (appkit-surface-test--with-surface
+     (surface
+      (appkit-surface-test--type
+       :init
+       (lambda (_surface _input)
+         (appkit-next :model nil :render appkit-render-none))
+       :update (lambda (_surface _model next) next)
+       :renderer-factory
+       (lambda (_surface)
+         (appkit-surface-test--renderer record))))
+     (setq events nil)
+     (dolist (next
+              (list
+               (appkit-next
+                :model 'first :render '(first)
+                :commands (list (appkit-command-start-effect old-a)))
+               (appkit-next
+                :model 'second :render '(second)
+                :commands (list (appkit-command-start-effect effect-b)))
+               (appkit-next
+                :model 'third :render '(third)
+                :commands (list (appkit-command-start-effect new-a)))))
+       (appkit-surface-post surface next))
+     (should (= (appkit-loop-run-pass (appkit-surface-loop surface)) 3))
+     (should (equal (appkit-surface-model surface) 'third))
+     (should (equal (nreverse events)
+                    '((render third (first second third))
+                      (start b) (start new-a))))
+     (should (= (appkit-effect-runtime-count
+                 (appkit-surface-effect-runtime surface))
+                2)))))
+
+(ert-deftest appkit-surface-defers-synchronous-effect-result ()
+  (let* (events
+         (record (lambda (event) (push event events)))
+         (effect
+          (appkit-surface-test--effect 'sync record :synchronous t)))
+    (appkit-surface-test--with-surface
+     (surface
+      (appkit-surface-test--type
+       :init
+       (lambda (_surface _input)
+         (appkit-next :model 'idle :render appkit-render-none))
+       :update
+       (lambda (_surface _model message)
+         (pcase message
+           ('begin
+            (appkit-next
+             :model 'starting
+             :render 'starting
+             :commands (list (appkit-command-start-effect effect))))
+           (`(effect-done sync ready)
+            (appkit-next :model 'done :render 'done))))
+       :renderer-factory
+       (lambda (_surface)
+         (appkit-surface-test--renderer record))))
+     (setq events nil)
+     (let ((ticket (appkit-surface-send surface 'begin)))
+       (should (eq (appkit-loop-ticket-state ticket) 'accepted)))
+     (should (eq (appkit-surface-model surface) 'starting))
+     (should (equal (nreverse events)
+                    '((render starting starting) (start sync))))
+     (should (= (appkit-loop-pending-count
+                 (appkit-surface-loop surface))
+                1))
+     (setq events nil)
+     (should (= (appkit-loop-run-pass (appkit-surface-loop surface)) 1))
+     (should (eq (appkit-surface-model surface) 'done))
+     (should (equal (nreverse events) '((render done done)))))))
+
+(ert-deftest appkit-surface-cancels-effect-before-render ()
+  (let* (events
+         (record (lambda (event) (push event events)))
+         (effect (appkit-surface-test--effect 'owned record)))
+    (appkit-surface-test--with-surface
+     (surface
+      (appkit-surface-test--type
+       :init
+       (lambda (_surface _input)
+         (appkit-next :model 'idle :render appkit-render-none))
+       :update
+       (lambda (_surface _model message)
+         (pcase message
+           ('start
+            (appkit-next
+             :model 'active :render 'active
+             :commands (list (appkit-command-start-effect effect))))
+           ('cancel
+            (appkit-next
+             :model 'cancelled :render 'cancelled
+             :commands (list (appkit-command-cancel-effect 'owned))))))
+       :renderer-factory
+       (lambda (_surface)
+         (appkit-surface-test--renderer record))))
+     (appkit-surface-send surface 'start)
+     (setq events nil)
+     (appkit-surface-send surface 'cancel)
+     (should (equal (nreverse events)
+                    '((cancel owned) (render cancelled cancelled))))
+     (should (= (appkit-effect-runtime-count
+                 (appkit-surface-effect-runtime surface))
+                0)))))
+
+(ert-deftest appkit-surface-fault-revokes-active-effects ()
+  (let* (events
+         (record (lambda (event) (push event events)))
+         (effect (appkit-surface-test--effect 'owned record)))
+    (appkit-surface-test--with-surface
+     (surface
+      (appkit-surface-test--type
+       :init
+       (lambda (_surface _input)
+         (appkit-next :model 'idle :render appkit-render-none))
+       :update
+       (lambda (_surface model message)
+         (if (eq message 'start)
+             (appkit-next
+              :model 'active :render appkit-render-none
+              :commands (list (appkit-command-start-effect effect)))
+           (error "broken update from %S" model)))
+       :renderer-factory
+       (lambda (_surface)
+         (appkit-surface-test--renderer record))))
+     (appkit-surface-send surface 'start)
+     (setq events nil)
+     (should-error (appkit-surface-send surface 'boom) :type 'error)
+     (should (eq (appkit-surface-status surface) 'faulted))
+     (should (equal events '((cancel owned))))
+     (should (= (appkit-effect-runtime-count
+                 (appkit-surface-effect-runtime surface))
+                0)))))
+
+
+(ert-deftest appkit-surface-cancellation-failure-does-not-skip-cleanup ()
+  (let* (events
+         (record (lambda (event) (push event events)))
+         (effect-a
+          (appkit-surface-test--effect
+           'a record :cancel-error t))
+         (effect-b (appkit-surface-test--effect 'b record)))
+    (appkit-surface-test--with-surface
+     (surface
+      (appkit-surface-test--type
+       :init
+       (lambda (_surface _input)
+         (appkit-next
+          :model 'active
+          :render appkit-render-none
+          :commands
+          (list (appkit-command-start-effect effect-a)
+                (appkit-command-start-effect effect-b))))
+       :update
+       (lambda (_surface _model _message)
+         (appkit-next
+          :model 'cancelled
+          :render 'must-not-render
+          :commands
+          (list (appkit-command-cancel-effect 'a)
+                (appkit-command-cancel-effect 'b))))
+       :renderer-factory
+       (lambda (_surface)
+         (appkit-surface-test--renderer record))))
+     (setq events nil)
+     (should-error (appkit-surface-send surface 'cancel) :type 'error)
+     (should (eq (appkit-surface-status surface) 'faulted))
+     (should (equal (nreverse events) '((cancel a) (cancel b))))
+     (should (= (appkit-effect-runtime-count
+                 (appkit-surface-effect-runtime surface))
+                0)))))
+(ert-deftest appkit-surface-discards-folded-work-on-command-overflow ()
+  (let ((events nil))
+    (appkit-surface-test--with-surface
+     (surface
+      (appkit-surface-test--type
+       :init
+       (lambda (_surface _input)
+         (appkit-next :model nil :render appkit-render-none))
+       :update
+       (lambda (_surface _model key)
+         (appkit-next
+          :model key
+          :render key
+          :commands (list (appkit-command-cancel-effect key))))
+       :renderer-factory
+       (lambda (_surface)
+         (appkit-surface-test--renderer
+          (lambda (event) (push event events)))))
+      :folded-command-limit 1)
+     (appkit-surface-post surface 'first)
+     (appkit-surface-post surface 'second)
+     (should (= (appkit-loop-run-pass (appkit-surface-loop surface)) 2))
+     (should (eq (appkit-surface-status surface) 'faulted))
+     (should (eq (appkit-surface-model surface) 'first))
+     (should (equal events '((mount nil)))))))
 (provide 'appkit-surface-test)
 
 ;;; appkit-surface-test.el ends here

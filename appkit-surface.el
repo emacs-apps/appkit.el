@@ -9,25 +9,19 @@
 
 ;;; Commentary:
 
-;; A first complete generated-buffer vertical slice over `appkit-loop'.  A
-;; Surface owns one persistent buffer and one renderer.  Client updates return
-;; model and render disposition together; the runtime merges render requests
-;; across a pass and commits presentation once from the final model.
+;; A generated-buffer vertical slice over `appkit-loop'.  A Surface owns one
+;; persistent buffer, Renderer, and Effect runtime.  Accepted transitions fold
+;; closed commands and render requests across a pass, then run cleanup,
+;; presentation, and Effect startup in fixed post-commit phases.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'appkit-loop)
+(require 'appkit-command)
 
 (defconst appkit-render-none 'appkit-render-none
   "Explicit disposition requesting no generated presentation work.")
-
-(cl-defstruct (appkit-surface-next
-               (:constructor appkit-surface-next (model render))
-               (:copier nil))
-  "One accepted Surface transition with MODEL and explicit RENDER request."
-  model
-  render)
 
 (cl-defstruct (appkit-surface-type
                (:constructor appkit-surface-type-create)
@@ -53,6 +47,9 @@
   type
   buffer
   loop
+  effect-runtime
+  command-batch
+  command-limit
   renderer
   pending-render
   renderer-valid-p
@@ -78,52 +75,15 @@
 
 (defun appkit-surface-model (surface)
   "Return SURFACE's current committed domain model."
-  (unless (appkit-surface-p surface)
-    (signal 'wrong-type-argument (list 'appkit-surface-p surface)))
   (appkit-loop-model (appkit-surface-loop surface)))
 
 (defun appkit-surface-status (surface)
   "Return SURFACE's loop lifecycle status."
-  (unless (appkit-surface-p surface)
-    (signal 'wrong-type-argument (list 'appkit-surface-p surface)))
   (appkit-loop-status (appkit-surface-loop surface)))
-
-(defun appkit-surface--validate-type (type)
-  "Return TYPE after validating its required program functions."
-  (unless (appkit-surface-type-p type)
-    (signal 'wrong-type-argument (list 'appkit-surface-type-p type)))
-  (unless (symbolp (appkit-surface-type-name type))
-    (error "Surface type name must be a symbol: %S"
-           (appkit-surface-type-name type)))
-  (dolist (entry
-           `((,(appkit-surface-type-mode type) . mode)
-             (,(appkit-surface-type-init type) . init)
-             (,(appkit-surface-type-update type) . update)
-             (,(appkit-surface-type-renderer-factory type)
-              . renderer-factory)))
-    (unless (functionp (car entry))
-      (error "Surface type %S %s must be callable"
-             (appkit-surface-type-name type) (cdr entry))))
-  type)
-
-(defun appkit-surface--validate-renderer (renderer)
-  "Return RENDERER after validating the generated protocol."
-  (unless (appkit-generated-renderer-p renderer)
-    (signal 'wrong-type-argument
-            (list 'appkit-generated-renderer-p renderer)))
-  (dolist (entry
-           `((,(appkit-generated-renderer-mount renderer) . mount)
-             (,(appkit-generated-renderer-merge renderer) . merge)
-             (,(appkit-generated-renderer-render renderer) . render)
-             (,(appkit-generated-renderer-recover renderer) . recover)
-             (,(appkit-generated-renderer-unmount renderer) . unmount)))
-    (unless (functionp (car entry))
-      (error "Generated renderer %s must be callable" (cdr entry))))
-  renderer)
 
 (defun appkit-surface--validate-next (surface next)
   "Return NEXT after validating SURFACE's transition result."
-  (unless (appkit-surface-next-p next)
+  (unless (appkit-next-p next)
     (error "Surface %S returned invalid transition: %S"
            (appkit-surface-type-name (appkit-surface-type surface)) next))
   next)
@@ -144,19 +104,34 @@
                   (error "Renderer merge discarded pending presentation work"))
                 merged))))))
 
-(defun appkit-surface--update (surface model message)
-  "Run SURFACE's client update for MODEL and MESSAGE."
+(defun appkit-surface--stage-next (surface next)
+  "Fold NEXT's deferred work and return its model."
+  (appkit-command--batch-add
+   (appkit-surface-command-batch surface)
+   (appkit-next-commands next)
+   (appkit-surface-command-limit surface))
+  (appkit-surface--merge-render surface (appkit-next-render next))
+  (appkit-next-model next))
+
+(defun appkit-surface--client-update (surface model message)
+  "Run and stage SURFACE's client transition for MODEL and MESSAGE."
   (let ((result
          (funcall
           (appkit-surface-type-update (appkit-surface-type surface))
           surface model message)))
     (cond
-     ((appkit-surface-next-p result)
-      (appkit-surface--merge-render
-       surface (appkit-surface-next-render result))
-      (appkit-loop-accept (appkit-surface-next-model result)))
+     ((appkit-next-p result)
+      (appkit-loop-accept (appkit-surface--stage-next surface result)))
      ((appkit-loop-rejected-p result) result)
      (t (appkit-surface--validate-next surface result)))))
+
+(defun appkit-surface--update (surface model message)
+  "Dispatch MESSAGE and run SURFACE's client update against MODEL."
+  (appkit-effect-runtime-dispatch
+   (appkit-surface-effect-runtime surface)
+   (lambda (current input)
+     (appkit-surface--client-update surface current input))
+   model message))
 
 (defun appkit-surface--render-request (surface model request)
   "Render REQUEST for SURFACE from committed MODEL, recovering once on error."
@@ -181,19 +156,71 @@
                 (error-message-string render-condition)
                 (error-message-string recovery-condition)))))))
 
+(defmacro appkit-surface--record-first-condition (variable &rest body)
+  "Run BODY and store its first error or quit in VARIABLE."
+  (declare (indent 1) (debug (symbolp body)))
+  `(condition-case condition
+       (progn ,@body)
+     ((error quit)
+      (unless ,variable
+        (setq ,variable condition)))))
+
+(defun appkit-surface--revoke-effect-commands (surface commands)
+  "Revoke Effects superseded or cancelled by final COMMANDS for SURFACE."
+  (let ((runtime (appkit-surface-effect-runtime surface))
+        first-condition)
+    (dolist (command commands)
+      (appkit-surface--record-first-condition first-condition
+        (appkit-effect-runtime-cancel
+         runtime (appkit-command--effect-key command))))
+    (when first-condition
+      (signal (car first-condition) (cdr first-condition)))))
+
+(defun appkit-surface--start-effect-commands (surface commands)
+  "Start final Effect COMMANDS for SURFACE in their explicit order."
+  (dolist (command commands)
+    (when (appkit-command-start-effect-p command)
+      (appkit-effect-runtime-start
+       (appkit-surface-effect-runtime surface)
+       (appkit-command-start-effect-effect command)))))
+
+(defun appkit-surface--commit-work (surface model request commands)
+  "Run SURFACE's closed post-commit phases for MODEL and folded work."
+  (appkit-surface--revoke-effect-commands surface commands)
+  (unless (eq request appkit-render-none)
+    (with-current-buffer (appkit-surface-buffer surface)
+      (appkit-surface--render-request surface model request)))
+  (appkit-surface--start-effect-commands surface commands))
+
+(defun appkit-surface--commit-pending (surface model)
+  "Detach and execute SURFACE's current post-commit work against MODEL."
+  (let ((request (appkit-surface-pending-render surface))
+        (commands
+         (appkit-command--batch-drain-effects
+          (appkit-surface-command-batch surface))))
+    ;; Detach the completed batch before any cleanup, renderer, or starter can
+    ;; fail.  A fault must not retain commands against an unusable model.
+    (setf (appkit-surface-pending-render surface) appkit-render-none)
+    (appkit-surface--commit-work surface model request commands)))
+
 (defun appkit-surface--after-pass (surface loop _pass)
-  "Commit SURFACE presentation after LOOP finishes its model transitions."
-  (let ((request (appkit-surface-pending-render surface)))
-    (unless (eq request appkit-render-none)
-      (setf (appkit-surface-pending-render surface) appkit-render-none)
-      (with-current-buffer (appkit-surface-buffer surface)
-        (appkit-surface--render-request
-         surface (appkit-loop-model loop) request)))))
+  "Commit SURFACE's folded work after LOOP finishes model transitions."
+  (appkit-surface--commit-pending surface (appkit-loop-model loop)))
+
+(defun appkit-surface--on-fault (surface _loop _fault)
+  "Revoke SURFACE work immediately after its loop faults."
+  (setf (appkit-surface-pending-render surface) appkit-render-none)
+  (appkit-command--batch-clear (appkit-surface-command-batch surface))
+  (appkit-effect-runtime-stop (appkit-surface-effect-runtime surface)))
 
 (defun appkit-surface--cleanup-open (surface buffer created-p renderer-created-p)
   "Clean a failed Surface open without hiding its primary nonlocal exit."
   (when (appkit-surface-p surface)
     (setf (appkit-surface-alive-p surface) nil)
+    (when-let* ((runtime (appkit-surface-effect-runtime surface)))
+      (condition-case nil
+          (appkit-effect-runtime-stop runtime)
+        ((error quit) nil)))
     (when-let* ((loop (appkit-surface-loop surface)))
       (condition-case nil
           (appkit-loop-stop loop)
@@ -214,15 +241,20 @@
       (kill-buffer buffer))))
 
 (cl-defun appkit-open-generated-surface
-    (type &key input buffer buffer-name select)
+    (type &key input buffer buffer-name select
+          (command-limit appkit-command-default-per-next-limit)
+          (folded-command-limit appkit-command-default-folded-limit)
+          (max-active-effects 32))
   "Create and mount one generated Surface of TYPE.
 
 INPUT is passed to TYPE's init function.  BUFFER, when non-nil, must be a live
 unattached buffer; otherwise a fresh buffer is created using BUFFER-NAME.
 Major mode initialization always precedes Surface attachment.  SELECT displays
-the buffer only after initial presentation succeeds."
+the buffer only after initial presentation succeeds.  COMMAND-LIMIT,
+FOLDED-COMMAND-LIMIT, and MAX-ACTIVE-EFFECTS bound deferred work."
   (appkit-loop--assert-main-thread)
-  (appkit-surface--validate-type type)
+  (cl-check-type type appkit-surface-type)
+  (appkit-command--check-limit "Per-next command limit" command-limit)
   (when (and buffer (not (buffer-live-p buffer)))
     (error "Cannot open a Surface in a dead buffer"))
   (let* ((created-p (null buffer))
@@ -244,6 +276,10 @@ the buffer only after initial presentation succeeds."
                    :type type
                    :buffer host
                    :loop nil
+                   :effect-runtime nil
+                   :command-batch
+                   (appkit-command--batch-create folded-command-limit)
+                   :command-limit command-limit
                    :renderer nil
                    :pending-render appkit-render-none
                    :renderer-valid-p nil
@@ -252,21 +288,28 @@ the buffer only after initial presentation succeeds."
                    (appkit-surface--validate-next
                     surface
                     (funcall (appkit-surface-type-init type) surface input))))
+              (appkit-surface--stage-next surface initial)
               (setf (appkit-surface-renderer surface)
-                    (appkit-surface--validate-renderer
-                     (funcall
-                      (appkit-surface-type-renderer-factory type) surface))
+                    (funcall
+                     (appkit-surface-type-renderer-factory type) surface)
                     renderer-created-p t)
               (let ((loop
                      (appkit-loop-create
-                      :model (appkit-surface-next-model initial)
+                      :model (appkit-next-model initial)
                       :update
                       (lambda (model message)
                         (appkit-surface--update surface model message))
                       :after-pass
                       (lambda (current pass)
-                        (appkit-surface--after-pass surface current pass)))))
-                (setf (appkit-surface-loop surface) loop))
+                        (appkit-surface--after-pass surface current pass))
+                      :on-fault
+                      (lambda (current fault)
+                        (appkit-surface--on-fault
+                         surface current fault)))))
+                (setf (appkit-surface-loop surface) loop
+                      (appkit-surface-effect-runtime surface)
+                      (appkit-effect-runtime-create
+                       loop max-active-effects)))
               (setq-local appkit--current-surface surface)
               (add-hook 'kill-buffer-hook
                         #'appkit-surface--host-detach nil t)
@@ -275,14 +318,10 @@ the buffer only after initial presentation succeeds."
               (funcall
                (appkit-generated-renderer-mount
                 (appkit-surface-renderer surface))
-               surface (appkit-surface-next-model initial))
+               surface (appkit-next-model initial))
               (setf (appkit-surface-renderer-valid-p surface) t)
-              (unless (eq (appkit-surface-next-render initial)
-                          appkit-render-none)
-                (appkit-surface--render-request
-                 surface
-                 (appkit-surface-next-model initial)
-                 (appkit-surface-next-render initial)))))
+              (appkit-surface--commit-pending
+               surface (appkit-next-model initial))))
           (when select
             (pop-to-buffer host))
           (setq completed-p t)
@@ -306,8 +345,6 @@ the buffer only after initial presentation succeeds."
 (defun appkit-surface-stop (surface)
   "Stop and detach SURFACE, preserving its buffer."
   (appkit-loop--assert-main-thread)
-  (unless (appkit-surface-p surface)
-    (signal 'wrong-type-argument (list 'appkit-surface-p surface)))
   (when (appkit-surface-alive-p surface)
     (let ((buffer (appkit-surface-buffer surface))
           first-condition)
@@ -317,20 +354,19 @@ the buffer only after initial presentation succeeds."
         (with-current-buffer buffer
           (when (eq appkit--current-surface surface)
             (setq-local appkit--current-surface nil))))
-      (condition-case condition
-          (appkit-loop-stop (appkit-surface-loop surface))
-        ((error quit) (setq first-condition condition)))
-      (condition-case condition
-          (when (and (buffer-live-p buffer)
-                     (appkit-surface-renderer surface))
-            (with-current-buffer buffer
-              (funcall
-               (appkit-generated-renderer-unmount
-                (appkit-surface-renderer surface))
-               surface)))
-        ((error quit)
-         (unless first-condition
-           (setq first-condition condition))))
+      (appkit-surface--record-first-condition first-condition
+        (appkit-effect-runtime-stop
+         (appkit-surface-effect-runtime surface)))
+      (appkit-surface--record-first-condition first-condition
+        (appkit-loop-stop (appkit-surface-loop surface)))
+      (appkit-surface--record-first-condition first-condition
+        (when (and (buffer-live-p buffer)
+                   (appkit-surface-renderer surface))
+          (with-current-buffer buffer
+            (funcall
+             (appkit-generated-renderer-unmount
+              (appkit-surface-renderer surface))
+             surface))))
       (when first-condition
         (signal (car first-condition) (cdr first-condition)))
       t)))

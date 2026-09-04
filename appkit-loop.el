@@ -54,7 +54,8 @@
   condition
   sequence
   payload
-  revision)
+  revision
+  secondary-conditions)
 
 (cl-defstruct (appkit-loop-pass
                (:constructor appkit-loop--pass-create)
@@ -71,6 +72,7 @@
                (:conc-name appkit-loop--))
   update
   after-pass
+  on-fault
   model
   incarnation
   revision
@@ -124,21 +126,24 @@
   (appkit-loop--data-count (appkit-loop--check loop)))
 
 (cl-defun appkit-loop-create
-    (&key model update after-pass (mailbox-capacity 64) (send-reserve 1)
-          (message-limit 32))
+    (&key model update after-pass on-fault (mailbox-capacity 64)
+          (send-reserve 1) (message-limit 32))
   "Create a running UI-free loop with initial MODEL and UPDATE.
 
 UPDATE receives the current model and one message.  It must return either
 `appkit-loop-accept' or `appkit-loop-reject'.  AFTER-PASS, when non-nil,
 receives the loop and committed `appkit-loop-pass' statistics after a pass
-accepts at least one transition.  MAILBOX-CAPACITY bounds ordinary posts.
-SEND-RESERVE provides additional admission reserved for synchronous barrier
-sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
+accepts at least one transition.  ON-FAULT receives the loop and fault record
+after admission closes and pending tickets terminate.  MAILBOX-CAPACITY bounds
+ordinary posts.  SEND-RESERVE provides additional admission reserved for
+synchronous barrier sends.  MESSAGE-LIMIT is the hard maximum processed by one
+pass."
   (appkit-loop--assert-main-thread)
   (unless (functionp update)
     (signal 'wrong-type-argument (list 'functionp update)))
-  (unless (or (null after-pass) (functionp after-pass))
-    (signal 'wrong-type-argument (list 'functionp after-pass)))
+  (dolist (callback (list after-pass on-fault))
+    (unless (or (null callback) (functionp callback))
+      (signal 'wrong-type-argument (list 'functionp callback))))
   (dolist (entry `((,mailbox-capacity . mailbox-capacity)
                    (,send-reserve . send-reserve)
                    (,message-limit . message-limit)))
@@ -148,6 +153,7 @@ sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
   (appkit-loop--create
    :update update
    :after-pass after-pass
+   :on-fault on-fault
    :model model
    :incarnation 1
    :revision 0
@@ -279,7 +285,8 @@ admission does not allocate a sequence number."
             :sequence (and envelope
                            (appkit-loop-envelope-sequence envelope))
             :payload (and envelope (appkit-loop-envelope-payload envelope))
-            :revision (appkit-loop--revision loop))))
+            :revision (appkit-loop--revision loop)
+            :secondary-conditions nil)))
       (setf (appkit-loop--status loop) 'faulted
             (appkit-loop--fault loop) fault)
       (appkit-loop--cancel-scheduled loop)
@@ -287,7 +294,13 @@ admission does not allocate a sequence number."
         (appkit-loop--complete-ticket
          (appkit-loop-envelope-ticket envelope) 'faulted fault))
       (appkit-loop--complete-pass-tickets loop 'faulted fault)
-      (appkit-loop--purge loop 'faulted fault)))
+      (appkit-loop--purge loop 'faulted fault)
+      (when-let* ((on-fault (appkit-loop--on-fault loop)))
+        (condition-case secondary
+            (funcall on-fault loop fault)
+          ((error quit)
+           (push secondary
+                 (appkit-loop-fault-secondary-conditions fault)))))))
   (appkit-loop--fault loop))
 
 (defun appkit-loop--apply-transition (loop envelope)
