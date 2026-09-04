@@ -5,6 +5,7 @@
 (require 'ert)
 
 (require 'appkit-loop)
+(require 'appkit-routing)
 
 (defmacro appkit-loop-test--with-loop (binding &rest body)
   "Create the loop described by BINDING and evaluate BODY with cleanup."
@@ -110,21 +111,41 @@
       (should (= (appkit-loop-pending-count loop) 0)))))
 
 (ert-deftest appkit-loop-send-rejects-reentrancy ()
-  (let (loop nested-result)
-    (setq loop
-          (appkit-loop-create
-           :model nil
-           :update
-           (lambda (model message)
-             (when (eq message 'outer)
-               (setq nested-result (appkit-loop-send loop 'inner)))
-             (appkit-loop-accept model))))
-    (unwind-protect
-        (let ((ticket (appkit-loop-send loop 'outer)))
-          (should (eq nested-result 'reentrant-send))
-          (should (eq (appkit-loop-ticket-state ticket) 'accepted))
-          (should (= (appkit-loop-revision loop) 1)))
-      (appkit-loop-stop loop))))
+  (let (loop nested-result cross-result direct-condition)
+    (let* ((target
+            (appkit-loop-create
+             :model nil
+             :update
+             (lambda (model _message) (appkit-loop-accept model))))
+           (address (appkit-loop-address target)))
+      (setq loop
+            (appkit-loop-create
+             :model nil
+             :update
+             (lambda (model message)
+               (when (eq message 'outer)
+                 (setq nested-result (appkit-loop-send loop 'inner)
+                       cross-result (appkit-loop-send target 'inner)
+                       direct-condition
+                       (condition-case condition
+                           (progn
+                             (appkit-post-message address 'inner)
+                             nil)
+                         (error condition))))
+               (appkit-loop-accept model))))
+      (unwind-protect
+          (let ((ticket (appkit-loop-send loop 'outer)))
+            (should (eq nested-result 'reentrant-send))
+            (should (eq cross-result 'reentrant-send))
+            (should direct-condition)
+            (should
+             (string-match-p
+              "must be deferred" (error-message-string direct-condition)))
+            (should (eq (appkit-loop-ticket-state ticket) 'accepted))
+            (should (= (appkit-loop-revision loop) 1))
+            (should (= (appkit-loop-revision target) 0)))
+        (appkit-loop-stop loop)
+        (appkit-loop-stop target)))))
 
 (ert-deftest appkit-loop-rejection-does-not-commit ()
   (appkit-loop-test--with-loop
@@ -330,6 +351,33 @@
       (let ((condition
              (should-error (appkit-loop-send loop 'fail) :type 'error)))
         (should (equal (error-message-string condition) "primary"))))))
+
+(ert-deftest appkit-routing-fences-exact-addresses-and-reply-routes ()
+  (let* ((loop
+          (appkit-loop-create
+           :owner-identity 'target
+           :model nil
+           :update
+           (lambda (model message)
+             (appkit-loop-accept (append model (list message))))))
+         (address (appkit-loop-address loop))
+         (route (appkit-reply-route-create address 'request-1)))
+    (unwind-protect
+        (progn
+          (should (eq (appkit-post-message address 'direct) 'enqueued))
+          (should (eq (appkit-post-message route 'reply) 'enqueued))
+          (should (= (appkit-loop-run-pass loop) 2))
+          (should (equal (appkit-loop-model loop) '(direct reply)))
+          (appkit-loop-stop loop)
+          (let ((sequence (appkit-loop--next-sequence loop)))
+            (should (eq (appkit-post-message address 'late) 'stale))
+            (should (eq (appkit-post-message route 'late) 'stale))
+            (should (= (appkit-loop--next-sequence loop) sequence)))
+          (should
+           (eq (appkit-post-message (appkit-loop-address loop) 'late)
+               'stopped)))
+      (appkit-loop-stop loop))))
+
 (provide 'appkit-loop-test)
 
 ;;; appkit-loop-test.el ends here

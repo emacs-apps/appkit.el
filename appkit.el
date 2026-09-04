@@ -22,6 +22,7 @@
 (require 'appkit-cleanup)
 (require 'appkit-core)
 (require 'appkit-loop)
+(require 'appkit-routing)
 (require 'appkit-effect)
 (require 'appkit-command)
 (require 'appkit-surface)
