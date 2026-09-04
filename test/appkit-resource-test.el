@@ -288,6 +288,40 @@
         (when (and app (appkit-app-p app)
                    (not (eq (appkit-app-status app) 'stopped)))
           (appkit-app-close app))))))
+
+(ert-deftest appkit-resource-retire-advances-queue-after-cancel-error ()
+  (let* ((starts 0)
+         (broker
+          (appkit-resource--broker-create
+           :acquisitions (make-hash-table :test #'equal)
+           :active-count 1 :max-active 1 :queue-count 1 :max-queued 1))
+         (active
+          (appkit-resource--acquisition-create
+           :broker broker :identity 'active :state 'active :leases nil
+           :cancellation
+           (appkit-cancellation-create
+            :kind 'transport :cancel (lambda () (error "cancel failed")))))
+         (queued
+          (appkit-resource--acquisition-create
+           :broker broker :identity 'queued :input 'queued :state 'new
+           :queued-p t :leases nil :token 'queued-token
+           :loader
+           (lambda (_context _input _success _failure)
+             (setq starts (1+ starts))
+             (appkit-cancellation-create :kind 'transport :cancel #'ignore))))
+         (queue (list queued)))
+    (puthash 'active active (appkit-resource--broker-acquisitions broker))
+    (puthash 'queued queued (appkit-resource--broker-acquisitions broker))
+    (setf (appkit-resource--broker-queue-head broker) queue
+          (appkit-resource--broker-queue-tail broker) queue)
+    (should-error (appkit-resource--broker-retire active t) :type 'error)
+    (should (= 1 starts))
+    (should-not (gethash 'active (appkit-resource--broker-acquisitions broker)))
+    (should (eq (appkit-resource--acquisition-state queued) 'active))
+    (should (= 1 (appkit-resource--broker-active-count broker)))
+    (should (= 0 (appkit-resource--broker-queue-count broker)))
+    (appkit-resource--broker-retire queued t)))
+
 (provide 'appkit-resource-test)
 
 ;;; appkit-resource-test.el ends here

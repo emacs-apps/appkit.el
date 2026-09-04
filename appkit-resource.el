@@ -193,20 +193,24 @@
             (appkit-resource--acquisition-queued-p acquisition) nil))))
 
 (defun appkit-resource--broker-retire (acquisition cancel-p)
-  "Retire ACQUISITION and optionally invoke physical cancellation."
+  "Retire ACQUISITION, release its slot, and continue queued work."
   (let ((broker (appkit-resource--acquisition-broker acquisition)))
     (appkit-resource--broker-remove-queued acquisition)
     (when (eq (appkit-resource--acquisition-state acquisition) 'active)
       (setf (appkit-resource--broker-active-count broker)
             (1- (appkit-resource--broker-active-count broker))))
     (setf (appkit-resource--acquisition-state acquisition) 'retired)
-    (when (and cancel-p (appkit-resource--acquisition-cancellation acquisition))
-      (let ((capability (appkit-resource--acquisition-cancellation acquisition)))
-        (setf (appkit-resource--acquisition-cancellation acquisition) nil)
-        (when-let* ((cancel (appkit-cancellation-cancel capability)))
-          (funcall cancel))))
-    (remhash (appkit-resource--acquisition-identity acquisition)
-             (appkit-resource--broker-acquisitions broker))))
+    (unwind-protect
+        (when (and cancel-p
+                   (appkit-resource--acquisition-cancellation acquisition))
+          (let ((capability
+                 (appkit-resource--acquisition-cancellation acquisition)))
+            (setf (appkit-resource--acquisition-cancellation acquisition) nil)
+            (when-let* ((cancel (appkit-cancellation-cancel capability)))
+              (funcall cancel))))
+      (remhash (appkit-resource--acquisition-identity acquisition)
+               (appkit-resource--broker-acquisitions broker))
+      (appkit-resource--broker-start-next broker))))
 
 (defun appkit-resource--broker-start-next (broker)
   "Start queued broker work while BROKER has capacity."
@@ -335,9 +339,7 @@
         (cond
          ((< (appkit-resource--broker-active-count broker)
              (appkit-resource--broker-max-active broker))
-          (appkit-resource--broker-start acquisition)
-          (when (eq (appkit-resource--acquisition-state acquisition) 'retired)
-            (appkit-resource--broker-start-next broker)))
+          (appkit-resource--broker-start acquisition))
          ((< (appkit-resource--broker-queue-count broker)
              (appkit-resource--broker-max-queued broker))
           (let ((cell (list acquisition)))
