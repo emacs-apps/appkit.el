@@ -31,9 +31,12 @@
          (cancel-a (appkit-command-cancel-effect 'a)))
     (appkit-command--batch-add batch (list first-a start-b) 2)
     (appkit-command--batch-add batch (list cancel-a) 2)
-    (should (equal (appkit-command--batch-drain-effects batch)
-                   (list start-b cancel-a)))
-    (should-not (appkit-command--batch-drain-effects batch))))
+    (let ((work (appkit-command--batch-drain batch)))
+      (should-not (car work))
+      (should (equal (cdr work) (list start-b cancel-a))))
+    (let ((work (appkit-command--batch-drain batch)))
+      (should-not (car work))
+      (should-not (cdr work)))))
 
 
 (ert-deftest appkit-command-enforces-folded-key-boundary ()

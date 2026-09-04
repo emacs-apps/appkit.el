@@ -856,7 +856,7 @@
         (should-not (appkit-media-video-session-live-p session))))))
 
 (ert-deftest appkit-media-owned-video-buffer-stops-with-app ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'owned
+  (let ((app (appkit-app-start 'appkit-media-test :id 'owned
                                :shutdown #'ignore))
         viewer
         closed)
@@ -884,17 +884,17 @@
             (should (eq result viewer)))
           (should (buffer-live-p viewer))
           (should (= 1 (length (appkit-app-handles app))))
-          (appkit-stop-app app)
+          (appkit-app-close app)
           (should-not (buffer-live-p viewer))
           (should closed)
           (should-not (appkit-app-handles app)))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app))
+        (appkit-app-close app))
       (when (buffer-live-p viewer)
         (kill-buffer viewer)))))
 
 (ert-deftest appkit-media-owned-video-buffer-stops-with-view ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'view
+  (let ((app (appkit-app-start 'appkit-media-test :id 'view
                                :shutdown #'ignore))
         (buffer (generate-new-buffer " *appkit-media-view-owner*"))
         viewer
@@ -934,13 +934,13 @@
             (should-not (appkit-view-handles view))
             (should-not (appkit-view-live-p view))))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app))
+        (appkit-app-close app))
       (dolist (candidate (list buffer viewer))
         (when (buffer-live-p candidate)
           (kill-buffer candidate))))))
 
 (ert-deftest appkit-media-video-buffer-kill-retires-owner ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'buffer-kill
+  (let ((app (appkit-app-start 'appkit-media-test :id 'buffer-kill
                                :shutdown #'ignore))
         viewer
         closed)
@@ -972,12 +972,12 @@
           (should-not (appkit-app-handles app))
           (should (appkit-app-live-p app)))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app))
+        (appkit-app-close app))
       (when (buffer-live-p viewer)
         (kill-buffer viewer)))))
 
 (ert-deftest appkit-media-video-constructor-error-retires-owner ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'constructor-error
+  (let ((app (appkit-app-start 'appkit-media-test :id 'constructor-error
                                :shutdown #'ignore))
         viewer
         closed)
@@ -1006,10 +1006,10 @@
           (should-not (buffer-live-p viewer))
           (should-not (appkit-app-handles app)))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app)))))
+        (appkit-app-close app)))))
 
 (ert-deftest appkit-media-video-constructor-throw-retires-owner ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'constructor-throw
+  (let ((app (appkit-app-start 'appkit-media-test :id 'constructor-throw
                                :shutdown #'ignore))
         viewer
         closed)
@@ -1037,10 +1037,10 @@
           (should-not (buffer-live-p viewer))
           (should-not (appkit-app-handles app)))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app)))))
+        (appkit-app-close app)))))
 
 (ert-deftest appkit-media-video-stop-during-open-kills-viewer ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'reentrant
+  (let ((app (appkit-app-start 'appkit-media-test :id 'reentrant
                                :shutdown #'ignore))
         viewer
         closed)
@@ -1056,7 +1056,7 @@
               ((symbol-function 'video-session-present)
                (lambda (_session &rest arguments)
                  (setq viewer (plist-get arguments :buffer))
-                 (appkit-stop-app app)
+                 (appkit-app-close app)
                  viewer)))
       (should-error
        (appkit-media-play-video-source
@@ -1066,10 +1066,10 @@
       (should-not (appkit-app-handles app)))))
 
 (ert-deftest appkit-media-video-dead-owner-never-opens ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'dead
+  (let ((app (appkit-app-start 'appkit-media-test :id 'dead
                                :shutdown #'ignore))
         opened)
-    (appkit-stop-app app)
+    (appkit-app-close app)
     (cl-letf (((symbol-function 'video-session-create)
                (lambda (&rest _)
                  (setq opened t))))
@@ -1079,7 +1079,7 @@
       (should-not opened))))
 
 (ert-deftest appkit-media-video-entrypoints-forward-exact-owner ()
-  (let ((app (appkit-start-app 'appkit-media-test :id 'forward
+  (let ((app (appkit-app-start 'appkit-media-test :id 'forward
                                :shutdown #'ignore))
         calls)
     (unwind-protect
@@ -1129,7 +1129,7 @@
               ("https://example.invalid/action.mp4" "action" ,app t
                (("Referer" . "action")))))))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app)))))
+        (appkit-app-close app)))))
 
 (ert-deftest appkit-media-video-rejects-invalid-sources ()
   (should-error
@@ -1206,7 +1206,7 @@
 
 (ert-deftest appkit-media-owned-file-open-cancels-and-ignores-late-success ()
   (let* ((directory (make-temp-file "appkit-media-owned-open" t))
-         (app (appkit-start-app 'appkit-media-test :id 'owned-open
+         (app (appkit-app-start 'appkit-media-test :id 'owned-open
                                 :shutdown #'ignore))
          (buffer (generate-new-buffer " *appkit-media-owned-open*"))
          view
@@ -1244,7 +1244,7 @@
             (funcall success "/tmp/late-report.pdf")
             (should-not opened)))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app))
+        (appkit-app-close app))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory directory t))))

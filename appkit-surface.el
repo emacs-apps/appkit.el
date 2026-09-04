@@ -115,15 +115,29 @@
   (appkit-next-model next))
 
 (defun appkit-surface--app-read-view (surface)
-  "Return the App read view shared by SURFACE's current pass."
+  "Return the causally sufficient App read view shared by SURFACE's pass."
   (when-let* ((app (appkit-surface-app surface)))
-    (or appkit-loop--pass-context
-        (setq appkit-loop--pass-context (appkit-runtime-app--read-view app)))))
+    (let* ((view
+            (or appkit-loop--pass-context
+                (setq appkit-loop--pass-context
+                      (appkit-app--read-view app))))
+           (envelope appkit-loop--current-envelope)
+           (source (and envelope
+                        (appkit-loop-envelope-source-address envelope)))
+           (source-revision
+            (and envelope
+                 (appkit-loop-envelope-source-revision envelope))))
+      (when (and (appkit-runtime-address-p source)
+                 (equal (appkit-runtime-address--owner-identity source)
+                        (appkit-app-identity app))
+                 (> source-revision (appkit-app-read-view-revision view)))
+        (error "Surface App read view precedes routed source revision"))
+      view)))
 
 (defun appkit-surface--parent-address (surface)
   "Return SURFACE's parent App address, or nil."
   (when-let* ((app (appkit-surface-app surface)))
-    (appkit-routing--address (appkit-runtime-app-loop app))))
+    (appkit-routing--address (appkit-app-loop app))))
 
 (defun appkit-surface--client-update (surface context model message)
   "Run and stage SURFACE's client transition in CONTEXT."
@@ -174,28 +188,33 @@
                 (error-message-string recovery-condition)))))))
 
 (defun appkit-surface--commit-work
-    (surface app-read-view model request commands)
+    (surface app-read-view model request posts effects)
   "Run SURFACE's closed post-commit phases for MODEL and folded work."
   (appkit-command--revoke-effects
-   (appkit-surface-effect-runtime surface) commands 'appkit-surface)
+   (appkit-surface-effect-runtime surface) effects 'appkit-surface)
   (unless (eq request appkit-render-none)
     (with-current-buffer (appkit-surface-buffer surface)
       (appkit-surface--render-request
        surface app-read-view model request)))
+  (let ((loop (appkit-surface-loop surface)))
+    (appkit-command--post-messages
+     loop (appkit-loop-revision loop) posts))
   (appkit-command--start-effects
-   (appkit-surface-effect-runtime surface) commands))
+   (appkit-surface-effect-runtime surface) effects))
 
 (defun appkit-surface--commit-pending (surface app-read-view model)
   "Detach and execute SURFACE's pending work against MODEL and APP-READ-VIEW."
-  (let ((request (appkit-surface-pending-render surface))
-        (commands
-         (appkit-command--batch-drain-effects
-          (appkit-surface-command-batch surface))))
-    ;; Detach the completed batch before any cleanup, renderer, or starter can
-    ;; fail.  A fault must not retain commands against an unusable model.
+  (let* ((request (appkit-surface-pending-render surface))
+         (work
+          (appkit-command--batch-drain
+           (appkit-surface-command-batch surface)))
+         (posts (car work))
+         (effects (cdr work)))
+    ;; Detach the completed batch before any cleanup, renderer, post, or starter
+    ;; can fail.  A fault must not retain work against an unusable model.
     (setf (appkit-surface-pending-render surface) appkit-render-none)
     (appkit-surface--commit-work
-     surface app-read-view model request commands)))
+     surface app-read-view model request posts effects)))
 
 (defun appkit-surface--after-pass (surface loop _pass)
   "Commit SURFACE's folded work after LOOP finishes model transitions."
@@ -212,7 +231,7 @@
   "Remove SURFACE's exact identity from its parent App."
   (when-let* ((app (appkit-surface-app surface))
               (identity (appkit-surface-identity surface)))
-    (appkit-runtime-app--unregister-surface app identity surface)))
+    (appkit-app--unregister-surface app identity surface)))
 
 (defun appkit-surface--cleanup-open (surface buffer created-p renderer-created-p)
   "Clean a failed Surface open without hiding its primary nonlocal exit."
@@ -267,7 +286,7 @@ MAX-ACTIVE-EFFECTS bound deferred work."
   (appkit-command--check-limit "Per-next command limit" command-limit)
   (when (not (eq (not (null app)) (not (null identity))))
     (error "Surface App and identity must be supplied together"))
-  (when (and app (not (appkit-runtime-app-live-p app)))
+  (when (and app (not (appkit-app-live-p app)))
     (error "Cannot open a Surface for an unavailable App"))
   (when (and buffer (not (buffer-live-p buffer)))
     (error "Cannot open a Surface in a dead buffer"))
@@ -304,7 +323,7 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                    (appkit-loop-create
                     :owner-identity
                     (if app
-                        (list (appkit-runtime-app-identity app) identity)
+                        (list (appkit-app-identity app) identity)
                       (make-symbol "appkit-surface-"))
                     :model nil
                     :update
@@ -324,14 +343,14 @@ MAX-ACTIVE-EFFECTS bound deferred work."
             (add-hook 'change-major-mode-hook
                       #'appkit-surface--host-detach nil t)
             (when app
-              (appkit-runtime-app--register-surface app identity type surface))
-            (let* ((app-read-view (and app (appkit-runtime-app--read-view app)))
+              (appkit-app--register-surface app identity type surface))
+            (let* ((app-read-view (and app (appkit-app--read-view app)))
                    (context
                     (appkit-context--for-loop
                      (appkit-surface-loop surface)
                      (and app
                           (appkit-routing--address
-                           (appkit-runtime-app-loop app)))
+                           (appkit-app-loop app)))
                      app-read-view))
                    (initial
                     (appkit-surface--validate-next

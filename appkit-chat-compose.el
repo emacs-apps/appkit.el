@@ -400,7 +400,7 @@ compose app."
            (appkit-current-view))
       (let* ((owned (null app))
              (target (or app
-                         (appkit-start-app
+                         (appkit-app-start
                           'appkit-chat-compose
                           :id (intern (format "compose-%x"
                                               (sxhash-eq (current-buffer))))))))
@@ -415,7 +415,7 @@ compose app."
 (defun appkit-chat-compose--stop-owned-app ()
   "Stop the compose app started for the current buffer, if any."
   (when (appkit-app-live-p appkit-chat-compose--owned-app)
-    (appkit-stop-app appkit-chat-compose--owned-app))
+    (appkit-app-close appkit-chat-compose--owned-app))
   (setq-local appkit-chat-compose--owned-app nil))
 
 (defun appkit-chat-compose-refresh ()

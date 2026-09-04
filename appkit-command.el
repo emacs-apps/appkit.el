@@ -18,6 +18,7 @@
 (require 'cl-lib)
 (require 'appkit-effect)
 (require 'appkit-cleanup)
+(require 'appkit-routing)
 
 (defconst appkit-render-none 'appkit-render-none
   "Explicit disposition requesting no presentation work.")
@@ -65,10 +66,43 @@ set; its owner runtime validates the applicable capacity."
   "Revoke and cancel the current Effect under KEY after commit."
   key)
 
+(cl-defstruct (appkit-command-post-message
+               (:include appkit-command)
+               (:constructor appkit-command-post-message--create)
+               (:copier nil))
+  "Post MESSAGE to an opaque exact TARGET after the sender commits."
+  target
+  message
+  delivery
+  reply-correlation)
+
+(cl-defun appkit-command-post-message
+    (&key target message delivery reply-correlation)
+  "Create one exact post command.
+
+TARGET must be a runtime address or reply route supplied by a transition
+context.  DELIVERY is currently `report'.  REPLY-CORRELATION asks the runtime
+to attach a return route when TARGET is an address."
+  (unless (or (appkit-runtime-address-p target)
+              (appkit-reply-route-p target))
+    (signal 'wrong-type-argument
+            (list '(or appkit-runtime-address-p appkit-reply-route-p)
+                  target)))
+  (unless (eq delivery 'report)
+    (error "Unsupported post delivery policy: %S" delivery))
+  (when (and reply-correlation (appkit-reply-route-p target))
+    (error "A reply-route post cannot request another reply route"))
+  (appkit-command-post-message--create
+   :target target
+   :message message
+   :delivery delivery
+   :reply-correlation reply-correlation))
+
 (cl-defstruct (appkit-command--batch
                (:constructor appkit-command--batch-create-internal)
                (:copier nil))
   reverse-effects
+  reverse-posts
   effect-deltas
   folded-limit)
 
@@ -109,35 +143,48 @@ oversized lists fail without an unbounded scan."
       (setq count (1+ count))
       (when (> count per-next-limit)
         (error "Per-next command limit exceeded: %S" per-next-limit))
-      (let* ((command (pop remaining))
-             (key (appkit-command--effect-key command)))
-        (unless (gethash key deltas)
-          (when (>= (hash-table-count deltas)
-                    (appkit-command--batch-folded-limit batch))
-            (error "Folded command limit exceeded: %S"
-                   (appkit-command--batch-folded-limit batch))))
-        ;; Every list cell is a unique occurrence token.  Superseded cells stay
-        ;; in the bounded input log and are skipped during the linear drain.
-        (let ((entry (cons key command)))
-          (puthash key entry deltas)
-          (push entry (appkit-command--batch-reverse-effects batch)))))
+      (let ((command (pop remaining)))
+        (cond
+         ((appkit-command-post-message-p command)
+          (push command (appkit-command--batch-reverse-posts batch)))
+         ((or (appkit-command-start-effect-p command)
+              (appkit-command-cancel-effect-p command))
+          (let ((key (appkit-command--effect-key command)))
+            (unless (gethash key deltas)
+              (when (>= (hash-table-count deltas)
+                        (appkit-command--batch-folded-limit batch))
+                (error "Folded command limit exceeded: %S"
+                       (appkit-command--batch-folded-limit batch))))
+            ;; Every list cell is a unique occurrence token.  Superseded cells
+            ;; stay in the bounded log and are skipped during the linear drain.
+            (let ((entry (cons key command)))
+              (puthash key entry deltas)
+              (push entry
+                    (appkit-command--batch-reverse-effects batch)))))
+         (t
+          (error "Unsupported AppKit command: %S" command)))))
     (when remaining
       (error "Commands must be a proper list: %S" commands))))
 
 (defun appkit-command--batch-clear (batch)
   "Discard all deferred commands retained by BATCH."
-  (setf (appkit-command--batch-reverse-effects batch) nil)
+  (setf (appkit-command--batch-reverse-effects batch) nil
+        (appkit-command--batch-reverse-posts batch) nil)
   (clrhash (appkit-command--batch-effect-deltas batch)))
 
-(defun appkit-command--batch-drain-effects (batch)
-  "Return BATCH's final Effect commands in explicit order, then clear BATCH."
+(defun appkit-command--batch-drain (batch)
+  "Return BATCH's posts and final Effect commands, then clear BATCH.
+
+The result is a cons whose car is the FIFO post list and whose cdr is the
+explicitly ordered final Effect list."
   (let ((deltas (appkit-command--batch-effect-deltas batch))
+        (posts (nreverse (appkit-command--batch-reverse-posts batch)))
         effects)
     (dolist (entry (nreverse (appkit-command--batch-reverse-effects batch)))
       (when (eq entry (gethash (car entry) deltas))
         (push (cdr entry) effects)))
     (appkit-command--batch-clear batch)
-    (nreverse effects)))
+    (cons posts (nreverse effects))))
 
 (defun appkit-command--revoke-effects (runtime commands warning-type)
   "Revoke final Effect COMMANDS from RUNTIME, reporting as WARNING-TYPE."
@@ -152,6 +199,16 @@ oversized lists fail without an unbounded scan."
     (appkit--warn-cleanup-conditions (cdr conditions) warning-type)
     (when-let* ((condition (car conditions)))
       (signal (car condition) (cdr condition)))))
+
+(defun appkit-command--post-messages (sender revision commands)
+  "Execute routed COMMANDS from SENDER stamped with committed REVISION."
+  (dolist (command commands)
+    (appkit-routing--post-command
+     sender
+     (appkit-command-post-message-target command)
+     (appkit-command-post-message-message command)
+     revision
+     (appkit-command-post-message-reply-correlation command))))
 
 (defun appkit-command--start-effects (runtime commands)
   "Start final Effect COMMANDS in RUNTIME in explicit order."

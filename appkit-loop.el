@@ -215,11 +215,12 @@ sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
           (run-at-time 0 nil #'appkit-loop--scheduled-pass loop))))
 
 (defun appkit-loop--enqueue
-    (loop payload ticket limit &optional incarnation reply-route)
+    (loop payload ticket limit &optional incarnation reply-route
+          origin source-address source-revision)
   "Append PAYLOAD and optional TICKET to LOOP below LIMIT.
 
-INCARNATION defaults to LOOP's current incarnation.  REPLY-ROUTE is opaque
-metadata retained for a directed reply."
+INCARNATION defaults to LOOP's current incarnation.  REPLY-ROUTE, ORIGIN,
+SOURCE-ADDRESS, and SOURCE-REVISION are causal metadata for routed delivery."
   (if (>= (appkit-loop--data-count loop) limit)
       'full
     (let* ((sequence (appkit-loop--next-sequence loop))
@@ -228,6 +229,9 @@ metadata retained for a directed reply."
              :sequence sequence
              :incarnation (or incarnation (appkit-loop--incarnation loop))
              :payload payload
+             :origin origin
+             :source-address source-address
+             :source-revision source-revision
              :reply-route reply-route
              :ticket ticket))
            (cell (list envelope)))
@@ -252,10 +256,11 @@ metadata retained for a directed reply."
     (_ nil)))
 
 (defun appkit-loop--post-addressed
-    (loop message incarnation &optional reply-route)
+    (loop message incarnation &optional reply-route
+          origin source-address source-revision)
   "Post MESSAGE to LOOP only at exact INCARNATION.
 
-REPLY-ROUTE, when non-nil, is retained as opaque envelope metadata."
+Optional arguments retain routed delivery metadata in the admitted envelope."
   (appkit-loop--assert-main-thread)
   (appkit-loop--check loop)
   (if (/= incarnation (appkit-loop--incarnation loop))
@@ -263,7 +268,7 @@ REPLY-ROUTE, when non-nil, is retained as opaque envelope metadata."
     (or (appkit-loop--admission-status loop)
         (appkit-loop--enqueue
          loop message nil (appkit-loop--data-capacity loop)
-         incarnation reply-route))))
+         incarnation reply-route origin source-address source-revision))))
 
 (defun appkit-loop-post (loop message)
   "Try to enqueue MESSAGE in LOOP and return its admission outcome.

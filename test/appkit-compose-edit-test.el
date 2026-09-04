@@ -56,7 +56,7 @@
   (appkit-test-with-view
     (let ((view (appkit-current-view))
           editor)
-      (run-at-time 0 nil #'appkit-stop-app appkit-test-app)
+      (run-at-time 0 nil #'appkit-app-close appkit-test-app)
       (should-not
        (appkit-compose-edit-buffer
         view ""

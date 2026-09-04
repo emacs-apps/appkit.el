@@ -11,8 +11,8 @@
     (unwind-protect
         (progn
           (setq app
-                (appkit-start-runtime-app
-                 (appkit-runtime-app-type-create
+                (appkit-app-start
+                 (appkit-app-type-create
                   :name 'canonical-test
                   :init
                   (lambda (context input)
@@ -26,9 +26,9 @@
                      :model (+ model message) :render appkit-render-none))
                   :shutdown (lambda (current) (setq shutdown-app current)))
                  :input 2))
-          (let ((ticket (appkit-runtime-app-send app 3)))
+          (let ((ticket (appkit-app-send app 3)))
             (should (eq (appkit-loop-ticket-state ticket) 'accepted)))
-          (should (= (appkit-runtime-app-model app) 5))
+          (should (= (appkit-app-model app) 5))
           (should (= (length contexts) 2))
           (dolist (context contexts)
             (should (appkit-transition-context-p context))
@@ -37,11 +37,11 @@
               (appkit-transition-context-owner-address context)))
             (should-not (appkit-transition-context-parent-address context))
             (should-not (appkit-transition-context-app-read-view context)))
-          (should (appkit-runtime-app-stop app))
+          (should (appkit-app-close app))
           (should (eq shutdown-app app))
-          (should-not (appkit-runtime-app-stop app)))
-      (when (and app (not (eq (appkit-runtime-app-status app) 'stopped)))
-        (appkit-runtime-app-stop app)))))
+          (should-not (appkit-app-close app)))
+      (when (and app (not (eq (appkit-app-status app) 'stopped)))
+        (appkit-app-close app)))))
 
 (ert-deftest appkit-surface-pass-shares-one-app-read-view ()
   (let (app surface buffer init-context init-view mount-view update-views
@@ -49,8 +49,8 @@
     (unwind-protect
         (progn
           (setq app
-                (appkit-start-runtime-app
-                 (appkit-runtime-app-type-create
+                (appkit-app-start
+                 (appkit-app-type-create
                   :name 'parent-test
                   :init
                   (lambda (_context input)
@@ -92,7 +92,7 @@
                      :unmount (lambda (_surface)))))
                  :app app :identity 'primary))
           (setq buffer (appkit-surface-buffer surface))
-          (should (= (appkit-runtime-app-surface-count app) 1))
+          (should (= (appkit-app-surface-count app) 1))
           (should
            (appkit-runtime-address-p
             (appkit-transition-context-parent-address init-context)))
@@ -105,11 +105,11 @@
           (should (eq (car update-views) (cadr update-views)))
           (should (eq render-view (car update-views)))
           (should (eq (appkit-app-read-view-model render-view) 'canonical))
-          (should (appkit-runtime-app-stop app))
+          (should (appkit-app-close app))
           (should (eq (appkit-surface-status surface) 'stopped))
-          (should (= (appkit-runtime-app-surface-count app) 0)))
-      (when (and app (not (eq (appkit-runtime-app-status app) 'stopped)))
-        (appkit-runtime-app-stop app))
+          (should (= (appkit-app-surface-count app) 0)))
+      (when (and app (not (eq (appkit-app-status app) 'stopped)))
+        (appkit-app-close app))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 

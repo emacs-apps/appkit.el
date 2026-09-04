@@ -30,7 +30,7 @@
                     (current-buffer))))))
 
 (ert-deftest appkit-media-player-pauses-by-restart-and-stops-with-owner ()
-  (let* ((app (appkit-start-app 'appkit-media-player-test
+  (let* ((app (appkit-app-start 'appkit-media-player-test
                                 :id 'toggle :shutdown #'ignore))
          (file (make-temp-file "appkit-player-"))
          (next-process 0)
@@ -117,12 +117,12 @@
           (appkit-media-player-stop session)
           (should (equal '(stopped) finalized)))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app))
+        (appkit-app-close app))
       (when (file-exists-p file)
         (delete-file file)))))
 
 (ert-deftest appkit-media-player-natural-exit-finalizes-once ()
-  (let* ((app (appkit-start-app 'appkit-media-player-test
+  (let* ((app (appkit-app-start 'appkit-media-player-test
                                 :id 'finish :shutdown #'ignore))
          (file (make-temp-file "appkit-player-finish-"))
          (live-p t)
@@ -168,12 +168,12 @@
           (funcall sentinel :player "finished\n")
           (should (= 1 (length finalized))))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app))
+        (appkit-app-close app))
       (when (file-exists-p file)
         (delete-file file)))))
 
 (ert-deftest appkit-media-player-owner-stop-cancels-process-and-finalizes ()
-  (let* ((app (appkit-start-app 'appkit-media-player-test
+  (let* ((app (appkit-app-start 'appkit-media-player-test
                                 :id 'owner-stop :shutdown #'ignore))
          (file (make-temp-file "appkit-player-owner-"))
          (live-p t)
@@ -205,12 +205,12 @@
            (lambda (session)
              (setq final-status
                    (appkit-media-player-session-status session))))
-          (appkit-stop-app app)
+          (appkit-app-close app)
           (should deleted)
           (should (eq 'stopped final-status))
           (should-not (appkit-app-handles app)))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app))
+        (appkit-app-close app))
       (when (file-exists-p file)
         (delete-file file)))))
 

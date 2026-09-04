@@ -9,7 +9,7 @@
   (declare (indent 0) (debug t))
   `(with-temp-buffer
      (let ((appkit-test-app
-            (appkit-start-app 'appkit-test :id (make-symbol "app"))))
+            (appkit-app-start 'appkit-test :id (make-symbol "app"))))
        (unwind-protect
            (progn
              (appkit-attach-view
@@ -17,7 +17,7 @@
               :id (make-symbol "view")
               :mode major-mode)
              ,@body)
-         (appkit-stop-app appkit-test-app)))))
+         (appkit-app-close appkit-test-app)))))
 
 (provide 'appkit-test-helper)
 

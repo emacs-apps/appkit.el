@@ -35,6 +35,15 @@
   (target nil :read-only t)
   (correlation nil :read-only t))
 
+(cl-defstruct (appkit-delivery-report
+               (:constructor appkit-delivery-report--create)
+               (:copier nil))
+  "One bounded report for a failed directed command admission."
+  outcome
+  target
+  message
+  correlation)
+
 (defun appkit-routing--address (loop)
   "Return an exact internal runtime address for LOOP's current incarnation."
   (appkit-loop--check loop)
@@ -49,6 +58,29 @@
     (signal 'wrong-type-argument (list 'appkit-runtime-address-p target)))
   (appkit-reply-route--create :target target :correlation correlation))
 
+(defun appkit-routing--target-address (target)
+  "Return TARGET's exact runtime address, or signal a type error."
+  (cond
+   ((appkit-runtime-address-p target) target)
+   ((appkit-reply-route-p target) (appkit-reply-route--target target))
+   (t
+    (signal 'wrong-type-argument
+            (list '(or appkit-runtime-address-p appkit-reply-route-p)
+                  target)))))
+
+(defun appkit-routing--admit
+    (target message &optional origin source-address source-revision reply-route)
+  "Admit MESSAGE at exact TARGET with optional causal metadata."
+  (let ((address (appkit-routing--target-address target)))
+    (appkit-loop--post-addressed
+     (appkit-runtime-address--owner address)
+     message
+     (appkit-runtime-address--incarnation address)
+     reply-route
+     origin
+     source-address
+     source-revision)))
+
 (defun appkit-routing--post (target message)
   "Try to enqueue MESSAGE at exact internal TARGET.
 
@@ -57,17 +89,39 @@ does not allocate a target sequence number.  Client transitions must instead
 return a closed post command for execution after commit."
   (when appkit-loop--active-loop
     (error "Directed posts must use the runtime post-commit phase"))
-  (let* ((route (and (appkit-reply-route-p target) target))
-         (address (if route (appkit-reply-route--target route) target)))
-    (unless (appkit-runtime-address-p address)
-      (signal 'wrong-type-argument
-              (list '(or appkit-runtime-address-p appkit-reply-route-p)
-                    target)))
-    (appkit-loop--post-addressed
-     (appkit-runtime-address--owner address)
-     message
-     (appkit-runtime-address--incarnation address)
-     route)))
+  (appkit-routing--admit target message))
+
+(defun appkit-routing--post-command
+    (sender target message source-revision reply-correlation)
+  "Execute one routed command from SENDER after SOURCE-REVISION commits.
+
+Failed target admission produces one bounded delivery report in SENDER's next
+pass.  Failure to admit that required report is a runtime fault."
+  (let* ((source-address (appkit-routing--address sender))
+         (request-route
+          (and reply-correlation
+               (appkit-runtime-address-p target)
+               (appkit-routing--reply-route
+                source-address reply-correlation)))
+         (outcome
+          (appkit-routing--admit
+           target message 'command source-address source-revision
+           request-route)))
+    (unless (eq outcome 'enqueued)
+      (let ((report-outcome
+             (appkit-loop--post-addressed
+              sender
+              (appkit-delivery-report--create
+               :outcome outcome
+               :target target
+               :message message
+               :correlation reply-correlation)
+              (appkit-loop-incarnation sender)
+              nil 'runtime)))
+        (unless (eq report-outcome 'enqueued)
+          (error "Required delivery report admission failed: %S"
+                 report-outcome))))
+    outcome))
 
 (provide 'appkit-routing)
 

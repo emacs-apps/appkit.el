@@ -109,7 +109,7 @@
 
 
 (ert-deftest appkit-chat-history-operation-owns-replacement-transport ()
-  (let ((app (appkit-start-app 'appkit-test :id 'history))
+  (let ((app (appkit-app-start 'appkit-test :id 'history))
         view
         cancelled)
     (unwind-protect
@@ -145,7 +145,7 @@
       (when (appkit-view-p view)
         (appkit-kill-view view t))
       (when (appkit-app-live-p app)
-        (appkit-stop-app app)))))
+        (appkit-app-close app)))))
 
 (ert-deftest appkit-chat-history-newer-stall-follows-the-exact-edge ()
   (with-temp-buffer

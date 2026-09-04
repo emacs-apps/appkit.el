@@ -628,7 +628,7 @@
       (should-not (appkit-task-queue-test--harness-finishes harness)))))
 
 (ert-deftest appkit-task-queue-app-owner-cleans-up-on-stop ()
-  (let* ((app (appkit-start-app 'appkit-test :id 'queue-owner))
+  (let* ((app (appkit-app-start 'appkit-test :id 'queue-owner))
          (queue (appkit-task-queue-create app 1))
          (cancellations 0)
          finishes
@@ -639,7 +639,7 @@
        (setq callback complete)
        (lambda () (setq cancellations (1+ cancellations))))
      :finish (lambda (&rest arguments) (setq finishes arguments)))
-    (appkit-stop-app app)
+    (appkit-app-close app)
     (should-not (appkit-task-queue-live-p queue))
     (should (= cancellations 1))
     (should (= (appkit-task-queue-total-count queue) 0))

@@ -39,7 +39,7 @@
                        (appkit-scroll-window-visible-range window)))))))
 
 (ert-deftest appkit-scroll-observer-owns-hooks-and-rejects-reentrancy ()
-  (let* ((app (appkit-start-app 'appkit-test :id 'account))
+  (let* ((app (appkit-app-start 'appkit-test :id 'account))
          (view
           (appkit-open-view
            :app app :id 'timeline :mode 'special-mode
@@ -92,12 +92,12 @@
           (should-not
            (memq (appkit-scroll-observer-window-scroll-function observer)
                  window-scroll-functions)))
-      (appkit-stop-app app)
+      (appkit-app-close app)
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
 (ert-deftest appkit-scroll-observer-hooks-measure-after-redisplay ()
-  (let* ((app (appkit-start-app 'appkit-test :id 'hook-scroll))
+  (let* ((app (appkit-app-start 'appkit-test :id 'hook-scroll))
          (view
           (appkit-open-view
            :app app :id 'timeline :mode 'special-mode
@@ -155,12 +155,12 @@
             (should (= measurements 1))
             (should (equal calls
                            (list (cons (point-max) (point-max)))))))
-      (appkit-stop-app app)
+      (appkit-app-close app)
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
 (ert-deftest appkit-scroll-observer-defers-stale-window-end-once ()
-  (let* ((app (appkit-start-app 'appkit-test :id 'deferred-scroll))
+  (let* ((app (appkit-app-start 'appkit-test :id 'deferred-scroll))
          (view
           (appkit-open-view
            :app app :id 'timeline :mode 'special-mode
@@ -207,7 +207,7 @@
                            (list (cons (point-max) (point-max)))))
             (should-not
              (appkit-scroll-observer-deferred-check-handle observer))))
-      (appkit-stop-app app)
+      (appkit-app-close app)
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
