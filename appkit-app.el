@@ -21,6 +21,7 @@
 (require 'appkit-command)
 (require 'appkit-context)
 (require 'appkit-resource)
+(require 'appkit-source)
 
 (declare-function appkit-surface-stop "appkit-surface")
 (declare-function appkit-surface--parent-fault "appkit-surface")
@@ -31,12 +32,13 @@
   name
   init
   update
+  sources
   shutdown)
 
 (cl-defstruct
     (appkit-app (:constructor appkit-app--create) (:copier nil))
-  identity type loop effect-runtime resource-coordinator command-batch
-  command-limit surfaces handles surface-limit alive-p)
+  identity type loop effect-runtime source-runtime resource-coordinator
+  command-batch command-limit surfaces handles surface-limit alive-p)
 
 (defun appkit-app-live-p (app)
   "Return non-nil when APP can accept domain work."
@@ -120,30 +122,46 @@
           (appkit-loop-companion-accept)
         (appkit-loop-reject 'stale-resource-output))
     (let ((context (appkit-context--for-loop (appkit-app-loop app))))
-      (appkit-effect-runtime-dispatch
-       (appkit-app-effect-runtime app)
-       (lambda (current input)
-         (appkit-app--client-update app context current input))
+      (appkit-source-runtime-dispatch
+       (appkit-app-source-runtime app)
+       (lambda (source-model source-input)
+         (appkit-effect-runtime-dispatch
+          (appkit-app-effect-runtime app)
+          (lambda (current input)
+            (appkit-app--client-update app context current input))
+          source-model source-input))
        model message))))
 
-(defun appkit-app--commit-pending (app)
-  "Execute APP's folded post-commit work after its model commit."
+(defun appkit-app--commit-pending (app reconcile-sources-p)
+  "Execute APP's folded work and optionally reconcile desired Sources."
   (let* ((work
           (appkit-command--batch-drain
            (appkit-app-command-batch app)))
-         (posts (car work))
-         (effects (cdr work))
-         (loop (appkit-app-loop app)))
+         (posts (appkit-command-work-posts work))
+         (effects (appkit-command-work-effects work))
+         (source-intents (appkit-command-work-source-intents work))
+         (loop (appkit-app-loop app))
+         (source-runtime (appkit-app-source-runtime app)))
+    (when reconcile-sources-p
+      (appkit-source-runtime-reconcile
+       source-runtime
+       (if-let* ((sources
+                  (appkit-app-type-sources (appkit-app-type app))))
+           (funcall sources (appkit-loop-model loop))
+         nil)))
     (appkit-command--revoke-effects
      (appkit-app-effect-runtime app) effects 'appkit-app)
     (appkit-command--post-messages
      loop (appkit-loop-revision loop) posts)
     (appkit-command--start-effects
-     (appkit-app-effect-runtime app) effects)))
+     (appkit-app-effect-runtime app) effects)
+    (appkit-source-runtime-start-pending source-runtime)
+    (appkit-command--run-source-intents source-runtime source-intents)))
 
-(defun appkit-app--after-pass (app _loop _pass)
-  "Commit APP's folded work after one accepted pass."
-  (appkit-app--commit-pending app))
+(defun appkit-app--after-pass (app _loop pass)
+  "Commit APP's folded work after one accepted or companion pass."
+  (appkit-app--commit-pending
+   app (> (appkit-loop-pass-accepted pass) 0)))
 
 (defun appkit-app--on-fault (app _loop fault)
   "Revoke APP and every child Surface when its loop faults."
@@ -152,6 +170,7 @@
   (let (conditions)
     (appkit--run-cleanup-forms conditions
       (appkit-effect-runtime-stop (appkit-app-effect-runtime app))
+      (appkit-source-runtime-stop (appkit-app-source-runtime app))
       (appkit-resource-coordinator-stop
        (appkit-app-resource-coordinator app))
       (appkit--run-cleanup-items (appkit-app--surface-snapshot app)
@@ -205,6 +224,9 @@
                   (when (appkit-app-effect-runtime app)
                     (appkit-effect-runtime-stop
                      (appkit-app-effect-runtime app)))
+                  (when (appkit-app-source-runtime app)
+                    (appkit-source-runtime-stop
+                     (appkit-app-source-runtime app)))
                   (when (appkit-app-resource-coordinator app)
                     (appkit-resource-coordinator-stop
                      (appkit-app-resource-coordinator app)))
@@ -220,7 +242,7 @@
     (type &key input identity
           (command-limit appkit-command-default-per-next-limit)
           (folded-command-limit appkit-command-default-folded-limit)
-          (max-active-effects 32) (surface-limit 32))
+          (max-active-effects 32) (max-sources 32) (surface-limit 32))
   "Start a UI-free App of TYPE with INPUT and return it.
 
 IDENTITY defaults to a fresh opaque symbol.  COMMAND-LIMIT,
@@ -232,6 +254,10 @@ bounds owned by this App incarnation."
                           (appkit-app-type-update type)))
     (unless (functionp callback)
       (signal 'wrong-type-argument (list 'functionp callback))))
+  (unless (or (null (appkit-app-type-sources type))
+              (functionp (appkit-app-type-sources type)))
+    (signal 'wrong-type-argument
+            (list 'functionp (appkit-app-type-sources type))))
   (unless (or (null (appkit-app-type-shutdown type))
               (functionp (appkit-app-type-shutdown type)))
     (signal 'wrong-type-argument
@@ -258,6 +284,8 @@ bounds owned by this App incarnation."
                  :loop loop
                  :effect-runtime
                  (appkit-effect-runtime-create loop max-active-effects)
+                 :source-runtime
+                 (appkit-source-runtime-create loop max-sources)
                  :resource-coordinator nil
                  :command-batch
                  (appkit-command--batch-create folded-command-limit)
@@ -274,7 +302,7 @@ bounds owned by this App incarnation."
                    app (funcall (appkit-app-type-init type) context input))))
             (setf (appkit-loop--model loop)
                   (appkit-app--stage-next app initial))
-            (appkit-app--commit-pending app)
+            (appkit-app--commit-pending app t)
             (unless (eq (appkit-loop-status loop) 'running)
               (error "App stopped during startup"))
             (setf (appkit-app-alive-p app) t))
@@ -313,6 +341,8 @@ bounds owned by this App incarnation."
                   (appkit-cancel-handles app)
                   (appkit-effect-runtime-stop
                    (appkit-app-effect-runtime app))
+                  (appkit-source-runtime-stop
+                   (appkit-app-source-runtime app))
                   (appkit-resource-coordinator-stop
                    (appkit-app-resource-coordinator app))
                   (when-let*

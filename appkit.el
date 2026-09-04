@@ -25,6 +25,7 @@
 (require 'appkit-routing)
 (require 'appkit-context)
 (require 'appkit-effect)
+(require 'appkit-source)
 (require 'appkit-command)
 (require 'appkit-app)
 (require 'appkit-geometry)

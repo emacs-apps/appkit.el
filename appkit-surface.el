@@ -23,6 +23,7 @@
 (require 'appkit-core)
 (require 'appkit-geometry)
 (require 'appkit-resource)
+(require 'appkit-source)
 (require 'appkit-context)
 
 (cl-defstruct (appkit-surface-type
@@ -32,6 +33,7 @@
   mode
   init
   update
+  sources
   renderer-factory)
 
 (cl-defstruct (appkit-generated-renderer
@@ -53,6 +55,7 @@
   buffer
   loop
   effect-runtime
+  source-runtime
   command-batch
   command-limit
   renderer
@@ -201,10 +204,14 @@
             (appkit-surface-loop surface)
             (appkit-surface--parent-address surface)
             (appkit-surface--app-read-view surface))))
-      (appkit-effect-runtime-dispatch
-       (appkit-surface-effect-runtime surface)
-       (lambda (current input)
-         (appkit-surface--client-update surface context current input))
+      (appkit-source-runtime-dispatch
+       (appkit-surface-source-runtime surface)
+       (lambda (source-model source-input)
+         (appkit-effect-runtime-dispatch
+          (appkit-surface-effect-runtime surface)
+          (lambda (current input)
+            (appkit-surface--client-update surface context current input))
+          source-model source-input))
        model message))))
 
 (defun appkit-surface--render-request
@@ -255,40 +262,55 @@ Return the successful Renderer's closed companion result."
     render-result))
 
 (defun appkit-surface--commit-work
-    (surface app-read-view model request posts effects)
+    (surface app-read-view model request posts effects source-intents
+             reconcile-sources-p)
   "Run SURFACE's closed post-commit phases for MODEL and folded work."
-  (appkit-command--revoke-effects
-   (appkit-surface-effect-runtime surface) effects 'appkit-surface)
-  (unless (eq request appkit-render-none)
-    (let ((result
-           (with-current-buffer (appkit-surface-buffer surface)
-             (appkit-surface--render-request
-              surface app-read-view model request))))
-      (appkit-resource-commit-render-result surface result)))
-  (let ((loop (appkit-surface-loop surface)))
-    (appkit-command--post-messages
-     loop (appkit-loop-revision loop) posts))
-  (appkit-command--start-effects
-   (appkit-surface-effect-runtime surface) effects))
+  (let ((source-runtime (appkit-surface-source-runtime surface)))
+    (when reconcile-sources-p
+      (appkit-source-runtime-reconcile
+       source-runtime
+       (if-let* ((sources
+                  (appkit-surface-type-sources
+                   (appkit-surface-type surface))))
+           (funcall sources model)
+         nil)))
+    (appkit-command--revoke-effects
+     (appkit-surface-effect-runtime surface) effects 'appkit-surface)
+    (unless (eq request appkit-render-none)
+      (let ((result
+             (with-current-buffer (appkit-surface-buffer surface)
+               (appkit-surface--render-request
+                surface app-read-view model request))))
+        (appkit-resource-commit-render-result surface result)))
+    (let ((loop (appkit-surface-loop surface)))
+      (appkit-command--post-messages
+       loop (appkit-loop-revision loop) posts))
+    (appkit-command--start-effects
+     (appkit-surface-effect-runtime surface) effects)
+    (appkit-source-runtime-start-pending source-runtime)
+    (appkit-command--run-source-intents source-runtime source-intents)))
 
-(defun appkit-surface--commit-pending (surface app-read-view model)
-  "Detach and execute SURFACE's pending work against MODEL and APP-READ-VIEW."
+(defun appkit-surface--commit-pending
+    (surface app-read-view model reconcile-sources-p)
+  "Detach and execute SURFACE's pending work against committed MODEL."
   (let* ((request (appkit-surface-pending-render surface))
          (work
           (appkit-command--batch-drain
            (appkit-surface-command-batch surface)))
-         (posts (car work))
-         (effects (cdr work)))
-    ;; Detach the completed batch before any cleanup, renderer, post, or starter
-    ;; can fail.  A fault must not retain work against an unusable model.
+         (posts (appkit-command-work-posts work))
+         (effects (appkit-command-work-effects work))
+         (source-intents (appkit-command-work-source-intents work)))
+    ;; Detach before cleanup, rendering, posting, or starters can fail.
     (setf (appkit-surface-pending-render surface) appkit-render-none)
     (appkit-surface--commit-work
-     surface app-read-view model request posts effects)))
+     surface app-read-view model request posts effects source-intents
+     reconcile-sources-p)))
 
-(defun appkit-surface--after-pass (surface loop _pass)
-  "Commit SURFACE's folded work after LOOP finishes model transitions."
+(defun appkit-surface--after-pass (surface loop pass)
+  "Commit SURFACE's folded work after one accepted or companion pass."
   (appkit-surface--commit-pending
-   surface appkit-loop--pass-context (appkit-loop-model loop)))
+   surface appkit-loop--pass-context (appkit-loop-model loop)
+   (> (appkit-loop-pass-accepted pass) 0)))
 
 (defun appkit-surface--parent-fault (surface parent-fault)
   "Fence SURFACE immediately after its parent App faults."
@@ -311,6 +333,7 @@ Return the successful Renderer's closed companion result."
   (appkit-command--batch-clear (appkit-surface-command-batch surface))
   (appkit-resource-detach-surface surface)
   (appkit-cancel-handles surface)
+  (appkit-source-runtime-stop (appkit-surface-source-runtime surface))
   (appkit-effect-runtime-stop (appkit-surface-effect-runtime surface)))
 
 (defun appkit-surface--unregister (surface)
@@ -336,6 +359,9 @@ Return the successful Renderer's closed companion result."
               (when-let* ((runtime
                            (appkit-surface-effect-runtime surface)))
                 (appkit-effect-runtime-stop runtime))
+              (when-let* ((runtime
+                           (appkit-surface-source-runtime surface)))
+                (appkit-source-runtime-stop runtime))
               (when (and renderer-created-p
                          (appkit-surface-renderer surface)
                          (buffer-live-p buffer))
@@ -364,7 +390,7 @@ Return the successful Renderer's closed companion result."
     (type &key app identity input buffer buffer-name select
           (command-limit appkit-command-default-per-next-limit)
           (folded-command-limit appkit-command-default-folded-limit)
-          (max-active-effects 32))
+          (max-active-effects 32) (max-sources 32))
   "Create and mount one generated Surface of TYPE.
 
 APP and IDENTITY attach the new Surface to one canonical App and must be
@@ -377,6 +403,10 @@ MAX-ACTIVE-EFFECTS bound deferred work."
   (appkit-loop--assert-main-thread)
   (cl-check-type type appkit-surface-type)
   (appkit-command--check-limit "Per-next command limit" command-limit)
+  (unless (or (null (appkit-surface-type-sources type))
+              (functionp (appkit-surface-type-sources type)))
+    (signal 'wrong-type-argument
+            (list 'functionp (appkit-surface-type-sources type))))
   (when (not (eq (not (null app)) (not (null identity))))
     (error "Surface App and identity must be supplied together"))
   (when (and app (not (appkit-app-live-p app)))
@@ -405,7 +435,9 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                    :buffer host
                    :loop nil
                    :effect-runtime nil
-                   :command-batch (appkit-command--batch-create folded-command-limit)
+                   :source-runtime nil
+                   :command-batch
+                   (appkit-command--batch-create folded-command-limit)
                    :command-limit command-limit
                    :renderer nil
                    :handles nil
@@ -431,7 +463,9 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                       (appkit-surface--on-fault surface current fault)))))
               (setf (appkit-surface-loop surface) loop
                     (appkit-surface-effect-runtime surface)
-                    (appkit-effect-runtime-create loop max-active-effects)))
+                    (appkit-effect-runtime-create loop max-active-effects)
+                    (appkit-surface-source-runtime surface)
+                    (appkit-source-runtime-create loop max-sources)))
             (setq-local appkit--current-surface surface)
             (add-hook 'kill-buffer-hook #'appkit-surface--host-detach nil t)
             (add-hook 'change-major-mode-hook
@@ -463,7 +497,7 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                surface app-read-view model)
               (setf (appkit-surface-renderer-valid-p surface) t)
               (appkit-surface--commit-pending
-               surface app-read-view model)
+               surface app-read-view model t)
               (unless (and (appkit-surface-alive-p surface)
                            (eq appkit--current-surface surface)
                            (eq (appkit-loop-status
@@ -514,6 +548,8 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                   (appkit-cancel-handles surface)
                   (appkit-effect-runtime-stop
                    (appkit-surface-effect-runtime surface))
+                  (appkit-source-runtime-stop
+                   (appkit-surface-source-runtime surface))
                   (when (and (buffer-live-p buffer)
                              (appkit-surface-renderer surface))
                     (with-current-buffer buffer

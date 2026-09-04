@@ -19,6 +19,7 @@
 (require 'appkit-effect)
 (require 'appkit-cleanup)
 (require 'appkit-routing)
+(require 'appkit-source)
 
 (defconst appkit-render-none 'appkit-render-none
   "Explicit disposition requesting no presentation work.")
@@ -103,11 +104,36 @@ to attach a return route when TARGET is an address."
    :delivery delivery
    :reply-correlation reply-correlation))
 
+(cl-defstruct (appkit-command-source-intent
+               (:include appkit-command)
+               (:constructor appkit-command-source-intent--create)
+               (:copier nil))
+  "Send owned PAYLOAD through one matching declarative Source."
+  key expected-identity payload result-mapper)
+
+(cl-defun appkit-command-source-intent
+    (&key key expected-identity payload result-mapper)
+  "Create one bounded outbound Source intent command."
+  (unless key (error "Source intent key must be non-nil"))
+  (unless expected-identity
+    (error "Source intent expected identity must be non-nil"))
+  (unless (and (symbolp result-mapper) (functionp result-mapper))
+    (error "Source intent result mapper must be a function symbol"))
+  (appkit-command-source-intent--create
+   :key key :expected-identity expected-identity
+   :payload payload :result-mapper result-mapper))
+
+(cl-defstruct (appkit-command-work
+               (:constructor appkit-command--work-create)
+               (:copier nil))
+  posts effects source-intents)
+
 (cl-defstruct (appkit-command--batch
                (:constructor appkit-command--batch-create-internal)
                (:copier nil))
   reverse-effects
   reverse-posts
+  reverse-source-intents
   effect-deltas
   folded-limit)
 
@@ -152,6 +178,9 @@ oversized lists fail without an unbounded scan."
         (cond
          ((appkit-command-post-message-p command)
           (push command (appkit-command--batch-reverse-posts batch)))
+         ((appkit-command-source-intent-p command)
+          (push command
+                (appkit-command--batch-reverse-source-intents batch)))
          ((or (appkit-command-start-effect-p command)
               (appkit-command-cancel-effect-p command))
           (let ((key (appkit-command--effect-key command)))
@@ -174,22 +203,24 @@ oversized lists fail without an unbounded scan."
 (defun appkit-command--batch-clear (batch)
   "Discard all deferred commands retained by BATCH."
   (setf (appkit-command--batch-reverse-effects batch) nil
-        (appkit-command--batch-reverse-posts batch) nil)
+        (appkit-command--batch-reverse-posts batch) nil
+        (appkit-command--batch-reverse-source-intents batch) nil)
   (clrhash (appkit-command--batch-effect-deltas batch)))
 
 (defun appkit-command--batch-drain (batch)
-  "Return BATCH's posts and final Effect commands, then clear BATCH.
-
-The result is a cons whose car is the FIFO post list and whose cdr is the
-explicitly ordered final Effect list."
+  "Return BATCH's closed post-commit work, then clear BATCH."
   (let ((deltas (appkit-command--batch-effect-deltas batch))
         (posts (nreverse (appkit-command--batch-reverse-posts batch)))
+        (source-intents
+         (nreverse (appkit-command--batch-reverse-source-intents batch)))
         effects)
     (dolist (entry (nreverse (appkit-command--batch-reverse-effects batch)))
       (when (eq entry (gethash (car entry) deltas))
         (push (cdr entry) effects)))
     (appkit-command--batch-clear batch)
-    (cons posts (nreverse effects))))
+    (appkit-command--work-create
+     :posts posts :effects (nreverse effects)
+     :source-intents source-intents)))
 
 (defun appkit-command--revoke-effects (runtime commands warning-type)
   "Revoke final Effect COMMANDS from RUNTIME, reporting as WARNING-TYPE."
@@ -221,6 +252,16 @@ explicitly ordered final Effect list."
     (when (appkit-command-start-effect-p command)
       (appkit-effect-runtime-start
        runtime (appkit-command-start-effect-effect command)))))
+
+(defun appkit-command--run-source-intents (runtime commands)
+  "Execute committed Source intent COMMANDS through RUNTIME in FIFO order."
+  (dolist (command commands)
+    (appkit-source-runtime-execute-intent
+     runtime
+     (appkit-command-source-intent-key command)
+     (appkit-command-source-intent-expected-identity command)
+     (appkit-command-source-intent-payload command)
+     (appkit-command-source-intent-result-mapper command))))
 
 (provide 'appkit-command)
 

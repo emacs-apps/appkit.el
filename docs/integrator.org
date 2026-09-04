@@ -361,6 +361,28 @@ cancellation.  Each Effect runtime coalesces ready instances behind one
 control wake, so synchronous completion cannot consume one control slot per
 active Effect.
 
+An App or Surface type may provide a pure ~sources(model)~ callback returning a
+bounded desired set of ~appkit-source-spec~ values.  Source keys are unique;
+an unchanged key and identity retains the current long-lived producer, while
+an identity change revokes it before admitting a successor.  Terminal
+instances remain tombstones until their identity changes or the key is absent
+from one desired set.  Use ~lossless~, ~latest~, or ~coalesce-by-key~ emission
+policy with the required positive pending bound.  Event and close callbacks
+only enter the runtime gate; their mappers execute in later passes.
+
+Bidirectional Sources expose transport sends only through
+~appkit-command-source-intent~.  The command names the expected Source identity,
+owned payload, and a function-symbol result mapper.  Outcomes are
+~accepted~, ~backpressured~, ~closed~, or ~stale~ and always map in a later
+pass.  A ~quiescent-transport~ Source delays replacement until its concrete
+cancellation capability reports physical quiescence.
+
+Projection rows may return bounded ~appkit-resource-demand~ values.  The
+standard projection renderer commits their interests only after successful
+buffer mutation.  Resource completion passes through the App coordinator and
+exact Surface incarnation, then redraws only retained dependency rows without
+calling the projector or advancing a domain revision.
+
 The host buffer is persistent ownership; windows are temporary viewports.
 Major mode setup precedes attachment.  Killing the exact buffer or changing
 its major mode synchronously stops the Surface.  Renaming, burying, hiding all
@@ -377,10 +399,9 @@ Renderers read the measured canonical-window width through
 when the measurement changes; a no-argument text-scale hook always notifies so
 clients can retire pixel caches and rebuild images for the new face metrics.
 
-Source, topic publish, terminal reset, existing-Surface policies, resource
-companions, and editable/hybrid Surface control are later protocol layers.
-Do not reproduce them with direct callbacks or restore the removed App/View
-control plane.
+Topic publish, terminal reset, existing-Surface policies, and editable/hybrid
+Surface control are later protocol layers.  Do not reproduce them with direct
+callbacks or restore the removed App/View control plane.
 
 * Source-preserving display markers
 

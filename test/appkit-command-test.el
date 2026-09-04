@@ -32,11 +32,36 @@
     (appkit-command--batch-add batch (list first-a start-b) 2)
     (appkit-command--batch-add batch (list cancel-a) 2)
     (let ((work (appkit-command--batch-drain batch)))
-      (should-not (car work))
-      (should (equal (cdr work) (list start-b cancel-a))))
+      (should-not (appkit-command-work-posts work))
+      (should
+       (equal (appkit-command-work-effects work)
+              (list start-b cancel-a)))
+      (should-not (appkit-command-work-source-intents work)))
     (let ((work (appkit-command--batch-drain batch)))
-      (should-not (car work))
-      (should-not (cdr work)))))
+      (should-not (appkit-command-work-posts work))
+      (should-not (appkit-command-work-effects work))
+      (should-not (appkit-command-work-source-intents work)))))
+
+(ert-deftest appkit-command-source-intents-preserve-fifo ()
+  (let* ((batch (appkit-command--batch-create 2))
+         (first
+          (appkit-command-source-intent
+           :key 'stream :expected-identity 'one :payload 'first
+           :result-mapper #'ignore))
+         (second
+          (appkit-command-source-intent
+           :key 'stream :expected-identity 'one :payload 'second
+           :result-mapper #'ignore)))
+    (appkit-command--batch-add batch (list first second) 2)
+    (let ((work (appkit-command--batch-drain batch)))
+      (should
+       (equal (appkit-command-work-source-intents work)
+              (list first second)))))
+  (should-error
+   (appkit-command-source-intent
+    :key 'stream :expected-identity 'one :payload nil
+    :result-mapper (lambda (&rest _arguments)))
+   :type 'error))
 
 
 (ert-deftest appkit-command-enforces-folded-key-boundary ()
