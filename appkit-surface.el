@@ -22,6 +22,7 @@
 (require 'appkit-app)
 (require 'appkit-core)
 (require 'appkit-geometry)
+(require 'appkit-resource)
 (require 'appkit-context)
 
 (cl-defstruct (appkit-surface-type
@@ -40,7 +41,8 @@
   merge
   render
   recover
-  unmount)
+  unmount
+  resource-request)
 
 (cl-defstruct (appkit-surface
                (:constructor appkit-surface--create)
@@ -183,28 +185,42 @@
                                     surface result))))))
 
 (defun appkit-surface--update (surface model message)
-  "Dispatch MESSAGE and run SURFACE's client update against MODEL."
-  (let ((context
-         (appkit-context--for-loop
-          (appkit-surface-loop surface)
-          (appkit-surface--parent-address surface)
-          (appkit-surface--app-read-view surface))))
-    (appkit-effect-runtime-dispatch
-     (appkit-surface-effect-runtime surface)
-     (lambda (current input)
-       (appkit-surface--client-update surface context current input))
-     model message)))
+  "Dispatch MESSAGE and run SURFACE's client or companion update."
+  (if (appkit-resource--surface-delivery-p message)
+      (progn
+        ;; Companion rendering still consumes one pass-scoped App read view.
+        (appkit-surface--app-read-view surface)
+        (if-let* ((request
+                   (appkit-resource-consume-surface-delivery surface message)))
+            (progn
+              (appkit-surface--merge-render surface request)
+              (appkit-loop-companion-accept))
+          (appkit-loop-reject 'stale-resource-output)))
+    (let ((context
+           (appkit-context--for-loop
+            (appkit-surface-loop surface)
+            (appkit-surface--parent-address surface)
+            (appkit-surface--app-read-view surface))))
+      (appkit-effect-runtime-dispatch
+       (appkit-surface-effect-runtime surface)
+       (lambda (current input)
+         (appkit-surface--client-update surface context current input))
+       model message))))
 
 (defun appkit-surface--render-request
     (surface app-read-view model request)
-  "Render REQUEST from MODEL and APP-READ-VIEW, recovering once on error."
+  "Render REQUEST from MODEL and APP-READ-VIEW, recovering once on error.
+
+Return the successful Renderer's closed companion result."
   (let ((renderer (appkit-surface-renderer surface))
+        render-result
         render-condition)
     (unless (appkit-surface--owns-host-p surface)
       (error "Surface host is unavailable before render"))
     (condition-case condition
-        (funcall (appkit-generated-renderer-render renderer)
-                 surface app-read-view model request)
+        (setq render-result
+              (funcall (appkit-generated-renderer-render renderer)
+                       surface app-read-view model request))
       (appkit-runtime-contract-error
        (signal (car condition) (cdr condition)))
       ((error quit)
@@ -222,8 +238,9 @@
           (signal (car render-condition) (cdr render-condition)))
         (condition-case recovery-condition
             (progn
-              (funcall recover
-                       surface app-read-view model render-condition)
+              (setq render-result
+                    (funcall recover
+                             surface app-read-view model render-condition))
               (unless (appkit-surface--owns-host-p surface)
                 (error "Surface host detached during render recovery"))
               (setf (appkit-surface-renderer-valid-p surface) t))
@@ -232,7 +249,10 @@
           ((error quit)
            (error "Surface render failed (%s); recovery failed (%s)"
                   (error-message-string render-condition)
-                  (error-message-string recovery-condition))))))))
+                  (error-message-string recovery-condition))))))
+    (when (and render-result (not (appkit-render-result-p render-result)))
+      (error "Renderer returned invalid companion result: %S" render-result))
+    render-result))
 
 (defun appkit-surface--commit-work
     (surface app-read-view model request posts effects)
@@ -240,9 +260,11 @@
   (appkit-command--revoke-effects
    (appkit-surface-effect-runtime surface) effects 'appkit-surface)
   (unless (eq request appkit-render-none)
-    (with-current-buffer (appkit-surface-buffer surface)
-      (appkit-surface--render-request
-       surface app-read-view model request)))
+    (let ((result
+           (with-current-buffer (appkit-surface-buffer surface)
+             (appkit-surface--render-request
+              surface app-read-view model request))))
+      (appkit-resource-commit-render-result surface result)))
   (let ((loop (appkit-surface-loop surface)))
     (appkit-command--post-messages
      loop (appkit-loop-revision loop) posts))
@@ -287,6 +309,7 @@
   (setf (appkit-surface-ready-p surface) nil
         (appkit-surface-pending-render surface) appkit-render-none)
   (appkit-command--batch-clear (appkit-surface-command-batch surface))
+  (appkit-resource-detach-surface surface)
   (appkit-cancel-handles surface)
   (appkit-effect-runtime-stop (appkit-surface-effect-runtime surface)))
 
@@ -487,6 +510,7 @@ MAX-ACTIVE-EFFECTS bound deferred work."
           (unwind-protect
               (progn
                 (appkit--run-cleanup-forms conditions
+                  (appkit-resource-detach-surface surface)
                   (appkit-cancel-handles surface)
                   (appkit-effect-runtime-stop
                    (appkit-surface-effect-runtime surface))

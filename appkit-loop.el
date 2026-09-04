@@ -35,6 +35,11 @@
   "A normal domain rejection carrying REASON."
   reason)
 
+(cl-defstruct (appkit-loop-companion
+               (:constructor appkit-loop-companion-accept ())
+               (:copier nil))
+  "Accepted companion work that commits no domain model revision.")
+
 (cl-defstruct (appkit-loop-ticket
                (:constructor appkit-loop--ticket-create)
                (:copier nil))
@@ -54,7 +59,8 @@
   source-address
   source-revision
   reply-route
-  ticket)
+  ticket
+  control-p)
 
 (cl-defstruct (appkit-loop-fault
                (:constructor appkit-loop--fault-create)
@@ -67,9 +73,10 @@
 (cl-defstruct (appkit-loop-pass
                (:constructor appkit-loop--pass-create)
                (:copier nil))
-  "Committed transition statistics for one completed input pass."
+  "Committed work statistics for one completed input pass."
   processed
   accepted
+  companions
   start-revision
   end-revision)
 
@@ -270,7 +277,7 @@ MESSAGE-LIMIT is the hard maximum processed across both lanes by one pass."
 
 (defun appkit-loop--make-envelope-cell
     (loop payload ticket incarnation reply-route
-          origin source-address source-revision)
+          origin source-address source-revision control-p)
   "Allocate one queued envelope cell and its LOOP sequence."
   (let* ((sequence (appkit-loop--next-sequence loop))
          (envelope
@@ -282,7 +289,8 @@ MESSAGE-LIMIT is the hard maximum processed across both lanes by one pass."
            :source-address source-address
            :source-revision source-revision
            :reply-route reply-route
-           :ticket ticket)))
+           :ticket ticket
+           :control-p control-p)))
     (setf (appkit-loop--next-sequence loop) (1+ sequence))
     (when ticket
       (setf (appkit-loop-ticket-sequence ticket) sequence))
@@ -301,7 +309,7 @@ MESSAGE-LIMIT is the hard maximum processed across both lanes by one pass."
        (appkit-loop--make-envelope-cell
         loop payload ticket
         (or incarnation (appkit-loop--incarnation loop))
-        reply-route origin source-address source-revision))
+        reply-route origin source-address source-revision nil))
       (appkit-loop--schedule loop)
       'enqueued)))
 
@@ -316,7 +324,7 @@ MESSAGE-LIMIT is the hard maximum processed across both lanes by one pass."
        lane
        (appkit-loop--make-envelope-cell
         loop payload nil incarnation reply-route
-        origin source-address source-revision))
+        origin source-address source-revision t))
       (appkit-loop--schedule loop)
       'enqueued)))
 
@@ -440,6 +448,19 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
        (condition
         (appkit-loop--enter-fault loop condition envelope))
        ((not (eq (appkit-loop--status loop) 'running)) nil)
+       ((appkit-loop-companion-p result)
+        (cond
+         ((not (appkit-loop-envelope-control-p envelope))
+          (appkit-loop--enter-fault
+           loop
+           '(error "Companion work requires an internal control envelope")
+           envelope))
+         ((appkit-loop-envelope-ticket envelope)
+          (appkit-loop--enter-fault
+           loop
+           '(error "Companion work cannot settle a domain send ticket")
+           envelope))
+         (t 'companion)))
        ((appkit-loop-accepted-p result)
         (let ((revision (1+ (appkit-loop--revision loop)))
               (ticket (appkit-loop-envelope-ticket envelope)))
@@ -518,6 +539,7 @@ Return the total number of envelopes removed."
                    (limit (appkit-loop--message-limit loop))
                    (start-revision (appkit-loop--revision loop))
                    (accepted 0)
+                   (companions 0)
                    (lane control-lane)
                    (cutoff control-cutoff)
                    (phase 0)
@@ -533,17 +555,20 @@ Return the total number of envelopes removed."
                          (appkit-loop--apply-transition loop envelope)))
                     (setq processed (1+ processed))
                     (when (eq outcome 'accepted)
-                      (setq accepted (1+ accepted)))))
+                      (setq accepted (1+ accepted)))
+                    (when (eq outcome 'companion)
+                      (setq companions (1+ companions)))))
                 (setq phase (1+ phase)
                       lane data-lane
                       cutoff data-cutoff))
-              (when (and (> accepted 0)
+              (when (and (> (+ accepted companions) 0)
                          (eq (appkit-loop--status loop) 'running))
                 (appkit-loop--finish-pass
                  loop
                  (appkit-loop--pass-create
                   :processed processed
                   :accepted accepted
+                  :companions companions
                   :start-revision start-revision
                   :end-revision (appkit-loop--revision loop)))))))
       (appkit-loop--schedule loop))

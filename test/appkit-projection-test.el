@@ -1,4 +1,4 @@
-;;; appkit-projection-test.el --- Tests for read-only projections -*- lexical-binding: t; -*-
+;;; appkit-projection-test.el --- Renderer projection tests -*- lexical-binding: t; -*-
 
 ;;; Code:
 
@@ -22,45 +22,17 @@
     (key payload &optional context dependencies)
   "Create one test row from KEY, PAYLOAD, CONTEXT, and DEPENDENCIES."
   (appkit-projection-row-create
-   :key key
-   :payload payload
-   :context context
-   :dependencies dependencies))
+   :key key :payload payload :context context :dependencies dependencies))
 
-(ert-deftest appkit-projection-diff-derives-common-invalidation-work ()
-  (let ((invalidations (appkit-invalidations-create))
-        (avatar '(:avatar "u"))
-        (theme '(:theme dark)))
-    (setf (appkit-invalidations-parts invalidations) '(frame geometry metadata)
-          (appkit-invalidations-entry-keys invalidations) '(b)
-          (appkit-invalidations-resource-keys invalidations)
-          (list 'all avatar))
-    (let ((diff
-           (appkit-projection-diff-derive
-            invalidations
-            :existing-keys '(a b c)
-            :reconcile-parts '(metadata)
-            :force-keys '(d)
-            :changed-dependencies (list theme 'all))))
-      (should (appkit-projection-diff-reconcile-p diff))
-      (should (equal (sort (copy-sequence
-                            (appkit-projection-diff-force-keys diff))
-                           (lambda (left right)
-                             (string< (symbol-name left)
-                                      (symbol-name right))))
-                     '(a b c d)))
-      (should (= 2 (length
-                    (appkit-projection-diff-changed-dependencies diff))))
-      (should (member avatar
-                      (appkit-projection-diff-changed-dependencies diff)))
-      (should (member theme
-                      (appkit-projection-diff-changed-dependencies diff))))
-    (let ((frame-only (appkit-invalidations-create)))
-      (setf (appkit-invalidations-parts frame-only) '(frame))
-      (let ((diff (appkit-projection-diff-derive frame-only)))
-        (should-not (appkit-projection-diff-reconcile-p diff))
-        (should-not (appkit-projection-diff-force-keys diff))
-        (should-not (appkit-projection-diff-changed-dependencies diff))))))
+(cl-defun appkit-projection-test--create
+    (surface prints &key header footer no-separator-p)
+  "Create a Renderer projection for SURFACE recording into PRINTS."
+  (appkit-with-content-update surface
+    (erase-buffer)
+    (appkit-projection-create
+     (appkit-projection-test--printer prints)
+     'test-projection-key
+     :header header :footer footer :no-separator-p no-separator-p)))
 
 (ert-deftest appkit-projection-projects-context-and-dependencies ()
   (let ((rows
@@ -69,11 +41,9 @@
           #'car
           :context-function
           (lambda (previous current)
-            (list :previous (car-safe previous)
-                  :current (car current)))
+            (list :previous (car-safe previous) :current (car current)))
           :dependencies-function
-          (lambda (entry)
-            (list (list :source (cdr entry)))))))
+          (lambda (entry) (list (list :source (cdr entry)))))))
     (should (equal '(a b) (mapcar #'appkit-projection-row-key rows)))
     (should (equal '(:previous a :current b)
                    (appkit-projection-row-context (cadr rows))))
@@ -81,148 +51,103 @@
                    (appkit-projection-row-dependencies (cadr rows))))))
 
 (ert-deftest appkit-projection-sync-is-keyed-and-context-sensitive ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
-          (prints (make-hash-table :test #'equal)))
-      (appkit-projection-ensure
-       view
-       :printer (appkit-projection-test--printer prints)
-       :anchor-property 'test-projection-key)
+  (appkit-test-with-surface
+    (let* ((surface (appkit-current-surface))
+           (prints (make-hash-table :test #'equal))
+           (projection (appkit-projection-test--create surface prints)))
       (appkit-projection-sync
-       view
+       surface projection
        (list (appkit-projection-test--row 'a "A")
              (appkit-projection-test--row 'b "B")))
-      (let ((a-node (appkit-projection-node view 'a))
-            (b-node (appkit-projection-node view 'b)))
+      (let ((a-node (appkit-projection-node projection 'a))
+            (b-node (appkit-projection-node projection 'b)))
         (appkit-projection-sync
-         view
+         surface projection
          (list (appkit-projection-test--row 'a "A")
                (appkit-projection-test--row 'b "B" '(:layout compact))))
-        (should (eq a-node (appkit-projection-node view 'a)))
-        (should (eq b-node (appkit-projection-node view 'b)))
+        (should (eq a-node (appkit-projection-node projection 'a)))
+        (should (eq b-node (appkit-projection-node projection 'b)))
         (should (= 1 (gethash 'a prints)))
         (should (= 2 (gethash 'b prints)))
-        (should (equal '(a b) (appkit-projection-keys view)))))))
+        (should (equal '(a b) (appkit-projection-keys projection)))))))
 
 (ert-deftest appkit-projection-redraws-changed-dependency-rows ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
-          (prints (make-hash-table :test #'equal))
-          (resource '(:image "avatar")))
-      (appkit-projection-ensure
-       view
-       :printer (appkit-projection-test--printer prints)
-       :anchor-property 'test-projection-key)
-      (let ((rows
-             (list
-              (appkit-projection-test--row 'a "A")
-              (appkit-projection-test--row 'b "B" nil (list resource)))))
-        (appkit-projection-sync view rows)
-        (let ((a-node (appkit-projection-node view 'a))
-              (b-node (appkit-projection-node view 'b)))
-          (appkit-projection-sync
-           view rows :changed-dependencies (list resource))
-          (should (eq a-node (appkit-projection-node view 'a)))
-          (should (eq b-node (appkit-projection-node view 'b)))
-          (should (= 1 (gethash 'a prints)))
-          (should (= 2 (gethash 'b prints)))
-          (should (equal '(b)
-                         (appkit-projection-dependent-keys
-                          view (list resource)))))))))
+  (appkit-test-with-surface
+    (let* ((surface (appkit-current-surface))
+           (prints (make-hash-table :test #'equal))
+           (resource '(:image "avatar"))
+           (projection (appkit-projection-test--create surface prints))
+           (rows
+            (list (appkit-projection-test--row 'a "A")
+                  (appkit-projection-test--row 'b "B" nil (list resource)))))
+      (appkit-projection-sync surface projection rows)
+      (let ((a-node (appkit-projection-node projection 'a))
+            (b-node (appkit-projection-node projection 'b)))
+        (appkit-projection-sync
+         surface projection rows :changed-dependencies (list resource))
+        (should (eq a-node (appkit-projection-node projection 'a)))
+        (should (eq b-node (appkit-projection-node projection 'b)))
+        (should (= 1 (gethash 'a prints)))
+        (should (= 2 (gethash 'b prints)))
+        (should (equal '(b)
+                       (appkit-projection-dependent-keys
+                        projection (list resource))))))))
 
 (ert-deftest appkit-projection-updates-frame-and-moves-to-first-row ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
-          (prints (make-hash-table :test #'equal)))
-      (appkit-projection-ensure
-       view
-       :printer (appkit-projection-test--printer prints)
-       :anchor-property 'test-projection-key
-       :header "Loading\n")
-      (goto-char (point-min))
+  (appkit-test-with-surface
+    (let* ((surface (appkit-current-surface))
+           (prints (make-hash-table :test #'equal))
+           (projection
+            (appkit-projection-test--create
+             surface prints :header "Loading\n" :no-separator-p t)))
       (appkit-projection-sync
-       view
-       (list (appkit-projection-test--row 'a "A"))
-       :header "Ready\n"
-       :position 'first)
+       surface projection (list (appkit-projection-test--row 'a "A"))
+       :header "Ready\n" :position 'first)
       (should (eq 'a (get-text-property (point) 'test-projection-key)))
       (should (string-prefix-p "Ready\n" (buffer-string)))
-      (let ((invalidations (appkit-invalidations-create)))
-        (setf (appkit-invalidations-parts invalidations) '(frame))
-        (cl-letf (((symbol-function 'appkit-projection-keys)
-                   (lambda (_view)
-                     (ert-fail "Frame-only sync inspected existing keys"))))
-          (appkit-projection-sync-invalidations
-              view invalidations (error "Frame-only sync evaluated rows")
-            :header "Settled\n")))
+      (appkit-projection-sync
+       surface projection nil :header "Settled\n" :reconcile-p nil)
       (should (= 1 (gethash 'a prints)))
-      (should (equal '(a) (appkit-projection-keys view)))
+      (should (equal '(a) (appkit-projection-keys projection)))
       (should (string-prefix-p "Settled\n" (buffer-string))))))
 
-(ert-deftest appkit-projection-no-separator-preserves-printer-layout ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
-          (prints (make-hash-table :test #'equal)))
-      (appkit-projection-ensure
-       view
-       :printer (appkit-projection-test--printer prints)
-       :anchor-property 'test-projection-key
-       :no-separator-p t)
-      (appkit-projection-sync
-       view (list (appkit-projection-test--row 'a "A")))
-      (should (equal "a:A:plain\n" (buffer-string)))
-      (should-error
-       (appkit-projection-ensure view :no-separator-p nil)))))
-
 (ert-deftest appkit-projection-invalid-printer-keeps-buffer-content ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
-          (inhibit-read-only t))
+  (appkit-test-with-surface
+    (let ((inhibit-read-only t))
       (insert "retained")
-      (should-error (appkit-projection-ensure view))
+      (should-error (appkit-projection-create nil 'test-projection-key))
       (should (equal "retained" (buffer-string))))))
 
 (ert-deftest appkit-projection-preserves-each-window-position ()
   (save-window-excursion
-    (appkit-test-with-view
+    (appkit-test-with-surface
       (delete-other-windows)
-      (let* ((view (appkit-current-view))
+      (let* ((surface (appkit-current-surface))
              (buffer (current-buffer))
              (prints (make-hash-table :test #'equal))
+             (projection (appkit-projection-test--create surface prints))
              (first-window (selected-window))
              (second-window (split-window first-window nil 'right)))
         (set-window-buffer first-window buffer)
         (set-window-buffer second-window buffer)
-        (appkit-projection-ensure
-         view
-         :printer (appkit-projection-test--printer prints)
-         :anchor-property 'test-projection-key)
         (appkit-projection-sync
-         view
-         (list (appkit-projection-test--row 'a "A")
-               (appkit-projection-test--row 'b "B")
-               (appkit-projection-test--row 'c "C")
-               (appkit-projection-test--row 'd "D")))
-        (let ((b-position
-               (appkit-position-find-property-value
-                (point-min) (point-max) 'test-projection-key 'b))
-              (c-position
-               (appkit-position-find-property-value
-                (point-min) (point-max) 'test-projection-key 'c))
-              (d-position
-               (appkit-position-find-property-value
-                (point-min) (point-max) 'test-projection-key 'd)))
+         surface projection
+         (mapcar (lambda (key) (appkit-projection-test--row key key))
+                 '(a b c d)))
+        (let ((b-position (appkit-position-find-property-value
+                           (point-min) (point-max) 'test-projection-key 'b))
+              (c-position (appkit-position-find-property-value
+                           (point-min) (point-max) 'test-projection-key 'c))
+              (d-position (appkit-position-find-property-value
+                           (point-min) (point-max) 'test-projection-key 'd)))
           (goto-char c-position)
           (set-window-start first-window b-position 'noforce)
           (set-window-point second-window d-position)
           (set-window-start second-window c-position 'noforce))
         (appkit-projection-sync
-         view
-         (list (appkit-projection-test--row 'prefix "New")
-               (appkit-projection-test--row 'a "A")
-               (appkit-projection-test--row 'b "B")
-               (appkit-projection-test--row 'c "C")
-               (appkit-projection-test--row 'd "D")))
+         surface projection
+         (mapcar (lambda (key) (appkit-projection-test--row key key))
+                 '(prefix a b c d)))
         (should (eq 'c (get-text-property
                         (window-point first-window) 'test-projection-key)))
         (should (eq 'b (get-text-property
@@ -233,17 +158,65 @@
                         (window-start second-window) 'test-projection-key)))))))
 
 (ert-deftest appkit-projection-rejects-duplicate-row-keys ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
-          (prints (make-hash-table :test #'equal)))
-      (appkit-projection-ensure
-       view
-       :printer (appkit-projection-test--printer prints))
+  (appkit-test-with-surface
+    (let* ((surface (appkit-current-surface))
+           (prints (make-hash-table :test #'equal))
+           (projection (appkit-projection-test--create surface prints)))
       (should-error
        (appkit-projection-sync
-        view
+        surface projection
         (list (appkit-projection-test--row 'same "A")
               (appkit-projection-test--row 'same "B")))))))
+
+(ert-deftest appkit-projection-change-merge-preserves-non-source-work ()
+  (let ((merged
+         (appkit-projection-change-merge
+          (appkit-projection-change-create
+           :keys '(a) :resources '(avatar)
+           :position 'first)
+          (appkit-projection-change-create
+           :full-p t :keys '(b) :resources '(cover)
+           :frame-p t :position 'preserve))))
+    (should (appkit-projection-change-full-p merged))
+    (should-not (appkit-projection-change-keys merged))
+    (should (equal '(avatar cover)
+                   (appkit-projection-change-resources merged)))
+    (should (appkit-projection-change-frame-p merged))
+    (should (eq 'first (appkit-projection-change-position merged)))))
+
+(ert-deftest appkit-projection-renderer-resource-redraw-skips-project-all ()
+  (appkit-test-with-surface
+    (let ((surface (appkit-current-surface))
+          (projects 0)
+          (prints 0)
+          renderer)
+      (setq renderer
+            (appkit-projection-renderer-create
+             :project-all
+             (lambda (_surface _app-read-view model)
+               (setq projects (1+ projects))
+               (list
+                (appkit-projection-row-create
+                 :key 'row :payload model :dependencies '(avatar))))
+             :printer
+             (lambda (_surface _app-read-view row)
+               (setq prints (1+ prints))
+               (insert (format "%s\n" (appkit-projection-row-payload row))))
+             :anchor-property 'test-projection-key
+             :no-separator-p t))
+      (funcall (appkit-generated-renderer-mount renderer)
+               surface 'read-view 'initial)
+      (funcall (appkit-generated-renderer-render renderer)
+               surface 'read-view 'initial
+               (appkit-projection-change-create :full-p t))
+      (should (= 1 projects))
+      (should (= 1 prints))
+      (funcall (appkit-generated-renderer-render renderer)
+               surface 'read-view 'initial
+               (appkit-projection-change-create :resources '(avatar)))
+      (should (= 1 projects))
+      (should (= 2 prints))
+      (funcall (appkit-generated-renderer-unmount renderer) surface))))
 
 (provide 'appkit-projection-test)
 

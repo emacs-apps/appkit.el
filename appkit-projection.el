@@ -9,11 +9,11 @@
 
 ;;; Commentary:
 
-;; Protocol-independent projection mechanics shared by generated views.
+;; Protocol-independent projection mechanics embedded by Generated Renderers.
 ;; Clients own source state, query semantics, and row rendering.  Appkit owns
-;; stable-key reconciliation and presentation dependency indexing.  The
-;; direct read-only view adapter additionally owns frame updates and semantic
-;; point and viewport preservation.
+;; stable-key reconciliation, presentation dependency indexing, frame updates,
+;; and semantic position preservation.  Projection state is presentation
+;; cache: discarding and rebuilding it cannot change a domain decision.
 
 ;;; Code:
 
@@ -21,10 +21,11 @@
 (require 'ewoc)
 (require 'subr-x)
 (require 'appkit-core)
-(require 'appkit-invalidation)
 (require 'appkit-ewoc)
 (require 'appkit-position)
 (require 'appkit-transaction)
+(require 'appkit-surface)
+(require 'appkit-resource)
 
 (cl-defstruct (appkit-projection-row
                (:constructor appkit-projection-row-create))
@@ -32,77 +33,37 @@
   key
   payload
   context
-  dependencies)
+  dependencies
+  resource-demands)
 
 (cl-defstruct (appkit-projection--engine
                (:constructor appkit-projection--engine-create))
-  "Stable-key projection state embedded by one presentation surface."
+  "Stable-key presentation cache embedded by one Generated Renderer."
   ewoc
   node-table
   row-table
   keys
   dependency-index
   anchor-property
-  printer)
-
-(cl-defstruct (appkit-projection--view-state
-               (:constructor appkit-projection--view-state-create))
-  "Direct read-only projection state owned by one Appkit view."
-  projection
+  printer
   header
   footer
   no-separator-p)
 
-(cl-defstruct (appkit-projection-diff
-               (:constructor appkit-projection-diff--create))
-  "Projection work derived from one invalidation snapshot."
-  reconcile-p
-  force-keys
-  changed-dependencies)
 
-(cl-defun appkit-projection-diff-derive
-    (invalidations &key existing-keys reconcile-parts reconcile
-                   force-keys changed-dependencies)
-  "Derive projection work from INVALIDATIONS.
 
-EXISTING-KEYS names rows available for whole-projection redraw.  RECONCILE-PARTS
-names client-defined parts that affect row structure.  RECONCILE, FORCE-KEYS,
-and CHANGED-DEPENDENCIES add domain-specific work to the common derivation.
+(cl-defstruct (appkit-projection-change
+               (:constructor appkit-projection-change-create)
+               (:copier nil))
+  "One mergeable request for a standard Projection Renderer."
+  full-p
+  keys
+  resources
+  frame-p
+  geometry-p
+  rekeys
+  position)
 
-Structure, entry, geometry, and resource invalidations require reconciliation.
-Entry keys are forced directly.  Geometry or the resource key `all' forces
-every existing row.  `all' is never returned as a changed dependency."
-  (unless (appkit-invalidations-p invalidations)
-    (signal 'wrong-type-argument
-            (list 'appkit-invalidations-p invalidations)))
-  (let* ((parts (appkit-invalidations-parts invalidations))
-         (entries (appkit-invalidations-entry-keys invalidations))
-         (resources
-          (delete-dups
-           (append (copy-sequence
-                    (appkit-invalidations-resource-keys invalidations))
-                   (copy-sequence changed-dependencies))))
-         (geometry-p (memq 'geometry parts))
-         (all-resources-p (memq 'all resources))
-         (changed
-          (delete-dups (delq 'all (copy-sequence resources))))
-         (forced
-          (delete-dups
-           (delq nil
-                 (append (copy-sequence entries)
-                         (copy-sequence force-keys)
-                         (and (or geometry-p all-resources-p)
-                              (copy-sequence existing-keys))))))
-         (reconcile-p
-          (or reconcile
-              forced
-              changed-dependencies
-              (appkit-invalidations-affect-p
-               invalidations reconcile-parts))))
-    (appkit-projection-diff--create
-     :reconcile-p (and reconcile-p t)
-     :force-keys forced
-     :changed-dependencies changed)))
 
 (defun appkit-projection--print-row (projection row)
   "Render projected ROW through PROJECTION's client printer."
@@ -111,89 +72,35 @@ every existing row.  `all' is never returned as a changed dependency."
       (error "Appkit projection has no row printer"))
     (funcall printer row)))
 
-(cl-defun appkit-projection--create
+(cl-defun appkit-projection-create
     (printer anchor-property &key header footer no-separator-p)
-  "Create an empty projection at point using PRINTER and ANCHOR-PROPERTY.
+  "Create an empty Renderer projection at point.
 
-HEADER and FOOTER seed the projection's EWOC frame.  NO-SEPARATOR-P is passed
-to `ewoc-create'.  The caller owns the surrounding buffer mutation transaction."
+PRINTER renders one `appkit-projection-row'.  ANCHOR-PROPERTY carries stable
+row identity in generated text.  HEADER and FOOTER seed the EWOC frame.
+NO-SEPARATOR-P is passed to `ewoc-create'.  The caller must be executing inside
+its Generated Renderer mutation boundary."
   (unless (functionp printer)
     (error "Appkit projection requires a row printer"))
-  (let ((projection
-         (appkit-projection--engine-create
-          :node-table (make-hash-table :test #'equal)
-          :row-table (make-hash-table :test #'equal)
-          :keys nil
-          :dependency-index (make-hash-table :test #'equal)
-          :anchor-property anchor-property
-          :printer printer)))
+  (let* ((header (or header ""))
+         (footer (or footer ""))
+         (projection
+          (appkit-projection--engine-create
+           :node-table (make-hash-table :test #'equal)
+           :row-table (make-hash-table :test #'equal)
+           :keys nil
+           :dependency-index (make-hash-table :test #'equal)
+           :anchor-property anchor-property
+           :printer printer
+           :header header
+           :footer footer
+           :no-separator-p (and no-separator-p t))))
     (setf (appkit-projection--engine-ewoc projection)
           (ewoc-create
            (apply-partially #'appkit-projection--print-row projection)
-           (or header "") (or footer "") no-separator-p))
+           header footer no-separator-p))
     projection))
 
-(defun appkit-projection-view-p (view)
-  "Return non-nil when VIEW owns a direct read-only projection."
-  (and (appkit-view-live-p view)
-       (appkit-projection--view-state-p (appkit-view-engine view))))
-
-(defun appkit-projection--view-state (view)
-  "Return VIEW's initialized direct projection state."
-  (let ((state (appkit-view-engine view)))
-    (unless (appkit-projection--view-state-p state)
-      (error "Appkit view has no direct read-only projection"))
-    state))
-
-(defun appkit-projection--view-engine (view)
-  "Return the projection engine installed directly in VIEW."
-  (appkit-projection--view-state-projection
-   (appkit-projection--view-state view)))
-
-(cl-defun appkit-projection-ensure
-    (view &key printer anchor-property header footer
-          (no-separator-p nil no-separator-p-supplied-p))
-  "Ensure VIEW owns one direct read-only projection.
-
-PRINTER renders one `appkit-projection-row'.  ANCHOR-PROPERTY carries stable
-row identity in generated text.  HEADER and FOOTER are the initial EWOC frame.
-NO-SEPARATOR-P suppresses EWOC's automatic newlines between rendered regions."
-  (unless (appkit-view-live-p view)
-    (error "Cannot initialize a dead Appkit view projection"))
-  (unless (memq no-separator-p '(nil t))
-    (error "Appkit projection no-separator flag must be boolean"))
-  (let ((current (appkit-view-engine view)))
-    (if (appkit-projection--view-state-p current)
-        (let ((projection
-               (appkit-projection--view-state-projection current)))
-          (when (and no-separator-p-supplied-p
-                     (not (eq no-separator-p
-                              (appkit-projection--view-state-no-separator-p
-                               current))))
-            (error "Cannot change an initialized Appkit projection separator"))
-          (when printer
-            (setf (appkit-projection--engine-printer projection) printer))
-          (when anchor-property
-            (setf (appkit-projection--engine-anchor-property projection)
-                  anchor-property)))
-      (when current
-        (error "Appkit view already owns another projection engine"))
-      (unless (functionp printer)
-        (error "Appkit projection requires a row printer"))
-      (let ((state
-             (appkit-projection--view-state-create
-              :header (or header "")
-              :footer (or footer "")
-              :no-separator-p no-separator-p)))
-        (appkit-with-content-update view
-          (erase-buffer)
-          (setf (appkit-projection--view-state-projection state)
-                (appkit-projection--create
-                 printer anchor-property
-                 :header header :footer footer
-                 :no-separator-p no-separator-p)))
-        (setf (appkit-view-engine view) state))))
-  (appkit-projection--engine-ewoc (appkit-projection--view-engine view)))
 
 (cl-defun appkit-projection-project
     (entries key-function &key context-function dependencies-function
@@ -288,22 +195,21 @@ ROW-FUNCTION constructs each row from `:key', `:payload', `:context', and
      (appkit-projection--engine-node-table projection)
      key)))
 
-(defun appkit-projection-dependent-keys (view dependencies)
-  "Return VIEW row keys affected by presentation DEPENDENCIES."
-  (appkit-projection--dependent-keys
-   (appkit-projection--view-engine view) dependencies))
+(defun appkit-projection-dependent-keys (projection dependencies)
+  "Return PROJECTION row keys affected by presentation DEPENDENCIES."
+  (appkit-projection--dependent-keys projection dependencies))
 
-(defun appkit-projection-keys (view)
-  "Return the ordered projected row keys in VIEW."
-  (appkit-projection--keys (appkit-projection--view-engine view)))
+(defun appkit-projection-keys (projection)
+  "Return the ordered projected row keys in PROJECTION."
+  (appkit-projection--keys projection))
 
-(defun appkit-projection-row (view key)
-  "Return VIEW's projected row identified by KEY."
-  (appkit-projection--row (appkit-projection--view-engine view) key))
+(defun appkit-projection-row (projection key)
+  "Return PROJECTION's row identified by KEY."
+  (appkit-projection--row projection key))
 
-(defun appkit-projection-node (view key)
-  "Return VIEW's EWOC node identified by KEY."
-  (appkit-projection--node (appkit-projection--view-engine view) key))
+(defun appkit-projection-node (projection key)
+  "Return PROJECTION's EWOC node identified by KEY."
+  (appkit-projection--node projection key))
 
 (defun appkit-projection--validate-rekeys (projection row-table rekeys)
   "Validate REKEYS against PROJECTION and projected ROW-TABLE."
@@ -402,105 +308,274 @@ keys to projected replacement keys while preserving EWOC node identity."
                    (point-min) (point-max) property key)))
        (goto-char target)))))
 
-(defun appkit-projection--set-frame (state header footer)
-  "Update direct projection STATE's frame to HEADER and FOOTER when changed."
+(defun appkit-projection--set-frame (projection header footer)
+  "Update PROJECTION's frame to HEADER and FOOTER when changed."
   (let ((new-header (or header ""))
         (new-footer (or footer "")))
     (unless (and (equal new-header
-                        (appkit-projection--view-state-header state))
+                        (appkit-projection--engine-header projection))
                  (equal new-footer
-                        (appkit-projection--view-state-footer state)))
-      (setf (appkit-projection--view-state-header state) new-header
-            (appkit-projection--view-state-footer state) new-footer)
+                        (appkit-projection--engine-footer projection)))
+      (setf (appkit-projection--engine-header projection) new-header
+            (appkit-projection--engine-footer projection) new-footer)
       (ewoc-set-hf
-       (appkit-projection--engine-ewoc
-        (appkit-projection--view-state-projection state))
+       (appkit-projection--engine-ewoc projection)
        new-header new-footer))))
 
 (cl-defun appkit-projection-sync
-    (view rows &key header footer force-keys changed-dependencies
-          (position 'preserve) (reconcile-p t))
-  "Synchronize VIEW with projected ROWS.
+    (surface projection rows
+             &key header footer force-keys changed-dependencies rekeys
+             (position 'preserve) (reconcile-p t))
+  "Synchronize Renderer PROJECTION in SURFACE with projected ROWS.
 
 HEADER and FOOTER update the generated frame.  FORCE-KEYS redraws retained
 rows.  CHANGED-DEPENDENCIES redraws rows that named any changed presentation
-dependency before or after this synchronization.  POSITION is `preserve',
-`first', a stable row key, or an `appkit-position-snapshot'.  When RECONCILE-P
-is nil, update only the frame and position without inspecting ROWS."
-  (let* ((state (appkit-projection--view-state view))
-         (projection (appkit-projection--view-state-projection state))
-         (snapshot
-          (with-current-buffer (appkit-view-buffer view)
-            (appkit-projection--capture-position projection position))))
-    (appkit-with-content-update view
-      (appkit-projection--set-frame state header footer)
+dependency before or after this synchronization.  REKEYS promotes old stable
+keys to replacements.  POSITION is `preserve', `first', a stable row key, or
+an `appkit-position-snapshot'.  When RECONCILE-P is nil, update only the frame
+and position without inspecting ROWS."
+  (unless (appkit-projection--engine-p projection)
+    (signal 'wrong-type-argument
+            (list 'appkit-projection--engine-p projection)))
+  (unless (and (appkit-surface--owns-host-p surface)
+               (eq (current-buffer) (appkit-surface-buffer surface))
+               (eq surface (appkit-current-surface)))
+    (error "Projection synchronization requires its exact Surface host"))
+  (let ((snapshot
+         (appkit-projection--capture-position projection position)))
+    (appkit-with-content-update surface
+      (appkit-projection--set-frame projection header footer)
       (when reconcile-p
         (appkit-projection--reconcile
          projection rows
          :force-keys force-keys
-         :changed-dependencies changed-dependencies))
+         :changed-dependencies changed-dependencies
+         :rekeys rekeys))
       (appkit-projection--restore-position projection position snapshot))
     (appkit-projection--keys projection)))
 
-(cl-defun appkit-projection-sync-diff
-    (view rows diff &key header footer (position 'preserve))
-  "Synchronize VIEW with ROWS according to projection DIFF.
 
-HEADER, FOOTER, and POSITION follow `appkit-projection-sync'.  ROWS is inspected
-only when DIFF requires reconciliation."
-  (unless (appkit-projection-diff-p diff)
-    (signal 'wrong-type-argument (list 'appkit-projection-diff-p diff)))
-  (appkit-projection-sync
-   view rows
-   :header header
-   :footer footer
-   :force-keys (appkit-projection-diff-force-keys diff)
-   :changed-dependencies
-   (appkit-projection-diff-changed-dependencies diff)
-   :position position
-   :reconcile-p (appkit-projection-diff-reconcile-p diff)))
 
-(cl-defmacro appkit-projection-sync-invalidations
-    (view invalidations rows
-          &key reconcile-parts reconcile force-keys changed-dependencies
-          header footer (position ''preserve))
-  "Synchronize VIEW from INVALIDATIONS and lazily projected ROWS.
+(defun appkit-projection--merge-position (left right)
+  "Merge projection position intents LEFT and RIGHT."
+  (if (or (null right) (eq right 'preserve)) left right))
 
-ROWS is evaluated only when the derived diff requires reconciliation.
-RECONCILE-PARTS, RECONCILE, FORCE-KEYS, and CHANGED-DEPENDENCIES extend common
-diff derivation.  HEADER, FOOTER, and POSITION control the projection frame."
-  (declare (indent 3) (debug t))
-  (let ((view-value (make-symbol "view"))
-        (invalidations-value (make-symbol "invalidations"))
-        (changed-dependencies-value (make-symbol "changed-dependencies"))
-        (parts (make-symbol "parts"))
-        (resources (make-symbol "resources"))
-        (diff (make-symbol "diff")))
-    `(let* ((,view-value ,view)
-            (,invalidations-value ,invalidations)
-            (,changed-dependencies-value ,changed-dependencies)
-            (,parts (appkit-invalidations-parts ,invalidations-value))
-            (,resources
-             (appkit-invalidations-resource-keys ,invalidations-value))
-            (,diff
-             (appkit-projection-diff-derive
-              ,invalidations-value
-              :existing-keys
-              (and (or (memq 'geometry ,parts)
-                       (memq 'all ,resources)
-                       (memq 'all ,changed-dependencies-value))
-                   (appkit-projection-keys ,view-value))
-              :reconcile-parts ,reconcile-parts
-              :reconcile ,reconcile
-              :force-keys ,force-keys
-              :changed-dependencies ,changed-dependencies-value)))
-       (appkit-projection-sync-diff
-        ,view-value
-        (and (appkit-projection-diff-reconcile-p ,diff) ,rows)
-        ,diff
-        :header ,header
-        :footer ,footer
-        :position ,position))))
+(defun appkit-projection-change-merge (left right)
+  "Merge Projection Renderer changes LEFT and RIGHT in FIFO order."
+  (unless (appkit-projection-change-p left)
+    (signal 'wrong-type-argument (list 'appkit-projection-change-p left)))
+  (unless (appkit-projection-change-p right)
+    (signal 'wrong-type-argument (list 'appkit-projection-change-p right)))
+  (let ((full-p (or (appkit-projection-change-full-p left)
+                    (appkit-projection-change-full-p right))))
+    (appkit-projection-change-create
+     :full-p full-p
+     :keys
+     (unless full-p
+       (delete-dups
+        (append (copy-sequence (appkit-projection-change-keys left))
+                (copy-sequence (appkit-projection-change-keys right)))))
+     :resources
+     (delete-dups
+      (append (copy-sequence (appkit-projection-change-resources left))
+              (copy-sequence (appkit-projection-change-resources right))))
+     :frame-p (or (appkit-projection-change-frame-p left)
+                  (appkit-projection-change-frame-p right))
+     :geometry-p (or (appkit-projection-change-geometry-p left)
+                     (appkit-projection-change-geometry-p right))
+     :rekeys
+     (append (copy-tree (appkit-projection-change-rekeys left))
+             (copy-tree (appkit-projection-change-rekeys right)))
+     :position
+     (appkit-projection--merge-position
+      (appkit-projection-change-position left)
+      (appkit-projection-change-position right)))))
+
+(defun appkit-projection--frame-value
+    (project-frame surface app-read-view model)
+  "Return validated frame pair from PROJECT-FRAME."
+  (if (null project-frame)
+      (cons "" "")
+    (let ((frame (funcall project-frame surface app-read-view model)))
+      (unless (and (consp frame)
+                   (stringp (car frame))
+                   (stringp (cdr frame)))
+        (error "Projection frame projector returned invalid frame: %S" frame))
+      frame)))
+
+(defun appkit-projection--render-plan
+    (projection change geometry-mode)
+  "Return `(RECONCILE-P FORCE-KEYS POSITION)' for CHANGE."
+  (let* ((full-p
+          (or (appkit-projection-change-full-p change)
+              (appkit-projection-change-keys change)
+              (appkit-projection-change-rekeys change)
+              (and (appkit-projection-change-geometry-p change)
+                   (eq geometry-mode 'reproject))))
+         (redraw-keys
+          (delete-dups
+           (append
+            (copy-sequence
+             (appkit-projection-change-resources change))
+            (and (appkit-projection-change-geometry-p change)
+                 (eq geometry-mode 'redraw)
+                 (appkit-projection-keys projection))))))
+    (list full-p redraw-keys
+          (or (appkit-projection-change-position change) 'preserve))))
+
+(defun appkit-projection--resource-result (rows)
+  "Return a replacing Resource companion result discovered from ROWS."
+  (let ((demands (make-hash-table :test #'equal))
+        (interests (make-hash-table :test #'equal))
+        demand-order)
+    (dolist (row rows)
+      (dolist (demand (appkit-projection-row-resource-demands row))
+        (unless (appkit-resource-demand-p demand)
+          (error "Projection row contains invalid resource demand: %S" demand))
+        (let* ((key (appkit-resource-demand-key demand))
+               (existing (gethash key demands)))
+          (when (and existing (not (equal existing demand)))
+            (error "Projection rows disagree on resource demand %S" key))
+          (unless existing
+            (puthash key demand demands)
+            (push key demand-order))
+          (puthash key
+                   (cons (appkit-projection-row-key row)
+                         (delete (appkit-projection-row-key row)
+                                 (gethash key interests)))
+                   interests))))
+    (appkit-render-result-create
+     :resource-demands
+     (mapcar (lambda (key) (gethash key demands))
+             (nreverse demand-order))
+     :resource-interest-update
+     (appkit-resource-interest-update-create
+      :mode 'replace
+      :entries
+      (let (entries)
+        (maphash
+         (lambda (key row-keys)
+           (push
+            (appkit-resource-interest-create
+             :key key :row-keys (nreverse row-keys))
+            entries))
+         interests)
+        (nreverse entries))))))
+
+(cl-defun appkit-projection-renderer-create
+    (&key project-all project-frame printer anchor-property
+          (geometry-mode 'redraw) no-separator-p)
+  "Create a standard Generated Renderer backed by a keyed projection.
+
+PROJECT-ALL receives Surface, pass-scoped App read view, and committed Surface
+model, and returns every projected row.  PROJECT-FRAME receives the same
+arguments and returns `(HEADER . FOOTER)'.  PRINTER receives Surface,
+pass-scoped App read view, and one row.  GEOMETRY-MODE is `redraw' or
+`reproject'.  Projection state remains Renderer-owned presentation cache."
+  (dolist (callback (list project-all printer))
+    (unless (functionp callback)
+      (signal 'wrong-type-argument (list 'functionp callback))))
+  (unless (or (null project-frame) (functionp project-frame))
+    (signal 'wrong-type-argument (list 'functionp project-frame)))
+  (unless (memq geometry-mode '(redraw reproject))
+    (error "Unsupported projection geometry mode: %S" geometry-mode))
+  (let (projection render-surface render-app-read-view)
+    (cl-labels
+        ((create-cache
+          ()
+          (setq projection
+                (appkit-projection-create
+                 (lambda (row)
+                   (unless (and (appkit-surface--owns-host-p render-surface)
+                                render-app-read-view)
+                     (error "Projection printer escaped its render pass"))
+                   (funcall printer render-surface render-app-read-view row))
+                 anchor-property
+                 :no-separator-p no-separator-p)))
+         (render-change
+          (surface app-read-view model change force-full-p)
+          (unless (appkit-projection-change-p change)
+            (error "Projection Renderer received invalid request: %S" change))
+          (setq render-surface surface
+                render-app-read-view app-read-view)
+          (unwind-protect
+              (let* ((effective
+                      (if force-full-p
+                          (appkit-projection-change-create
+                           :full-p t
+                           :resources
+                           (appkit-projection-change-resources change)
+                           :frame-p t
+                           :position
+                           (appkit-projection-change-position change))
+                        change))
+                     (plan
+                      (appkit-projection--render-plan
+                       projection effective geometry-mode))
+                     (reconcile-p (nth 0 plan))
+                     (resource-keys (nth 1 plan))
+                     (position (nth 2 plan))
+                     (frame
+                      (if (or force-full-p
+                              (appkit-projection-change-frame-p effective))
+                          (appkit-projection--frame-value
+                           project-frame surface app-read-view model)
+                        (cons (appkit-projection--engine-header projection)
+                              (appkit-projection--engine-footer projection))))
+                     (rows
+                      (and reconcile-p
+                           (funcall project-all surface app-read-view model))))
+                (appkit-projection-sync
+                 surface projection rows
+                 :header (car frame)
+                 :footer (cdr frame)
+                 :force-keys
+                 (and reconcile-p
+                      (appkit-projection-change-keys effective))
+                 :changed-dependencies resource-keys
+                 :rekeys
+                 (and reconcile-p
+                      (appkit-projection-change-rekeys effective))
+                 :position position
+                 :reconcile-p reconcile-p)
+                (unless reconcile-p
+                  (appkit-with-content-update surface
+                    (appkit-projection--invalidate
+                     projection
+                     (appkit-projection-dependent-keys
+                      projection resource-keys))))
+                (if reconcile-p
+                    (appkit-projection--resource-result rows)
+                  nil))
+            (setq render-surface nil
+                  render-app-read-view nil))))
+      (appkit-generated-renderer-create
+       :mount
+       (lambda (_surface _app-read-view _model)
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (create-cache)))
+       :merge #'appkit-projection-change-merge
+       :resource-request
+       (lambda (keys)
+         (appkit-projection-change-create :resources keys))
+       :render
+       (lambda (surface app-read-view model change)
+         (render-change surface app-read-view model change nil))
+       :recover
+       (lambda (surface app-read-view model _condition)
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (create-cache))
+         (render-change
+          surface app-read-view model
+          (appkit-projection-change-create :full-p t :frame-p t)
+          t))
+       :unmount
+       (lambda (_surface)
+         (setq projection nil
+               render-surface nil
+               render-app-read-view nil))))))
 
 (provide 'appkit-projection)
 

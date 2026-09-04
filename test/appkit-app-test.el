@@ -87,7 +87,8 @@
                      :merge (lambda (left right) (list left right))
                      :render
                      (lambda (_surface view _model _request)
-                       (setq render-view view))
+                       (setq render-view view)
+                       nil)
                      :recover (lambda (&rest _arguments))
                      :unmount (lambda (_surface)))))
                  :app app :identity 'primary))

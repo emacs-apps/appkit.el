@@ -130,7 +130,7 @@
         (appkit-chatbuf-with-generated-update
           (erase-buffer)
           (setq projection
-                (appkit-projection--create
+                (appkit-projection-create
                  printer anchor-property
                  :header header :footer footer :no-separator-p t)))
         (setq-local

@@ -695,7 +695,8 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
           :merge (lambda (_left right) right)
           :render
           (lambda (rendered &rest _arguments)
-            (funcall attempt 'render rendered))
+            (funcall attempt 'render rendered)
+            nil)
           :recover (lambda (&rest _arguments))
           :unmount (lambda (&rest _arguments)))))
       :input 'ready)

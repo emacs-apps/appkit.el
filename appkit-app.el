@@ -20,6 +20,7 @@
 (require 'appkit-core)
 (require 'appkit-command)
 (require 'appkit-context)
+(require 'appkit-resource)
 
 (declare-function appkit-surface-stop "appkit-surface")
 (declare-function appkit-surface--parent-fault "appkit-surface")
@@ -34,8 +35,8 @@
 
 (cl-defstruct
     (appkit-app (:constructor appkit-app--create) (:copier nil))
-  identity type loop effect-runtime command-batch command-limit
-  surfaces handles surface-limit alive-p)
+  identity type loop effect-runtime resource-coordinator command-batch
+  command-limit surfaces handles surface-limit alive-p)
 
 (defun appkit-app-live-p (app)
   "Return non-nil when APP can accept domain work."
@@ -114,12 +115,16 @@
 
 (defun appkit-app--update (app model message)
   "Dispatch MESSAGE and run APP's client update against MODEL."
-  (let ((context (appkit-context--for-loop (appkit-app-loop app))))
-    (appkit-effect-runtime-dispatch
-     (appkit-app-effect-runtime app)
-     (lambda (current input)
-       (appkit-app--client-update app context current input))
-     model message)))
+  (if (appkit-resource--coordinator-delivery-p message)
+      (if (appkit-resource-consume-coordinator-delivery app message)
+          (appkit-loop-companion-accept)
+        (appkit-loop-reject 'stale-resource-output))
+    (let ((context (appkit-context--for-loop (appkit-app-loop app))))
+      (appkit-effect-runtime-dispatch
+       (appkit-app-effect-runtime app)
+       (lambda (current input)
+         (appkit-app--client-update app context current input))
+       model message))))
 
 (defun appkit-app--commit-pending (app)
   "Execute APP's folded post-commit work after its model commit."
@@ -147,6 +152,8 @@
   (let (conditions)
     (appkit--run-cleanup-forms conditions
       (appkit-effect-runtime-stop (appkit-app-effect-runtime app))
+      (appkit-resource-coordinator-stop
+       (appkit-app-resource-coordinator app))
       (appkit--run-cleanup-items (appkit-app--surface-snapshot app)
                                  (lambda (surface)
                                    (appkit-surface--parent-fault
@@ -198,6 +205,9 @@
                   (when (appkit-app-effect-runtime app)
                     (appkit-effect-runtime-stop
                      (appkit-app-effect-runtime app)))
+                  (when (appkit-app-resource-coordinator app)
+                    (appkit-resource-coordinator-stop
+                     (appkit-app-resource-coordinator app)))
                   (when-let* ((shutdown
                                (appkit-app-type-shutdown
                                 (appkit-app-type app))))
@@ -248,6 +258,7 @@ bounds owned by this App incarnation."
                  :loop loop
                  :effect-runtime
                  (appkit-effect-runtime-create loop max-active-effects)
+                 :resource-coordinator nil
                  :command-batch
                  (appkit-command--batch-create folded-command-limit)
                  :command-limit command-limit
@@ -255,6 +266,8 @@ bounds owned by this App incarnation."
                  :surfaces (make-hash-table :test #'equal)
                  :surface-limit surface-limit
                  :alive-p nil))
+          (setf (appkit-app-resource-coordinator app)
+                (appkit-resource-coordinator-create app))
           (let* ((context (appkit-context--for-loop loop))
                  (initial
                   (appkit-app--validate-next
@@ -300,6 +313,8 @@ bounds owned by this App incarnation."
                   (appkit-cancel-handles app)
                   (appkit-effect-runtime-stop
                    (appkit-app-effect-runtime app))
+                  (appkit-resource-coordinator-stop
+                   (appkit-app-resource-coordinator app))
                   (when-let*
                       ((shutdown
                         (appkit-app-type-shutdown

@@ -672,6 +672,42 @@
                'stopped)))
       (appkit-loop-stop loop))))
 
+(ert-deftest appkit-loop-companion-work-runs-after-pass-without-revision ()
+  (let (passes)
+    (appkit-loop-test--with-loop
+        (loop
+         :model 'domain
+         :update
+         (lambda (_model message)
+           (if (eq message 'companion)
+               (appkit-loop-companion-accept)
+             (appkit-loop-reject 'unexpected)))
+         :after-pass
+         (lambda (_loop pass) (push pass passes)))
+      (should
+       (eq 'enqueued
+           (appkit-loop--post-control-addressed
+            loop 'companion (appkit-loop-incarnation loop))))
+      (should (= 1 (appkit-loop-run-pass loop)))
+      (should (eq 'domain (appkit-loop-model loop)))
+      (should (= 0 (appkit-loop-revision loop)))
+      (should (= 1 (length passes)))
+      (should (= 0 (appkit-loop-pass-accepted (car passes))))
+      (should (= 1 (appkit-loop-pass-companions (car passes)))))))
+
+
+(ert-deftest appkit-loop-rejects-companion-result-from-client-lane ()
+  (appkit-loop-test--with-loop
+      (loop
+       :model 'domain
+       :update
+       (lambda (_model _message)
+         (appkit-loop-companion-accept)))
+    (should (eq 'enqueued (appkit-loop-post loop 'client-message)))
+    (should (= 1 (appkit-loop-run-pass loop)))
+    (should (eq 'faulted (appkit-loop-status loop)))
+    (should (eq 'domain (appkit-loop-model loop)))
+    (should (= 0 (appkit-loop-revision loop)))))
 (provide 'appkit-loop-test)
 
 ;;; appkit-loop-test.el ends here
