@@ -31,20 +31,10 @@
   update
   shutdown)
 
-(cl-defstruct (appkit-app
-               (:constructor appkit-app--create)
-               (:copier nil))
-  identity
-  type
-  loop
-  effect-runtime
-  fault-stop-handle
-  command-batch
-  command-limit
-  surfaces
-  handles
-  surface-limit
-  alive-p)
+(cl-defstruct
+    (appkit-app (:constructor appkit-app--create) (:copier nil))
+  identity type loop effect-runtime command-batch command-limit
+  surfaces handles surface-limit alive-p)
 
 (defun appkit-app-live-p (app)
   "Return non-nil when APP can accept domain work."
@@ -90,7 +80,9 @@
    (appkit-app-command-batch app)
    (appkit-next-commands next)
    (appkit-app-command-limit app))
-  (appkit-next-model next))(defun appkit-app--client-update (app context model message)
+  (appkit-next-model next))
+
+(defun appkit-app--client-update (app context model message)
   "Run APP's client update in CONTEXT against MODEL and MESSAGE."
   (let
       ((result
@@ -101,7 +93,6 @@
       (appkit-loop-accept
        (appkit-app--stage-next app
                                (appkit-app--validate-next app result))))))
-
 
 (defun appkit-app--update (app model message)
   "Dispatch MESSAGE and run APP's client update against MODEL."
@@ -131,27 +122,20 @@
   "Commit APP's folded work after one accepted pass."
   (appkit-app--commit-pending app))
 
-(defun appkit-app--stop-faulted (app)
-  "Finish stopping faulted APP after its active pass unwinds."
-  (setf (appkit-app-fault-stop-handle app) nil)
-  (when (eq (appkit-app-status app) 'faulted)
-    (condition-case condition
-        (appkit-app-close app)
-      ((error quit)
-       (display-warning
-        'appkit-app
-        (format "Faulted App cleanup failed: %s"
-                (error-message-string condition))
-        :warning)))))
-
-(defun appkit-app--on-fault (app _loop _fault)
-  "Revoke APP authority and schedule owned cleanup after its loop faults."
+(defun appkit-app--on-fault (app _loop fault)
+  "Revoke APP and every child Surface when its loop faults."
   (setf (appkit-app-alive-p app) nil)
   (appkit-command--batch-clear (appkit-app-command-batch app))
-  (unwind-protect
+  (let (conditions)
+    (appkit--run-cleanup-forms conditions
       (appkit-effect-runtime-stop (appkit-app-effect-runtime app))
-    (setf (appkit-app-fault-stop-handle app)
-          (run-at-time 0 nil #'appkit-app--stop-faulted app))))
+      (appkit--run-cleanup-items (appkit-app--surface-snapshot app)
+                                 (lambda (surface)
+                                   (appkit-surface--parent-fault
+                                    surface fault))
+                                 (lambda (condition)
+                                   (push condition conditions))))
+    (appkit--warn-cleanup-conditions (nreverse conditions) 'appkit-app)))
 
 (defun appkit-app--register-surface (app identity type surface)
   "Register SURFACE under exact IDENTITY and TYPE in APP."
@@ -250,7 +234,6 @@ bounds owned by this App incarnation."
                  (appkit-command--batch-create folded-command-limit)
                  :command-limit command-limit
                  :handles nil
-                 :fault-stop-handle nil
                  :surfaces (make-hash-table :test #'equal)
                  :surface-limit surface-limit
                  :alive-p nil))
@@ -288,10 +271,6 @@ bounds owned by this App incarnation."
     (let ((loop (appkit-app-loop app)))
       (when (appkit-loop--begin-stop loop)
         (setf (appkit-app-alive-p app) nil)
-        (when-let* ((timer (appkit-app-fault-stop-handle app)))
-          (setf (appkit-app-fault-stop-handle app) nil)
-          (when (timerp timer)
-            (cancel-timer timer)))
         (let (conditions)
           (unwind-protect
               (progn
@@ -304,14 +283,15 @@ bounds owned by this App incarnation."
                     (appkit-cancel-handles app))
                   (appkit-effect-runtime-stop
                    (appkit-app-effect-runtime app))
-                  (when-let* ((shutdown
-                               (appkit-app-type-shutdown
-                                (appkit-app-type app))))
+                  (when-let*
+                      ((shutdown
+                        (appkit-app-type-shutdown
+                         (appkit-app-type app))))
                     (funcall shutdown app))
                   (clrhash (appkit-app-surfaces app)))
                 (setq conditions (nreverse conditions))
-                (appkit--warn-cleanup-conditions
-                 (cdr conditions) 'appkit-app)
+                (appkit--warn-cleanup-conditions (cdr conditions)
+                                                 'appkit-app)
                 (when-let* ((condition (car conditions)))
                   (signal (car condition) (cdr condition)))
                 t)

@@ -47,7 +47,11 @@
   loop
   instances
   max-active
-  alive-p)
+  alive-p
+  ready
+  reverse-ready
+  ready-count
+  wake-pending-p)
 
 (cl-defstruct (appkit-effect-instance
                (:constructor appkit-effect--instance-create)
@@ -87,9 +91,7 @@
 (cl-defstruct (appkit-effect-delivery
                (:constructor appkit-effect--delivery-create)
                (:copier nil))
-  runtime
-  key
-  token)
+  runtime)
 
 (defconst appkit-effect-stale
   (make-symbol "appkit-effect-stale")
@@ -174,7 +176,9 @@ positive OBSERVATION-PENDING-LIMIT.  CANCELLATION-REQUIREMENT is `logical' or
 
 MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
   (appkit-effect--assert-main-thread)
-  (unless (and (appkit-loop-p loop) (eq (appkit-loop-status loop) 'running))
+  (unless
+      (and (appkit-loop-p loop)
+           (eq (appkit-loop-status loop) 'running))
     (error "Cannot attach an Effect runtime to a non-running loop"))
   (let ((limit (or max-active 32)))
     (unless (appkit-effect--positive-integer-p limit)
@@ -183,7 +187,11 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
      :loop loop
      :instances (make-hash-table :test #'equal)
      :max-active limit
-     :alive-p t)))
+     :alive-p t
+     :ready nil
+     :reverse-ready nil
+     :ready-count 0
+     :wake-pending-p nil)))
 
 (defun appkit-effect--current-p (instance)
   "Return non-nil when INSTANCE retains keyed delivery authority."
@@ -207,7 +215,6 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
     (setf (appkit-effect--instance-next-sequence instance) (1+ sequence))
     sequence))
 
-
 (defun appkit-effect--invoke-cancellation (instance)
   "Invoke and clear INSTANCE's concrete cancellation capability."
   (when-let* ((capability (appkit-effect--instance-cancellation instance)))
@@ -225,6 +232,72 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
         (appkit-effect--instance-settlement instance) nil
         (appkit-effect--instance-wake-pending-p instance) nil))
 
+(defun appkit-effect--remove-ready (instance)
+  "Remove INSTANCE from its runtime's ready queue."
+  (when (appkit-effect--instance-wake-pending-p instance)
+    (let ((runtime (appkit-effect--instance-runtime instance)))
+      (setf (appkit-effect--runtime-ready runtime)
+            (delq instance (appkit-effect--runtime-ready runtime))
+            (appkit-effect--runtime-reverse-ready runtime)
+            (delq instance
+                  (appkit-effect--runtime-reverse-ready runtime))
+            (appkit-effect--runtime-ready-count runtime)
+            (1- (appkit-effect--runtime-ready-count runtime))
+            (appkit-effect--instance-wake-pending-p instance) nil))))
+
+(defun appkit-effect--pop-ready (runtime)
+  "Pop the oldest Effect instance ready in RUNTIME."
+  (unless (appkit-effect--runtime-ready runtime)
+    (setf (appkit-effect--runtime-ready runtime)
+          (nreverse (appkit-effect--runtime-reverse-ready runtime))
+          (appkit-effect--runtime-reverse-ready runtime) nil))
+  (when-let* ((instance (car (appkit-effect--runtime-ready runtime))))
+    (setf (appkit-effect--runtime-ready runtime)
+          (cdr (appkit-effect--runtime-ready runtime))
+          (appkit-effect--runtime-ready-count runtime)
+          (1- (appkit-effect--runtime-ready-count runtime))
+          (appkit-effect--instance-wake-pending-p instance) nil)
+    instance))
+
+(defun appkit-effect--ensure-wake (runtime)
+  "Ensure RUNTIME has one coalesced control wake when work is ready."
+  (when
+      (and (appkit-effect--runtime-alive-p runtime)
+           (> (appkit-effect--runtime-ready-count runtime) 0)
+           (not (appkit-effect--runtime-wake-pending-p runtime)))
+    (let*
+        ((loop (appkit-effect--runtime-loop runtime))
+         (outcome
+          (appkit-loop--post-control-addressed loop
+                                               (appkit-effect--delivery-create
+                                                :runtime runtime)
+                                               (appkit-loop-incarnation
+                                                loop))))
+      (pcase outcome
+        ('enqueued
+         (setf (appkit-effect--runtime-wake-pending-p runtime) t))
+        ('full
+         (let
+             ((instance
+               (or (car (appkit-effect--runtime-ready runtime))
+                   (car
+                    (last
+                     (appkit-effect--runtime-reverse-ready runtime))))))
+           (unwind-protect
+               (when instance
+                 (appkit-effect--revoke-from-gate instance))
+             (appkit-loop--enter-fault loop
+                                       (list 'error
+                                             (format
+                                              "Effect control wake admission failed: full"))
+                                       nil))))
+        ((or 'faulted 'stale 'stopped)
+         (setf (appkit-effect--runtime-ready runtime) nil
+               (appkit-effect--runtime-reverse-ready runtime) nil
+               (appkit-effect--runtime-ready-count runtime) 0))
+        (_
+         (error "Unexpected Effect wake admission outcome: %S" outcome))))))
+
 (defun appkit-effect--revoke (instance &optional cancel-p)
   "Revoke INSTANCE and optionally invoke physical cancellation."
   (let* ((runtime (appkit-effect--instance-runtime instance))
@@ -232,6 +305,7 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
          (key (appkit-effect--instance-key instance)))
     (when (eq instance (gethash key instances))
       (remhash key instances))
+    (appkit-effect--remove-ready instance)
     (setf (appkit-effect--instance-state instance) 'revoked)
     (appkit-effect--clear-pending instance)
     (if cancel-p
@@ -255,36 +329,16 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
      (appkit-effect--warn-cancellation instance condition))))
 
 (defun appkit-effect--request-wake (instance)
-  "Ensure INSTANCE has one internal control delivery queued."
+  "Queue INSTANCE behind its runtime's coalesced control wake."
   (when (and (appkit-effect--current-p instance)
              (not (appkit-effect--instance-starting-p instance))
              (not (appkit-effect--instance-wake-pending-p instance)))
-    (let* ((runtime (appkit-effect--instance-runtime instance))
-           (loop (appkit-effect--runtime-loop runtime))
-           (outcome
-            (appkit-loop--post-control-addressed
-             loop
-             (appkit-effect--delivery-create
-              :runtime runtime
-              :key (appkit-effect--instance-key instance)
-              :token (appkit-effect--instance-token instance))
-             (appkit-effect--instance-incarnation instance))))
-      (pcase outcome
-        ('enqueued
-         (setf (appkit-effect--instance-wake-pending-p instance) t))
-        ('full
-         (unwind-protect
-             (appkit-effect--revoke-from-gate instance)
-           (appkit-loop--enter-fault
-            loop
-            (list 'error
-                  (format "Effect %S control wake admission failed: full"
-                          (appkit-effect--instance-key instance)))
-            nil)))
-        ((or 'faulted 'stale 'stopped)
-         (appkit-effect--revoke-from-gate instance))
-        (_
-         (error "Unexpected Effect wake admission outcome: %S" outcome))))))
+    (let ((runtime (appkit-effect--instance-runtime instance)))
+      (push instance (appkit-effect--runtime-reverse-ready runtime))
+      (setf (appkit-effect--runtime-ready-count runtime)
+            (1+ (appkit-effect--runtime-ready-count runtime))
+            (appkit-effect--instance-wake-pending-p instance) t)
+      (appkit-effect--ensure-wake runtime))))
 
 (defun appkit-effect--append-lossless-observation (instance observation)
   "Append OBSERVATION to INSTANCE's lossless staging queue."
@@ -559,44 +613,51 @@ an output gate."
   "Consume one internal DELIVERY and return one mapped domain message.
 
 Return `appkit-effect-stale' without calling a mapper when DELIVERY no longer
-names RUNTIME's current keyed instance."
+names live work in RUNTIME."
   (appkit-effect--assert-main-thread)
   (appkit-effect--runtime-check runtime)
   (unless (appkit-effect-delivery-p delivery)
     (signal 'wrong-type-argument (list 'appkit-effect-delivery-p delivery)))
-  (let* ((key (appkit-effect-delivery-key delivery))
-         (instance
-          (and (eq runtime (appkit-effect-delivery-runtime delivery))
-               (gethash key (appkit-effect--runtime-instances runtime)))))
-    (if (not (and instance
-                  (eq (appkit-effect--instance-token instance)
-                      (appkit-effect-delivery-token delivery))
-                  (appkit-effect--current-p instance)))
-        appkit-effect-stale
-      (setf (appkit-effect--instance-wake-pending-p instance) nil)
-      (let ((observation (appkit-effect--first-observation instance))
-            (settlement (appkit-effect--instance-settlement instance))
-            (spec (appkit-effect--instance-spec instance)))
-        (cond
-         (observation
-          (appkit-effect--pop-observation instance observation)
-          (when (appkit-effect--pending-p instance)
-            (appkit-effect--request-wake instance))
-          (apply (appkit-effect-spec-observe spec)
-                 (appkit-effect-spec-input spec)
-                 (appkit-effect-observation-payload observation)))
-         (settlement
-          ;; Retire authority before calling client mapping code.
-          (remhash key (appkit-effect--runtime-instances runtime))
-          (setf (appkit-effect--instance-state instance) 'terminal
-                (appkit-effect--instance-settlement instance) nil
-                (appkit-effect--instance-cancellation instance) nil)
-          (apply (if (eq (appkit-effect-settlement-kind settlement) 'success)
-                     (appkit-effect-spec-success spec)
-                   (appkit-effect-spec-failure spec))
-                 (appkit-effect-spec-input spec)
-                 (appkit-effect-settlement-payload settlement)))
-         (t appkit-effect-stale))))))
+  (if (not (eq runtime (appkit-effect-delivery-runtime delivery)))
+      appkit-effect-stale
+    (setf (appkit-effect--runtime-wake-pending-p runtime) nil)
+    (let (instance)
+      (while (and (setq instance (appkit-effect--pop-ready runtime))
+                  (not (and (appkit-effect--current-p instance)
+                            (appkit-effect--pending-p instance)))))
+      (if (null instance)
+          (progn
+            (appkit-effect--ensure-wake runtime)
+            appkit-effect-stale)
+        (let ((observation (appkit-effect--first-observation instance))
+              (settlement (appkit-effect--instance-settlement instance))
+              (spec (appkit-effect--instance-spec instance)))
+          (cond
+           (observation
+            (appkit-effect--pop-observation instance observation)
+            (when (appkit-effect--pending-p instance)
+              (appkit-effect--request-wake instance))
+            (appkit-effect--ensure-wake runtime)
+            (apply (appkit-effect-spec-observe spec)
+                   (appkit-effect-spec-input spec)
+                   (appkit-effect-observation-payload observation)))
+           (settlement
+            ;; Retire authority before calling client mapping code.
+            (remhash (appkit-effect--instance-key instance)
+                     (appkit-effect--runtime-instances runtime))
+            (setf (appkit-effect--instance-state instance) 'terminal
+                  (appkit-effect--instance-settlement instance) nil
+                  (appkit-effect--instance-cancellation instance) nil)
+            (appkit-effect--ensure-wake runtime)
+            (apply (if (eq (appkit-effect-settlement-kind settlement)
+                           'success)
+                       (appkit-effect-spec-success spec)
+                     (appkit-effect-spec-failure spec))
+                   (appkit-effect-spec-input spec)
+                   (appkit-effect-settlement-payload settlement)))
+           (t
+            (appkit-effect--ensure-wake runtime)
+            appkit-effect-stale)))))))
 
 (defun appkit-effect-runtime-dispatch
     (runtime client-update model input)
@@ -628,6 +689,10 @@ failures, warns for conditions after the first, then re-signals the first."
        instances
        (lambda (instance) (appkit-effect--revoke instance t))
        (lambda (condition) (push condition conditions)))
+      (setf (appkit-effect--runtime-ready runtime) nil
+            (appkit-effect--runtime-reverse-ready runtime) nil
+            (appkit-effect--runtime-ready-count runtime) 0
+            (appkit-effect--runtime-wake-pending-p runtime) nil)
       (setq conditions (nreverse conditions))
       (appkit--warn-cleanup-conditions (cdr conditions) 'appkit-effect)
       (when-let* ((condition (car conditions)))

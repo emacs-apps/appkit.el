@@ -690,6 +690,155 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
           ((error quit) nil)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest appkit-surface-indirect-clone-does-not-stop-base-host ()
+  (let (surface alias-one alias-two events)
+    (unwind-protect
+        (progn
+          (setq surface
+                (appkit-open-generated-surface
+                 (appkit-surface-test--type
+                  :init
+                  (lambda (_context input)
+                    (appkit-next :model input :render appkit-render-none))
+                  :update
+                  (lambda (_context model _message)
+                    (appkit-next :model model :render appkit-render-none))
+                  :renderer-factory
+                  (lambda (_surface)
+                    (appkit-surface-test--renderer
+                     (lambda (event) (push event events))))))
+                alias-one
+                (make-indirect-buffer
+                 (appkit-surface-buffer surface)
+                 (generate-new-buffer-name " *appkit-surface-alias*")
+                 t))
+          (with-current-buffer alias-one
+            (should (eq appkit--current-surface surface)))
+          (kill-buffer alias-one)
+          (setq alias-one nil)
+          (should (appkit-surface-live-p surface))
+          (should-not (member '(unmount) events))
+          (setq alias-two
+                (make-indirect-buffer
+                 (appkit-surface-buffer surface)
+                 (generate-new-buffer-name " *appkit-surface-alias*")
+                 t))
+          (with-current-buffer alias-two
+            (fundamental-mode)
+            (should-not appkit--current-surface))
+          (should (appkit-surface-live-p surface))
+          (should-not (member '(unmount) events)))
+      (when (buffer-live-p alias-one)
+        (kill-buffer alias-one))
+      (when (buffer-live-p alias-two)
+        (kill-buffer alias-two))
+      (appkit-surface-test--cleanup surface))))
+
+(ert-deftest appkit-surface-update-runs-in-exact-host-buffer ()
+  (let (seen-buffer caller)
+    (appkit-surface-test--with-surface
+        (surface
+         (appkit-surface-test--type
+          :init
+          (lambda (_context input)
+            (appkit-next :model input :render appkit-render-none))
+          :update
+          (lambda (_context model _message)
+            (setq seen-buffer (current-buffer))
+            (appkit-next :model model :render appkit-render-none))
+          :renderer-factory
+          (lambda (_surface)
+            (appkit-surface-test--renderer #'ignore))))
+      (unwind-protect
+          (progn
+            (setq caller (generate-new-buffer " *appkit-surface-caller*"))
+            (with-current-buffer caller
+              (appkit-surface-send surface 'update))
+            (should (eq seen-buffer (appkit-surface-buffer surface))))
+        (when (buffer-live-p caller)
+          (kill-buffer caller))))))
+
+(ert-deftest appkit-surface-renderer-cannot-post-from-ready-pass ()
+  (let (surface messages (recover-count 0))
+    (unwind-protect
+        (progn
+          (setq surface
+                (appkit-open-generated-surface
+                 (appkit-surface-test--type
+                  :init
+                  (lambda (_context input)
+                    (appkit-next :model input :render appkit-render-none))
+                  :update
+                  (lambda (_context model message)
+                    (push message messages)
+                    (appkit-next
+                     :model model
+                     :render (if (eq message 'render)
+                                 'frame
+                               appkit-render-none)))
+                  :renderer-factory
+                  (lambda (_surface)
+                    (appkit-generated-renderer-create
+                     :mount (lambda (&rest _arguments))
+                     :merge (lambda (_left right) right)
+                     :render
+                     (lambda (&rest _arguments)
+                       (appkit-surface-post surface 'hidden))
+                     :recover
+                     (lambda (&rest _arguments)
+                       (setq recover-count (1+ recover-count)))
+                     :unmount (lambda (&rest _arguments)))))))
+          (should-error (appkit-surface-send surface 'render)
+                        :type 'appkit-runtime-contract-error)
+          (should (eq (appkit-surface-status surface) 'faulted))
+          (should (equal messages '(render)))
+          (should (zerop recover-count))
+          (should (zerop
+                   (appkit-loop-pending-count
+                    (appkit-surface-loop surface)))))
+      (appkit-surface-test--cleanup surface))))
+
+(ert-deftest appkit-surface-effect-starter-cannot-post-from-ready-pass ()
+  (let (surface messages)
+    (unwind-protect
+        (progn
+          (setq surface
+                (appkit-open-generated-surface
+                 (appkit-surface-test--type
+                  :init
+                  (lambda (_context input)
+                    (appkit-next :model input :render appkit-render-none))
+                  :update
+                  (lambda (_context model message)
+                    (push message messages)
+                    (appkit-next
+                     :model model
+                     :render appkit-render-none
+                     :commands
+                     (and (eq message 'start)
+                          (list
+                           (appkit-command-start-effect
+                            (appkit-effect-create
+                             :key 'hidden
+                             :input nil
+                             :start
+                             (lambda (&rest _arguments)
+                               (appkit-surface-post surface 'hidden))
+                             :success (lambda (&rest _) 'done)
+                             :failure (lambda (&rest _) 'failed)))))))
+                  :renderer-factory
+                  (lambda (_surface)
+                    (appkit-surface-test--renderer #'ignore)))))
+          (should-error (appkit-surface-send surface 'start)
+                        :type 'appkit-runtime-contract-error)
+          (should (eq (appkit-surface-status surface) 'faulted))
+          (should (equal messages '(start)))
+          (should (zerop
+                   (appkit-loop-pending-count
+                    (appkit-surface-loop surface)))))
+      (appkit-surface-test--cleanup surface))))
+
 (provide 'appkit-surface-test)
 
 ;;; appkit-surface-test.el ends here

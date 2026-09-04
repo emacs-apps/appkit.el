@@ -73,7 +73,10 @@
            (lambda (model message)
              (setq seen (append seen (list message)))
              (when (eq message 'first)
-               (should (eq (appkit-loop-post loop 'later) 'enqueued)))
+               (should
+                (eq (appkit-loop--post-addressed
+                     loop 'later (appkit-loop-incarnation loop))
+                    'enqueued)))
              (appkit-loop-accept (cons message model)))))
     (unwind-protect
         (progn
@@ -165,7 +168,10 @@
                 (eq (appkit-loop--post-control-addressed
                      loop 'control-later (appkit-loop-incarnation loop))
                     'enqueued))
-               (should (eq (appkit-loop-post loop 'data-later) 'enqueued)))
+               (should
+                (eq (appkit-loop--post-addressed
+                     loop 'data-later (appkit-loop-incarnation loop))
+                    'enqueued)))
              (appkit-loop-accept model))))
     (unwind-protect
         (progn
@@ -375,8 +381,8 @@
     (should (equal (appkit-loop-model loop) '(scheduled)))
     (should (= (appkit-loop-pending-count loop) 0))))
 
-(ert-deftest appkit-loop-active-pass-schedules-work-on-another-loop ()
-  (let (source target scheduled)
+(ert-deftest appkit-loop-active-pass-rejects-cross-loop-post ()
+  (let (source target)
     (setq target
           (appkit-loop-create
            :model nil
@@ -388,17 +394,20 @@
            :model nil
            :update
            (lambda (model _message)
-             (should (eq (appkit-loop-post target 'cross-loop) 'enqueued))
-             (setq scheduled (appkit-loop--scheduled-handle target))
+             (appkit-loop-post target 'cross-loop)
              (appkit-loop-accept model))))
     (unwind-protect
         (progn
           (appkit-loop-post source 'start)
           (should (= (appkit-loop-run-pass source) 1))
-          (should (timerp scheduled))
-          (should (eq scheduled (appkit-loop--scheduled-handle target)))
-          (should (= (appkit-loop-run-pass target) 1))
-          (should (equal (appkit-loop-model target) '(cross-loop))))
+          (should (eq (appkit-loop-status source) 'faulted))
+          (should
+           (eq (car (appkit-loop-fault-condition
+                     (appkit-loop-fault source)))
+               'appkit-runtime-contract-error))
+          (should (zerop (appkit-loop-pending-count target)))
+          (should-not (appkit-loop--scheduled-handle target))
+          (should-not (appkit-loop-model target)))
       (appkit-loop-stop source)
       (appkit-loop-stop target))))
 
@@ -484,7 +493,8 @@
            (lambda (_current _pass)
              (setq after-runs (1+ (or after-runs 0)))
              (when (= after-runs 1)
-               (appkit-loop-post loop 'later)))))
+               (appkit-loop--post-addressed
+                loop 'later (appkit-loop-incarnation loop))))))
     (unwind-protect
         (progn
           (appkit-loop-post loop 'first)
@@ -540,7 +550,8 @@
          (lambda (current fault)
            (setq observed
                  (list (appkit-loop-status current)
-                       (appkit-loop-post current 'late)
+                       (appkit-loop--post-addressed
+                        current 'late (appkit-loop-incarnation current))
                        (appkit-loop-fault-condition fault)))))
       (should-error (appkit-loop-send loop 'fail) :type 'error)
       (should (equal observed
@@ -573,7 +584,10 @@
            (lambda (model message)
              (setq seen (append seen (list message)))
              (when (eq message 'trigger)
-               (should (eq (appkit-loop-post sender 'sender-data) 'enqueued)))
+               (should
+                (eq (appkit-loop--post-addressed
+                     sender 'sender-data (appkit-loop-incarnation sender))
+                    'enqueued)))
              (appkit-loop-accept model))
            :after-pass
            (lambda (current _pass)

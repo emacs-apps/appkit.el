@@ -468,6 +468,28 @@
         (should (= (appkit-effect-runtime-count runtime) 0))
         (should-not (appkit-effect-runtime-live-p runtime))))))
 
+(ert-deftest appkit-effect-coalesces-synchronous-starter-wakes ()
+  (appkit-effect-test--with-harness
+      (harness :control-capacity 1 :message-limit 8 :max-active 32)
+    (let ((runtime (appkit-effect-test--harness-runtime harness))
+          (loop (appkit-effect-test--harness-loop harness)))
+      (dotimes (index 32)
+        (appkit-effect-runtime-start
+         runtime
+         (appkit-effect-test--spec
+          index
+          (lambda (_context _input _observe resolve _reject)
+            (funcall resolve 'ready)
+            nil))))
+      (should (= (appkit-loop-pending-count loop) 1))
+      (dotimes (_ 32)
+        (should (= (appkit-loop-run-pass loop) 1)))
+      (should (eq (appkit-loop-status loop) 'running))
+      (should (zerop (appkit-effect-runtime-count runtime)))
+      (should
+       (equal (mapcar #'cadr
+                      (appkit-effect-test--harness-messages harness))
+              (number-sequence 0 31))))))
 (provide 'appkit-effect-test)
 
 ;;; appkit-effect-test.el ends here

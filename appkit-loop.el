@@ -18,7 +18,10 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'appkit-cleanup)
+(require 'appkit-cleanup)(define-error 'appkit-runtime-contract-error
+              "Invalid Appkit runtime operation")
+
+
 
 (cl-defstruct (appkit-loop-accepted
                (:constructor appkit-loop-accept (model))
@@ -353,10 +356,10 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
          origin source-address source-revision))))(defun appkit-loop-post (loop message)
   "Try to enqueue MESSAGE in LOOP's data lane and return its outcome.\n\nThis is an external ingress for host events and callback adapters.  Client\nphases must return a closed post command; posting from any active pass signals\na contract error.  The result is one of `enqueued', `full', `stopped', or\n`faulted'.  A failed admission does not allocate a sequence number."
   (when appkit-loop--active-loop
-    (error "Appkit loop posts are not allowed from an active pass"))
+    (signal 'appkit-runtime-contract-error
+            (list "Loop posts are not allowed from an active pass")))
   (appkit-loop--post-addressed loop message
                                (appkit-loop-incarnation loop)))
-
 
 
 (defun appkit-loop--complete-ticket (ticket state outcome &optional revision)

@@ -90,6 +90,13 @@
         appkit-command-default-folded-limit))
       appkit-command-default-per-next-limit)
      :type 'error)))
+
+(ert-deftest appkit-next-rejection-is-not-a-loop-result ()
+  (let ((result (appkit-next-reject 'not-allowed)))
+    (should (appkit-next-rejected-p result))
+    (should (eq (appkit-next-rejected-reason result) 'not-allowed))
+    (should-not (appkit-loop-rejected-p result))))
+
 (provide 'appkit-command-test)
 
 ;;; appkit-command-test.el ends here

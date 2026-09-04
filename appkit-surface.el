@@ -67,15 +67,21 @@
        (appkit-surface-alive-p appkit--current-surface)
        appkit--current-surface))
 
-(defun appkit-surface-live-p (surface)
-  "Return non-nil when SURFACE is ready on its exact live buffer."
-  (and (appkit-surface-p surface)
-       (appkit-surface-alive-p surface)
-       (appkit-surface-ready-p surface)
+(defun appkit-surface--owns-host-p (surface)
+  "Return non-nil when SURFACE still owns its exact live host."
+  (and (appkit-surface-p surface) (appkit-surface-alive-p surface)
+       (appkit-loop-p (appkit-surface-loop surface))
        (eq (appkit-loop-status (appkit-surface-loop surface)) 'running)
        (buffer-live-p (appkit-surface-buffer surface))
        (with-current-buffer (appkit-surface-buffer surface)
          (eq appkit--current-surface surface))))
+
+(defun appkit-surface-live-p (surface)
+  "Return non-nil when SURFACE is ready on its exact live buffer."
+  (and (appkit-surface--owns-host-p surface)
+       (appkit-surface-ready-p surface)
+       (or (null (appkit-surface-app surface))
+           (appkit-app-live-p (appkit-surface-app surface)))))
 
 (defun appkit-surface-model (surface)
   "Return SURFACE's current committed domain model."
@@ -143,12 +149,17 @@
     (appkit-routing--address (appkit-app-loop app))))
 
 (defun appkit-surface--client-update (surface context model message)
-  "Run and stage SURFACE's client transition in CONTEXT."
+  "Run and stage SURFACE's client transition in its exact host."
+  (unless (appkit-surface--owns-host-p surface)
+    (error "Surface host is unavailable before update"))
   (let
       ((result
-        (funcall
-         (appkit-surface-type-update (appkit-surface-type surface))
-         context model message)))
+        (with-current-buffer (appkit-surface-buffer surface)
+          (funcall
+           (appkit-surface-type-update (appkit-surface-type surface))
+           context model message))))
+    (unless (appkit-surface--owns-host-p surface)
+      (error "Surface host detached during update"))
     (if (appkit-next-rejected-p result)
         (appkit-loop-reject (appkit-next-rejected-reason result))
       (appkit-loop-accept
@@ -169,28 +180,44 @@
        (appkit-surface--client-update surface context current input))
      model message)))
 
-(defun appkit-surface--render-request (surface app-read-view model request)
+(defun appkit-surface--render-request
+    (surface app-read-view model request)
   "Render REQUEST from MODEL and APP-READ-VIEW, recovering once on error."
   (let ((renderer (appkit-surface-renderer surface))
         render-condition)
+    (unless (appkit-surface--owns-host-p surface)
+      (error "Surface host is unavailable before render"))
     (condition-case condition
-        (progn
-          (funcall (appkit-generated-renderer-render renderer)
-                   surface app-read-view model request)
-          (setf (appkit-surface-renderer-valid-p surface) t))
+        (funcall (appkit-generated-renderer-render renderer)
+                 surface app-read-view model request)
+      (appkit-runtime-contract-error
+       (signal (car condition) (cdr condition)))
       ((error quit)
        (setq render-condition condition)))
-    (when render-condition
+    (unless (appkit-surface--owns-host-p surface)
+      (error "Surface host detached during render%s"
+             (if render-condition
+                 (format ": %s" (error-message-string render-condition))
+               "")))
+    (if (null render-condition)
+        (setf (appkit-surface-renderer-valid-p surface) t)
       (setf (appkit-surface-renderer-valid-p surface) nil)
-      (condition-case recovery-condition
-          (progn
-            (funcall (appkit-generated-renderer-recover renderer)
-                     surface app-read-view model render-condition)
-            (setf (appkit-surface-renderer-valid-p surface) t))
-        ((error quit)
-         (error "Surface render failed (%s); recovery failed (%s)"
-                (error-message-string render-condition)
-                (error-message-string recovery-condition)))))))
+      (let ((recover (appkit-generated-renderer-recover renderer)))
+        (unless (functionp recover)
+          (signal (car render-condition) (cdr render-condition)))
+        (condition-case recovery-condition
+            (progn
+              (funcall recover
+                       surface app-read-view model render-condition)
+              (unless (appkit-surface--owns-host-p surface)
+                (error "Surface host detached during render recovery"))
+              (setf (appkit-surface-renderer-valid-p surface) t))
+          (appkit-runtime-contract-error
+           (signal (car recovery-condition) (cdr recovery-condition)))
+          ((error quit)
+           (error "Surface render failed (%s); recovery failed (%s)"
+                  (error-message-string render-condition)
+                  (error-message-string recovery-condition))))))))
 
 (defun appkit-surface--commit-work
     (surface app-read-view model request posts effects)
@@ -225,6 +252,20 @@
   "Commit SURFACE's folded work after LOOP finishes model transitions."
   (appkit-surface--commit-pending
    surface appkit-loop--pass-context (appkit-loop-model loop)))
+
+(defun appkit-surface--parent-fault (surface parent-fault)
+  "Fence SURFACE immediately after its parent App faults."
+  (when
+      (and (appkit-surface-p surface)
+           (eq (appkit-surface-status surface) 'running))
+    (let ((appkit-loop--pass-tickets nil))
+      (appkit-loop--enter-fault (appkit-surface-loop surface)
+                                (list 'error
+                                      (format "Parent App faulted: %s"
+                                              (error-message-string
+                                               (appkit-loop-fault-condition
+                                                parent-fault))))
+                                nil))))
 
 (defun appkit-surface--on-fault (surface _loop _fault)
   "Revoke SURFACE work immediately after its loop faults."
@@ -448,17 +489,17 @@ MAX-ACTIVE-EFFECTS bound deferred work."
             (appkit-loop--finish-stop loop)))))))
 
 (defun appkit-surface--host-detach ()
-  "Synchronously stop the Surface owned by the current buffer."
+  "Synchronously stop only the Surface owned by this exact buffer."
   (when (appkit-surface-p appkit--current-surface)
     (let ((surface appkit--current-surface))
-      (condition-case condition
-          (appkit-surface-stop surface)
-        ((error quit)
-         (display-warning
-          'appkit-surface
-          (format "Surface host cleanup failed: %s"
-                  (error-message-string condition))
-          :warning))))))
+      (if (not (eq (current-buffer) (appkit-surface-buffer surface)))
+          (setq-local appkit--current-surface nil)
+        (condition-case condition (appkit-surface-stop surface)
+          ((error quit)
+           (display-warning 'appkit-surface
+                            (format "Surface host cleanup failed: %s"
+                                    (error-message-string condition))
+                            :warning)))))))
 
 (provide 'appkit-surface)
 

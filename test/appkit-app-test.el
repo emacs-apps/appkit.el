@@ -310,6 +310,74 @@
         (appkit-app-close app))
       (appkit-loop-stop target))))
 
+(ert-deftest appkit-app-fault-immediately-fences-owned-surfaces ()
+  (let (app surface resolve)
+    (unwind-protect
+        (progn
+          (setq app
+                (appkit-app-start
+                 (appkit-app-type-create
+                  :name 'fault-parent
+                  :init
+                  (lambda (_context input)
+                    (appkit-next
+                     :model input :render appkit-render-none))
+                  :update
+                  (lambda (&rest _arguments)
+                    (error "parent transition fault")))
+                 :input nil))
+          (setq surface
+                (appkit-open-generated-surface
+                 (appkit-surface-type-create
+                  :name 'fault-child
+                  :mode #'special-mode
+                  :init
+                  (lambda (_context input)
+                    (appkit-next
+                     :model input
+                     :render appkit-render-none
+                     :commands
+                     (list
+                      (appkit-command-start-effect
+                       (appkit-effect-create
+                        :key 'child-work
+                        :input nil
+                        :start
+                        (lambda (_context _input _observe
+                                 resolve-gate _reject)
+                          (setq resolve resolve-gate)
+                          (appkit-cancellation-create :kind 'logical))
+                        :success (lambda (&rest _) 'late)
+                        :failure (lambda (&rest _) 'failed))))))
+                  :update
+                  (lambda (_context model _message)
+                    (appkit-next
+                     :model model :render appkit-render-none))
+                  :renderer-factory
+                  (lambda (_surface)
+                    (appkit-generated-renderer-create
+                     :mount (lambda (&rest _arguments))
+                     :merge (lambda (_left right) right)
+                     :render (lambda (&rest _arguments))
+                     :recover nil
+                     :unmount (lambda (&rest _arguments)))))
+                 :app app :identity 'fault-child))
+          (appkit-app-post app 'fault)
+          (appkit-loop-run-pass (appkit-app-loop app))
+          (should (eq (appkit-app-status app) 'faulted))
+          (should (eq (appkit-surface-status surface) 'faulted))
+          (should-not (appkit-app-live-p app))
+          (should-not (appkit-surface-live-p surface))
+          (should-not (funcall resolve 'too-late))
+          (should (= (appkit-app-surface-count app) 1))
+          (with-current-buffer (appkit-surface-buffer surface)
+            (should (eq (appkit-current-surface) surface))))
+      (when (and app (not (eq (appkit-app-status app) 'stopped)))
+        (appkit-app-close app))
+      (when (and surface
+                 (buffer-live-p (appkit-surface-buffer surface)))
+        (kill-buffer (appkit-surface-buffer surface))))))
+
 (provide 'appkit-app-test)
 
 ;;; appkit-app-test.el ends here
