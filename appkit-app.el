@@ -17,12 +17,12 @@
 
 (require 'cl-lib)
 (require 'appkit-cleanup)
+(require 'appkit-core)
 (require 'appkit-command)
 (require 'appkit-context)
 
 (declare-function appkit-surface-stop "appkit-surface")
 (declare-function appkit-surface--parent-fault "appkit-surface")
-(declare-function appkit-cancel-handles "appkit-core")
 
 (cl-defstruct (appkit-app-type
                (:constructor appkit-app-type-create)
@@ -43,6 +43,17 @@
        (appkit-app-alive-p app)
        (eq (appkit-loop-status (appkit-app-loop app)) 'running)))
 
+(cl-defmethod appkit-owner-live-p ((owner appkit-app))
+  (appkit-app-live-p owner))
+
+(cl-defmethod appkit-owner-app ((owner appkit-app)) owner)
+
+(cl-defmethod appkit-owner-handles ((owner appkit-app))
+  (appkit-app-handles owner))
+
+(cl-defmethod appkit-owner-set-handles ((owner appkit-app) handles)
+  (setf (appkit-app-handles owner) handles))
+
 (defun appkit-app-model (app)
   "Return APP's current committed canonical model."
   (appkit-loop-model (appkit-app-loop app)))
@@ -54,6 +65,12 @@
 (defun appkit-app-surface-count (app)
   "Return the number of Surface identities owned by APP."
   (hash-table-count (appkit-app-surfaces app)))
+
+(defun appkit-app-surface (app identity)
+  "Return APP's registered Surface for IDENTITY, or nil."
+  (unless (appkit-app-p app)
+    (signal 'wrong-type-argument (list 'appkit-app-p app)))
+  (cdr (gethash identity (appkit-app-surfaces app))))
 
 (defun appkit-app--read-view (app)
   "Capture APP's current committed read view, or signal if APP is unavailable."
@@ -280,8 +297,7 @@ bounds owned by this App incarnation."
                    (appkit-app--surface-snapshot app)
                    #'appkit-surface-stop
                    (lambda (condition) (push condition conditions)))
-                  (when (fboundp 'appkit-cancel-handles)
-                    (appkit-cancel-handles app))
+                  (appkit-cancel-handles app)
                   (appkit-effect-runtime-stop
                    (appkit-app-effect-runtime app))
                   (when-let*

@@ -45,7 +45,7 @@
                    (appkit-chat-timeline-row-dependencies (cadr rows))))))
 
 (ert-deftest appkit-chat-timeline-sync-is-keyed-and-context-sensitive ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chat-timeline-ensure
        :printer (appkit-chat-timeline-test--printer prints)
@@ -65,7 +65,7 @@
         (should (equal '(a b) (appkit-chat-timeline-keys)))))))
 
 (ert-deftest appkit-chat-timeline-sync-handles-arbitrary-reordering ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chat-timeline-ensure
        :printer (appkit-chat-timeline-test--printer prints)
@@ -84,7 +84,7 @@
                               (buffer-string))))))
 
 (ert-deftest appkit-chat-timeline-refresh-reprints-unchanged-rows ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chat-timeline-ensure
        :printer (appkit-chat-timeline-test--printer prints)
@@ -101,7 +101,7 @@
         (should (= 2 (gethash 'b prints)))))))
 
 (ert-deftest appkit-chat-timeline-invalidates-old-and-new-resource-dependents ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal))
           (resource '(:message "source")))
       (appkit-chat-timeline-ensure
@@ -122,7 +122,7 @@
                      (appkit-chat-timeline-dependent-keys (list resource)))))))
 
 (ert-deftest appkit-chat-timeline-rekey-preserves-node-and-semantic-point ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chat-timeline-ensure
        :printer (appkit-chat-timeline-test--printer prints)
@@ -144,7 +144,7 @@
         (should (= 3 (current-column)))))))
 
 (ert-deftest appkit-chat-timeline-frame-update-preserves-composer-and-undo ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chatbuf-init-state 8)
       (appkit-chat-timeline-ensure
@@ -177,7 +177,7 @@
         (should-not buffer-undo-list)))))
 
 (ert-deftest appkit-chat-timeline-frame-update-does-not-rebind-live-composer ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal))
           (bind-count 0))
       (appkit-chatbuf-init-state 8)
@@ -218,7 +218,7 @@
           (should (string-match-p "a:A:plain" (buffer-string))))))))
 
 (ert-deftest appkit-chat-timeline-composer-follows-later-row-insertion ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chatbuf-init-state 8)
       (appkit-chat-timeline-ensure
@@ -251,7 +251,7 @@
                  (buffer-string)))))))
 
 (ert-deftest appkit-chat-timeline-invalid-printer-keeps-composer ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (appkit-chatbuf-init-state 8)
     (appkit-chatbuf-bind-input-region
      :visible-p t :prompt ">>> " :input-text "draft")
@@ -261,7 +261,7 @@
       (should (equal "draft" (appkit-chatbuf-input-string))))))
 
 (ert-deftest appkit-chat-timeline-failed-mutation-reprotects-generated-content ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chatbuf-init-state 8)
       (appkit-chat-timeline-ensure
@@ -286,7 +286,7 @@
           start (appkit-chatbuf-prompt-start-position) 'read-only t))))))
 
 (ert-deftest appkit-chat-timeline-frame-update-removes-hidden-composer-only ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chatbuf-init-state 8)
       (appkit-chat-timeline-ensure
@@ -309,7 +309,7 @@
         (should (string-match-p "a:A:plain" (buffer-string)))))))
 
 (ert-deftest appkit-chat-timeline-frame-update-refuses-crossed-composer-boundary ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chatbuf-init-state 8)
       (appkit-chat-timeline-ensure
@@ -332,7 +332,7 @@
         (should (equal before (buffer-string)))))))
 
 (ert-deftest appkit-chat-timeline-window-visible-end-stops-at-footer ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((window 'test-window)
           (buffer (current-buffer))
           (window-end-position 900)
@@ -360,21 +360,22 @@
                    (appkit-chat-timeline-window-visible-end-position window)))))))
 
 (ert-deftest appkit-chat-timeline-window-visible-end-rejects-foreign-window ()
-  (appkit-test-with-view
-    (let ((window 'test-window))
-      (cl-letf (((symbol-function 'window-live-p) (lambda (_window) t))
-                ((symbol-function 'window-buffer)
-                 (lambda (_window) (get-buffer-create " *appkit-foreign*")))
-                ((symbol-function 'window-end)
-                 (lambda (&rest _args)
-                   (ert-fail "foreign window end must not be inspected"))))
-        (unwind-protect
+  (appkit-test-with-surface
+    (let ((window 'test-window)
+          (foreign (get-buffer-create " *appkit-foreign*")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'window-live-p) (lambda (_window) t))
+                    ((symbol-function 'window-buffer)
+                     (lambda (_window) foreign))
+                    ((symbol-function 'window-end)
+                     (lambda (&rest _args)
+                       (ert-fail "foreign window end must not be inspected"))))
             (should-not
-             (appkit-chat-timeline-window-visible-end-position window))
-          (kill-buffer " *appkit-foreign*"))))))
+             (appkit-chat-timeline-window-visible-end-position window)))
+        (kill-buffer foreign)))))
 
 (ert-deftest appkit-chat-timeline-rejects-invalid-projections-before-mutation ()
-  (appkit-test-with-view
+  (appkit-test-with-surface
     (let ((prints (make-hash-table :test #'equal)))
       (appkit-chat-timeline-ensure
        :printer (appkit-chat-timeline-test--printer prints)
@@ -386,8 +387,8 @@
       (should-not (appkit-chat-timeline-keys)))))
 
 (ert-deftest appkit-chat-timeline-owns-one-history-observer ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view)))
+  (appkit-test-with-surface
+    (let ((view (appkit-current-surface)))
       (appkit-chat-timeline-ensure
        :printer (appkit-chat-timeline-test--printer
                  (make-hash-table :test #'equal))

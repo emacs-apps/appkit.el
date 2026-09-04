@@ -6,8 +6,8 @@
 (require 'appkit-test-helper)
 
 (ert-deftest appkit-content-update-is-generated-and-undo-free ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view)))
+  (appkit-test-with-surface
+    (let ((view (appkit-current-surface)))
       (setq buffer-undo-list nil)
       (appkit-with-content-update view
         (insert "generated"))
@@ -15,8 +15,8 @@
       (should-not buffer-undo-list))))
 
 (ert-deftest appkit-property-update-rejects-text-mutation-in-strict-mode ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let ((view (appkit-current-surface))
           (appkit-strict-boundaries t))
       (insert "text")
       (should-error
@@ -24,8 +24,8 @@
          (insert "invalid"))))))
 
 (ert-deftest appkit-property-update-allows-display-properties ()
-  (appkit-test-with-view
-    (let ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let ((view (appkit-current-surface))
           (appkit-strict-boundaries t))
       (insert "text")
       (appkit-with-property-update view

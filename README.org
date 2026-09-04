@@ -10,8 +10,8 @@ projection, compose, chat, media, markup, and geometry modules remain
 presentation mechanisms beneath that runtime.  Client packages own protocol
 types, transport adapters, domain transitions, and branding.
 
-Current consumers include ~disco.el~, ~emacs-qq~, ~emacs-slackit~,
-~emacs-zulip~, and ~chirp~.  Appkit does not define Discord, QQ, Slack,
+Client packages supply protocol models, transport adapters, domain
+transitions, and branding.  Appkit does not define Discord, QQ, Slack,
 channel, or message models.
 
 * Install

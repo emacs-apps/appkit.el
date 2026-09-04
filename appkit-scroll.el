@@ -19,10 +19,11 @@
 
 (require 'cl-lib)
 (require 'appkit-core)
+(require 'appkit-surface)
 
 (cl-defstruct (appkit-scroll-observer
                (:constructor appkit-scroll-observer--create))
-  "Window-edge observer owned by one Appkit view."
+  "Window-edge observer owned by one Generated Surface."
   owner
   buffer
   start-boundary-function
@@ -109,7 +110,7 @@ eligible but has not been redisplayed reliably, and nil otherwise."
         (buffer (appkit-scroll-observer-buffer observer)))
     (when (and (appkit-scroll-observer-active-p observer)
                (not (appkit-scroll-observer-checking-p observer))
-               (appkit-view-live-p owner)
+               (appkit-surface-live-p owner)
                (buffer-live-p buffer)
                (window-live-p window)
                (eq (window-buffer window) buffer))
@@ -148,7 +149,7 @@ eligible but has not been redisplayed reliably, and nil otherwise."
     (when handle
       (appkit-retire-handle handle)))
   (when (and (appkit-scroll-observer-active-p observer)
-             (appkit-view-live-p (appkit-scroll-observer-owner observer)))
+             (appkit-surface-live-p (appkit-scroll-observer-owner observer)))
     (dolist (window
              (get-buffer-window-list
               (appkit-scroll-observer-buffer observer) nil t))
@@ -157,7 +158,7 @@ eligible but has not been redisplayed reliably, and nil otherwise."
 (defun appkit-scroll-observer--defer-check (observer)
   "Schedule one lifecycle-owned post-redisplay check for OBSERVER."
   (when (and (appkit-scroll-observer-active-p observer)
-             (appkit-view-live-p (appkit-scroll-observer-owner observer))
+             (appkit-surface-live-p (appkit-scroll-observer-owner observer))
              (not (appkit-scroll-observer-deferred-check-handle observer)))
     (let* ((timer
             (run-with-idle-timer
@@ -205,11 +206,11 @@ stale visible edge."
     t))
 
 (cl-defun appkit-scroll-observer-install
-    (view &key start-boundary-function end-boundary-function
+    (surface &key start-boundary-function end-boundary-function
           start-function end-function)
-  "Install and return a window-edge observer owned by VIEW.
+  "Install and return a window-edge observer owned by SURFACE.
 
-START-BOUNDARY-FUNCTION and END-BOUNDARY-FUNCTION run in VIEW's buffer and
+START-BOUNDARY-FUNCTION and END-BOUNDARY-FUNCTION run in SURFACE's buffer and
 return numeric application-content boundaries.  Their defaults are
 `point-min' and `point-max'.
 
@@ -217,18 +218,18 @@ START-FUNCTION and END-FUNCTION receive (WINDOW POSITION BOUNDARY).  POSITION
 is the actual visible edge, including mouse-wheel, scroll-bar, keyboard, and
 indirect-window scrolling.  Callbacks own proximity thresholds and all
 application request gates.  At least one callback must be non-nil."
-  (unless (appkit-view-live-p view)
-    (error "Cannot observe scrolling for a dead Appkit view"))
+  (unless (appkit-surface-live-p surface)
+    (error "Cannot observe scrolling for a dead Generated Surface"))
   (unless (or (functionp start-function) (functionp end-function))
     (error "Appkit scroll observer needs an edge callback"))
   (dolist (function (list start-boundary-function end-boundary-function
                           start-function end-function))
     (unless (or (null function) (functionp function))
       (error "Appkit scroll observer callback is invalid: %S" function)))
-  (let* ((buffer (appkit-view-buffer view))
+  (let* ((buffer (appkit-surface-buffer surface))
          (observer
           (appkit-scroll-observer--create
-           :owner view
+           :owner surface
            :buffer buffer
            :start-boundary-function start-boundary-function
            :end-boundary-function end-boundary-function
@@ -251,13 +252,13 @@ application request gates.  At least one callback must be non-nil."
     (setf (appkit-scroll-observer-handles observer)
           (list
            (appkit-register-handle
-            view 'hook
+            surface 'hook
             (list 'post-command-hook post-command-function t buffer))
            (appkit-register-handle
-            view 'hook
+            surface 'hook
             (list 'window-scroll-functions window-scroll-function t buffer))
            (appkit-register-handle
-            view 'function
+            surface 'function
             (lambda ()
               (setf (appkit-scroll-observer-active-p observer) nil)))))
     observer))

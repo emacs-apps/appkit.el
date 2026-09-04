@@ -21,6 +21,7 @@
 (require 'ring)
 (require 'subr-x)
 (require 'appkit-core)
+(require 'appkit-surface)
 (require 'appkit-transaction)
 (require 'appkit-ui)
 
@@ -220,18 +221,18 @@ A nil value disables automatic canonical input synchronization.")
   appkit-chatbuf--rendering)
 
 (defmacro appkit-chatbuf-with-generated-update (&rest body)
-  "Run BODY as one generated chat buffer structural update.
-
-Structural updates are read-only-buffer mutations produced from application
-state.  They must not enter buffer undo history; the editable composer remains
-  independently undoable outside this scope."
+  "Run BODY as one generated Surface structural update."
   (declare (indent 0) (debug t))
-  `(let ((appkit-generated-view (appkit-current-view))
+  `(let ((appkit-generated-surface (appkit-current-surface))
          (appkit-chatbuf--rendering t))
-     (unless (appkit-view-live-p appkit-generated-view)
-       (error "Appkit generated chat update requires a live view"))
-     (appkit-with-content-update appkit-generated-view
-       ,@body)))
+     (unless (appkit-surface-p appkit-generated-surface)
+       (error "Appkit generated chat update requires a live Surface"))
+     (let ((inhibit-read-only t)
+           (buffer-undo-list t)
+           (appkit-old-modified-p (buffer-modified-p)))
+       (unwind-protect
+           (progn ,@body)
+         (set-buffer-modified-p appkit-old-modified-p)))))
 
 (define-button-type 'appkit-chatbuf-prompt
   :supertype 'button

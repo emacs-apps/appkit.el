@@ -25,6 +25,7 @@
 (require 'appkit-projection)
 (require 'appkit-position)
 (require 'appkit-core)
+(require 'appkit-surface)
 (require 'appkit-scroll)
 
 (cl-defstruct (appkit-chat-timeline-row
@@ -40,28 +41,28 @@
   deferred-keys
   scroll-observer)
 
-(defun appkit-chat-timeline--view ()
-  "Return the live appkit view owning the current timeline."
-  (let ((view (appkit-current-view)))
-    (or (and (appkit-view-live-p view) view)
-        (error "Appkit chat timeline requires a live view"))))
+(defvar-local appkit-chat-timeline--state nil
+  "Projected timeline state owned by the current Surface host.")
+
+(defun appkit-chat-timeline--surface ()
+  "Return the live Generated Surface owning the current timeline."
+  (let ((surface (appkit-current-surface)))
+    (or (and (appkit-surface-p surface) surface)
+        (error "Appkit chat timeline requires a live Surface"))))
 
 (defun appkit-chat-timeline--current-state ()
-  "Return the timeline state owned by the current appkit view, or nil."
-  (let ((view (appkit-current-view)))
-    (and (appkit-view-live-p view)
-         (appkit-chat-timeline--state-p (appkit-view-engine view))
-         (appkit-view-engine view))))
+  "Return the current buffer's timeline state, or nil."
+  (and (appkit-surface-p (appkit-current-surface))
+       (appkit-chat-timeline--state-p appkit-chat-timeline--state)
+       appkit-chat-timeline--state))
 
 (defun appkit-chat-timeline-reset ()
-  "Discard projected timeline state in the current buffer."
-  (let* ((view (appkit-chat-timeline--view))
-         (state (appkit-chat-timeline--current-state)))
-    (when-let* ((observer
-                 (and state
-                      (appkit-chat-timeline--state-scroll-observer state))))
-      (appkit-scroll-observer-cancel observer))
-    (setf (appkit-view-engine view) nil)))
+  "Discard projected timeline state in the current Surface host."
+  (appkit-chat-timeline--surface)
+  (when-let* ((state (appkit-chat-timeline--current-state))
+              (observer (appkit-chat-timeline--state-scroll-observer state)))
+    (appkit-scroll-observer-cancel observer))
+  (setq-local appkit-chat-timeline--state nil))
 
 (defun appkit-chat-timeline--projection (&optional state)
   "Return the shared projection embedded in chat timeline STATE."
@@ -111,14 +112,9 @@
 
 (cl-defun appkit-chat-timeline-ensure
     (&key printer anchor-property header footer after-mutation-function)
-  "Ensure the current buffer owns one projected timeline.
-
-PRINTER renders one `appkit-chat-timeline-row'.  ANCHOR-PROPERTY is the text
-property used to restore semantic message position.  HEADER and FOOTER seed a
-new EWOC.  AFTER-MUTATION-FUNCTION runs after outer structural transactions."
-  (let* ((view (appkit-chat-timeline--view))
-         (engine (appkit-view-engine view))
-         (current (and (appkit-chat-timeline--state-p engine) engine)))
+  "Ensure the current Surface host owns one projected timeline."
+  (appkit-chat-timeline--surface)
+  (let ((current (appkit-chat-timeline--current-state)))
     (if current
         (let ((projection (appkit-chat-timeline--projection current)))
           (when printer
@@ -128,8 +124,6 @@ new EWOC.  AFTER-MUTATION-FUNCTION runs after outer structural transactions."
                   anchor-property))
           (setf (appkit-chat-timeline--state-after-mutation-function current)
                 after-mutation-function))
-      (when engine
-        (error "Appkit view already owns another projection engine"))
       (unless (functionp printer)
         (error "Appkit chat timeline requires a row printer"))
       (let (projection)
@@ -139,12 +133,12 @@ new EWOC.  AFTER-MUTATION-FUNCTION runs after outer structural transactions."
                 (appkit-projection--create
                  printer anchor-property
                  :header header :footer footer :no-separator-p t)))
-        (setf (appkit-view-engine view)
-              (appkit-chat-timeline--state-create
-               :projection projection
-               :after-mutation-function after-mutation-function
-               :mutation-depth 0
-               :deferred-keys nil))))
+        (setq-local
+         appkit-chat-timeline--state
+         (appkit-chat-timeline--state-create
+          :projection projection
+          :after-mutation-function after-mutation-function
+          :mutation-depth 0 :deferred-keys nil))))
     (appkit-chat-timeline-ewoc)))
 
 (defun appkit-chat-timeline-scroll-observer ()
@@ -153,25 +147,20 @@ new EWOC.  AFTER-MUTATION-FUNCTION runs after outer structural transactions."
     (appkit-chat-timeline--state-scroll-observer state)))
 
 (cl-defun appkit-chat-timeline-install-history-observer
-    (view &key start-function end-function)
-  "Install VIEW's timeline history observer and return it.
-
-START-FUNCTION and END-FUNCTION receive the ordinary Appkit scroll observer
-arguments (WINDOW POSITION BOUNDARY).  The timeline controller owns observer
-replacement and uses its generated footer as the end boundary."
-  (unless (appkit-view-live-p view)
-    (error "Cannot observe history for a dead Appkit view"))
-  (with-current-buffer (appkit-view-buffer view)
-    (unless (eq view (appkit-current-view))
-      (error "Cannot observe history for a detached Appkit view"))
+    (surface &key start-function end-function)
+  "Install SURFACE's timeline history observer and return it."
+  (unless (appkit-surface-live-p surface)
+    (error "Cannot observe history for a dead Surface"))
+  (with-current-buffer (appkit-surface-buffer surface)
+    (unless (eq surface (appkit-current-surface))
+      (error "Cannot observe history for a detached Surface"))
     (let* ((state (appkit-chat-timeline--require-state))
-           (current
-            (appkit-chat-timeline--state-scroll-observer state)))
+           (current (appkit-chat-timeline--state-scroll-observer state)))
       (when (appkit-scroll-observer-p current)
         (appkit-scroll-observer-cancel current))
       (let ((observer
              (appkit-scroll-observer-install
-              view
+              surface
               :end-boundary-function
               #'appkit-chat-timeline-footer-start-position
               :start-function start-function
@@ -370,8 +359,8 @@ chat buffer, so message or metadata redisplay can never delete and recreate
 the user's input.
 
 When BIND-INPUT-FUNCTION is non-nil, call it only when the composer needs to
-be created, removed, or when COMPOSER-VISIBLE-P was not supplied (the legacy
-behaviour).  Clients should supply COMPOSER-VISIBLE-P for stable input."
+be created, removed, or when COMPOSER-VISIBLE-P was not supplied.  Supplying
+COMPOSER-VISIBLE-P gives stable input visibility semantics."
   (let* ((state (appkit-chat-timeline--require-state))
          (ewoc (appkit-projection--engine-ewoc
                 (appkit-chat-timeline--projection state)))

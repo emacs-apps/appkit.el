@@ -20,6 +20,7 @@
 (require 'appkit-loop)
 (require 'appkit-command)
 (require 'appkit-app)
+(require 'appkit-core)
 (require 'appkit-context)
 
 (cl-defstruct (appkit-surface-type
@@ -52,6 +53,7 @@
   command-batch
   command-limit
   renderer
+  handles
   pending-render
   renderer-valid-p
   alive-p
@@ -82,6 +84,18 @@
        (appkit-surface-ready-p surface)
        (or (null (appkit-surface-app surface))
            (appkit-app-live-p (appkit-surface-app surface)))))
+
+(cl-defmethod appkit-owner-live-p ((owner appkit-surface))
+  (appkit-surface-live-p owner))
+
+(cl-defmethod appkit-owner-app ((owner appkit-surface))
+  (appkit-surface-app owner))
+
+(cl-defmethod appkit-owner-handles ((owner appkit-surface))
+  (appkit-surface-handles owner))
+
+(cl-defmethod appkit-owner-set-handles ((owner appkit-surface) handles)
+  (setf (appkit-surface-handles owner) handles))
 
 (defun appkit-surface-model (surface)
   "Return SURFACE's current committed domain model."
@@ -272,6 +286,7 @@
   (setf (appkit-surface-ready-p surface) nil
         (appkit-surface-pending-render surface) appkit-render-none)
   (appkit-command--batch-clear (appkit-surface-command-batch surface))
+  (appkit-cancel-handles surface)
   (appkit-effect-runtime-stop (appkit-surface-effect-runtime surface)))
 
 (defun appkit-surface--unregister (surface)
@@ -366,10 +381,10 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                    :buffer host
                    :loop nil
                    :effect-runtime nil
-                   :command-batch
-                   (appkit-command--batch-create folded-command-limit)
+                   :command-batch (appkit-command--batch-create folded-command-limit)
                    :command-limit command-limit
                    :renderer nil
+                   :handles nil
                    :pending-render appkit-render-none
                    :renderer-valid-p nil
                    :alive-p t
@@ -471,6 +486,7 @@ MAX-ACTIVE-EFFECTS bound deferred work."
           (unwind-protect
               (progn
                 (appkit--run-cleanup-forms conditions
+                  (appkit-cancel-handles surface)
                   (appkit-effect-runtime-stop
                    (appkit-surface-effect-runtime surface))
                   (when (and (buffer-live-p buffer)

@@ -23,6 +23,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'appkit-core)
+(require 'appkit-surface)
 (require 'appkit-scroll)
 
 (cl-defstruct (appkit-chat-history--state
@@ -37,8 +38,16 @@
   owner
   stalled-newer-key)
 
+(cl-defstruct (appkit-chat-history-operation
+               (:constructor appkit-chat-history-operation--create)
+               (:copier nil))
+  "One Surface-scoped history request fence."
+  surface
+  handle
+  alive-p)
+
 (defconst appkit-chat-history--request-key 'appkit-chat-history
-  "Private View operation key for a history controller request.")
+  "Private history request key for a history controller request.")
 
 (defvar-local appkit-chat-history--state nil
   "Current buffer's protocol-independent chat history state.")
@@ -125,7 +134,7 @@ cached entries."
        t))
 
 (defun appkit-chat-history-request-owner ()
-  "Return the View operation owning the active history request, or nil."
+  "Return the operation fence owning the active history request, or nil."
   (appkit-chat-history--state-owner
    (appkit-chat-history-init-state)))
 
@@ -223,63 +232,64 @@ automatic retry at that same edge; moving the window edge clears it."
                 (appkit-chat-history--state-last-key state))
          t)))
 
-(defun appkit-chat-history-request-start (view kind)
-  "Start VIEW's keyed history request of opaque KIND.
-
-Return the `appkit-view-operation' that must own the transport.  Starting a
-request revokes and cancels any prior history operation before installing the
-replacement owner."
-  (unless (and (appkit-view-p view) (appkit-view-live-p view))
-    (error "Appkit chat history request requires a live View"))
+(defun appkit-chat-history-request-start (surface kind)
+  "Start SURFACE's keyed history request of opaque KIND."
+  (unless (appkit-surface-live-p surface)
+    (error "Appkit chat history request requires a live Surface"))
   (unless kind
     (error "Appkit chat history request kind must be non-nil"))
-  (with-current-buffer (appkit-view-buffer view)
+  (with-current-buffer (appkit-surface-buffer surface)
     (appkit-chat-history-request-cancel)
     (let ((operation
-           (appkit-view-operation-begin
-            view appkit-chat-history--request-key))
+           (appkit-chat-history-operation--create
+            :surface surface :alive-p t))
           (state (appkit-chat-history-init-state)))
       (setf (appkit-chat-history--state-loading state) kind
             (appkit-chat-history--state-owner state) operation)
       operation)))
 
 
+(defun appkit-chat-history-request-bind-handle (owner handle)
+  "Bind transport HANDLE to current history OWNER."
+  (when (appkit-handle-p handle)
+    (if (appkit-chat-history-request-current-p owner)
+        (setf (appkit-chat-history-operation-handle owner) handle)
+      (when (appkit-handle-alive-p handle)
+        (appkit-cancel-handle handle))))
+  handle)
+
 (defun appkit-chat-history-request-current-p (owner)
-  "Return non-nil when OWNER is the current history View operation."
-  (and (appkit-view-operation-p owner)
+  "Return non-nil when OWNER is the current history request fence."
+  (and (appkit-chat-history-operation-p owner)
+       (appkit-chat-history-operation-alive-p owner)
+       (appkit-surface-live-p
+        (appkit-chat-history-operation-surface owner))
        (eq owner
            (appkit-chat-history--state-owner
-            (appkit-chat-history-init-state)))
-       (appkit-view-operation-current-p owner)))
+            (appkit-chat-history-init-state)))))
 
 (defun appkit-chat-history-request-end (owner)
-  "Finish current OWNER operation and return non-nil when settlement won.
-
-A stale OWNER leaves both the replacement owner and its loading kind intact."
+  "Finish current OWNER and return non-nil when settlement won."
   (when (appkit-chat-history-request-current-p owner)
-    (let ((finished (appkit-view-operation-finish owner)))
-      (when (and finished
-                 (eq owner
-                     (appkit-chat-history--state-owner
-                      (appkit-chat-history-init-state))))
-        (let ((state (appkit-chat-history-init-state)))
-          (setf (appkit-chat-history--state-loading state) nil
-                (appkit-chat-history--state-owner state) nil)))
-      finished)))
+    (setf (appkit-chat-history-operation-alive-p owner) nil
+          (appkit-chat-history-operation-handle owner) nil)
+    (let ((state (appkit-chat-history-init-state)))
+      (setf (appkit-chat-history--state-loading state) nil
+            (appkit-chat-history--state-owner state) nil))
+    t))
 
 (defun appkit-chat-history-request-cancel ()
-  "Cancel and clear the active history request, returning its View operation.
-
-Cancellation recursively revokes the operation's transport children before
-later callbacks reach the settlement fence."
+  "Cancel and clear the active history request fence."
   (let* ((state (appkit-chat-history-init-state))
          (owner (appkit-chat-history--state-owner state)))
     (setf (appkit-chat-history--state-loading state) nil
           (appkit-chat-history--state-owner state) nil)
-    (when owner
-      (appkit-view-operation-cancel
-       (appkit-view-operation-view owner)
-       (appkit-view-operation-key owner)))
+    (when (appkit-chat-history-operation-p owner)
+      (setf (appkit-chat-history-operation-alive-p owner) nil)
+      (when-let* ((handle (appkit-chat-history-operation-handle owner))
+                  ((appkit-handle-alive-p handle)))
+        (appkit-cancel-handle handle))
+      (setf (appkit-chat-history-operation-handle owner) nil))
     owner))
 
 (defun appkit-chat-history--slice-result (valid-p entries reason)

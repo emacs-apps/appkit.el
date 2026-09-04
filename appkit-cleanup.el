@@ -15,6 +15,27 @@
 
 ;;; Code:
 
+(require 'cl-generic)
+
+(cl-defgeneric appkit-owner-live-p (owner)
+  "Return non-nil when lifecycle OWNER can accept owned work.")
+
+(cl-defgeneric appkit-owner-app (owner)
+  "Return the canonical App containing OWNER, or nil.")
+
+(cl-defgeneric appkit-owner-handles (owner)
+  "Return lifecycle handles currently registered under OWNER.")
+
+(cl-defgeneric appkit-owner-set-handles (owner handles)
+  "Replace lifecycle HANDLES registered under OWNER.")
+
+(cl-defmethod appkit-owner-live-p ((_owner t)) nil)
+(cl-defmethod appkit-owner-app ((_owner t)) nil)
+(cl-defmethod appkit-owner-handles ((owner t))
+  (error "Invalid Appkit lifecycle owner: %S" owner))
+(cl-defmethod appkit-owner-set-handles ((owner t) _handles)
+  (error "Invalid Appkit lifecycle owner: %S" owner))
+
 (defun appkit--run-cleanup-items (items function condition-function)
   "Apply FUNCTION to every element of ITEMS during lifecycle cleanup.
 

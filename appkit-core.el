@@ -16,7 +16,6 @@
 
 (require 'cl-lib)
 (require 'appkit-cleanup)
-(require 'appkit-app)
 
 (defgroup appkit nil
   "Runtime primitives for stateful Emacs buffer applications."
@@ -41,26 +40,6 @@
   owner
   alive-p)
 
-(defun appkit-owner-live-p (owner)
-  "Return non-nil when OWNER is a live canonical App."
-  (and (appkit-app-p owner) (appkit-app-live-p owner)))
-
-(defun appkit-owner-app (owner)
-  "Return OWNER when it is an App, or nil."
-  (and (appkit-app-p owner) owner))
-
-(defun appkit--owner-handles (owner)
-  "Return lifecycle handles belonging to App OWNER."
-  (unless (appkit-app-p owner)
-    (error "Appkit handle owner is invalid: %S" owner))
-  (appkit-app-handles owner))
-
-(defun appkit--set-owner-handles (owner handles)
-  "Set lifecycle HANDLES belonging to App OWNER."
-  (unless (appkit-app-p owner)
-    (error "Appkit handle owner is invalid: %S" owner))
-  (setf (appkit-app-handles owner) handles))
-
 (defun appkit--default-handle-cancel (type object)
   "Cancel lifecycle OBJECT according to TYPE."
   (pcase type
@@ -81,29 +60,27 @@
      (when (functionp object) (funcall object)))))
 
 (cl-defun appkit-register-handle (owner type object &optional cancel-function)
-  "Register lifecycle OBJECT of TYPE under live App OWNER.
+  "Register lifecycle OBJECT of TYPE under live OWNER.
 
-CANCEL-FUNCTION, when non-nil, receives OBJECT."
+OWNER is a canonical App or Generated Surface.  CANCEL-FUNCTION, when non-nil,
+receives OBJECT."
   (unless (appkit-owner-live-p owner)
-    (error "Cannot register handle under unavailable App owner"))
+    (error "Cannot register handle under unavailable owner"))
   (let ((handle
          (appkit-handle--create
-          :type type
-          :object object
-          :cancel cancel-function
-          :owner owner
-          :alive-p t)))
-    (push handle (appkit-app-handles owner))
+          :type type :object object :cancel cancel-function
+          :owner owner :alive-p t)))
+    (appkit-owner-set-handles
+     owner (cons handle (appkit-owner-handles owner)))
     handle))
 
 (defun appkit-retire-handle (handle)
-  "Retire lifecycle HANDLE without invoking its cancellation side effect."
+  "Retire lifecycle HANDLE without invoking cancellation."
   (when (and (appkit-handle-p handle) (appkit-handle-alive-p handle))
     (setf (appkit-handle-alive-p handle) nil)
-    (when-let* ((owner (appkit-handle-owner handle))
-                ((appkit-app-p owner)))
-      (setf (appkit-app-handles owner)
-            (delq handle (appkit-app-handles owner))))
+    (when-let* ((owner (appkit-handle-owner handle)))
+      (appkit-owner-set-handles
+       owner (delq handle (appkit-owner-handles owner))))
     t))
 
 (defun appkit-cancel-handle (handle)
@@ -117,17 +94,16 @@ CANCEL-FUNCTION, when non-nil, receives OBJECT."
               (funcall cancel object)
             (appkit--default-handle-cancel
              (appkit-handle-type handle) object)))
-      (when-let* ((owner (appkit-handle-owner handle))
-                  ((appkit-app-p owner)))
-        (setf (appkit-app-handles owner)
-              (delq handle (appkit-app-handles owner)))))
+      (when-let* ((owner (appkit-handle-owner handle)))
+        (appkit-owner-set-handles
+         owner (delq handle (appkit-owner-handles owner)))))
     t))
 
 (defun appkit-cancel-handles (owner)
-  "Cancel and forget all lifecycle handles owned by App OWNER."
-  (let ((handles (appkit--owner-handles owner))
+  "Cancel and forget all lifecycle handles owned by OWNER."
+  (let ((handles (appkit-owner-handles owner))
         conditions)
-    (appkit--set-owner-handles owner nil)
+    (appkit-owner-set-handles owner nil)
     (appkit--run-cleanup-items
      handles #'appkit-cancel-handle
      (lambda (condition) (push condition conditions)))
