@@ -20,6 +20,7 @@
 ;;; Code:
 
 (require 'appkit-core)
+(require 'appkit-loop)
 (require 'appkit-task-queue)
 (require 'appkit-transaction)
 (require 'appkit-position)
