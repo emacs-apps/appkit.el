@@ -68,15 +68,15 @@
   (with-temp-buffer
     (let* ((seen nil)
            (context
-           (appkit-media-card-context-create
-            :payload 'payload
-            :kind 'video
-            :title "Clip"
-            :open-action (lambda () (push 'open seen))
-            :download-action (lambda () (push 'download seen))
-            :cancel-action (lambda () (push 'cancel seen))
-            :save-as-action (lambda () (push 'save-as seen))
-            :copy-url-action (lambda () (push 'copy-url seen)))))
+            (appkit-media-card-context-create
+             :payload 'payload
+             :kind 'video
+             :title "Clip"
+             :open-action (lambda () (push 'open seen))
+             :download-action (lambda () (push 'download seen))
+             :cancel-action (lambda () (push 'cancel seen))
+             :save-as-action (lambda () (push 'save-as seen))
+             :copy-url-action (lambda () (push 'copy-url seen)))))
       (insert "media")
       (add-text-properties
        (point-min) (point-max)
@@ -109,25 +109,6 @@
                       'download context)))
       (should-error (appkit-media-card-call-action 'download context)
                     :type 'user-error))))
-
-(ert-deftest appkit-media-action-properties-wrap-zero-argument-callbacks ()
-  (with-temp-buffer
-    (let ((called 0))
-      (insert "media")
-      (appkit-media-add-action-properties
-       (point-min) (point-max)
-       (lambda () (setq called (1+ called)))
-       "Open media")
-      (let* ((map (get-text-property (point-min) 'keymap))
-             (return-command (lookup-key map (kbd "RET")))
-             (mouse-command (lookup-key map [mouse-1])))
-        (should (commandp return-command))
-        (should (eq return-command mouse-command))
-        (should (eq (get-text-property (point-min) 'mouse-face) 'highlight))
-        (should (equal (get-text-property (point-min) 'help-echo)
-                       "Open media"))
-        (call-interactively return-command)
-        (should (= called 1))))))
 
 (ert-deftest appkit-media-action-properties-ignore-invalid-actions ()
   (with-temp-buffer

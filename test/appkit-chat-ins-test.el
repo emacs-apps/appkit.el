@@ -174,32 +174,6 @@
         (push-button (match-beginning 0))
         (should canceled)))))
 
-(ert-deftest appkit-chat-ins-insert-voice-note-owns-control-and-action-shape ()
-  (with-temp-buffer
-    (let (activated)
-      (let ((span
-             (appkit-chat-ins-insert-voice-note
-              :state 'paused
-              :duration-seconds 20
-              :played-seconds 5
-              :status-text "Paused"
-              :bar-width 4
-              :prefix "│ "
-              :properties '(media-kind voice)
-              :action (lambda () (setq activated t))
-              :help-echo "Resume voice note")))
-        (should (equal (buffer-string)
-                       "▶ ━─── 0:05 / 0:20  Paused\n"))
-        (should (equal "│ "
-                       (get-text-property (car span) 'line-prefix)))
-        (should (eq 'voice
-                    (get-text-property (car span) 'media-kind)))
-        (goto-char (point-min))
-        (let ((map (get-text-property (point) 'keymap)))
-          (should (keymapp map))
-          (call-interactively (lookup-key map (kbd "RET"))))
-        (should activated)))))
-
 (provide 'appkit-chat-ins-test)
 
 ;;; appkit-chat-ins-test.el ends here

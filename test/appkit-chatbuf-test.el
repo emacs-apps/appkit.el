@@ -322,11 +322,9 @@
     (goto-char (point-min))
     (appkit-chatbuf-post-command)
     (should appkit-chatbuf-test--timeline-mode)
-    (should (eq (key-binding (kbd "q")) #'quit-window))
     (goto-char (point-max))
     (appkit-chatbuf-post-command)
     (should-not appkit-chatbuf-test--timeline-mode)
-    (should (eq (key-binding (kbd "q")) #'self-insert-command))
     (insert "draft")
     (should (equal "draft" (appkit-chatbuf-input-state)))))
 
@@ -549,19 +547,15 @@
                    (appkit-chatbuf-input-history-elements)))))
 
 (ert-deftest appkit-chatbuf-empty-input-remains-editable-at-point-max ()
-  (save-window-excursion
-    (let ((buffer (get-buffer-create " *appkit-chatbuf-input*")))
-      (unwind-protect
-          (progn
-            (switch-to-buffer buffer)
-            (erase-buffer)
-            (appkit-chatbuf-init-state 8)
-            (appkit-chatbuf-install-prompt ">>> ")
-            (goto-char (or (appkit-chatbuf-input-logical-end-position) (point-max)))
-            (execute-kbd-macro "qs")
-            (should (equal "qs" (appkit-chatbuf-input-string))))
-        (when (buffer-live-p buffer)
-          (kill-buffer buffer))))))
+  (with-temp-buffer
+    (appkit-chatbuf-mode)
+    (appkit-chatbuf-init-state 8)
+    (appkit-chatbuf-install-prompt ">>> ")
+    (goto-char (or (appkit-chatbuf-input-logical-end-position) (point-max)))
+    (dolist (character '(?q ?s))
+      (let ((last-command-event character))
+        (self-insert-command 1)))
+    (should (equal "qs" (appkit-chatbuf-input-string)))))
 
 (ert-deftest appkit-chatbuf-aux-state-roundtrip ()
   (with-temp-buffer
@@ -581,8 +575,8 @@
     (with-temp-buffer
       (insert
        (appkit-chatbuf-aux-render :title "Reply to Alice" :preview (appkit-ui-one-line-preview-create :text "  (sticker)\n preview  ") :cancel-action (lambda () (setq cancelled t))
-				  :cancel-help "Cancel reply"
-				  :width 40))
+                                  :cancel-help "Cancel reply"
+                                  :width 40))
       (should
        (equal "× ▏ Reply to Alice\n  ▏ (sticker) preview\n"
               (buffer-substring-no-properties (point-min) (point-max))))

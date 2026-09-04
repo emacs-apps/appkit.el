@@ -391,19 +391,19 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
           (appkit-media-video-session-video-session session)))
     (condition-case error-data
         (let ((inline
-               (video-session-inline-create
-                video-session width height
-                :poster poster :fit fit :buffer buffer
-                :canvas canvas :canvas-width canvas-width
-                :canvas-height canvas-height
-                :destination-x destination-x :destination-y destination-y
-                :visible-function visible-function
-                :alive-function alive-function
-                :activate-function activate-function
-                :close-function
-                (lambda (inline)
-                  (appkit-media--video-inline-finished
-                   surface close-function inline)))))
+                (video-session-inline-create
+                 video-session width height
+                 :poster poster :fit fit :buffer buffer
+                 :canvas canvas :canvas-width canvas-width
+                 :canvas-height canvas-height
+                 :destination-x destination-x :destination-y destination-y
+                 :visible-function visible-function
+                 :alive-function alive-function
+                 :activate-function activate-function
+                 :close-function
+                 (lambda (inline)
+                   (appkit-media--video-inline-finished
+                    surface close-function inline)))))
           (setf (appkit-media-video-inline-inline surface) inline)
           surface)
       ((error quit)
@@ -558,8 +558,10 @@ CLIENT-LABEL, OWNER, BUFFER, and DISPLAY-FUNCTION have the same meanings as in
   "Create one Appkit playback session for canonical video RESOURCE.
 
 CLIENT-LABEL identifies errors and messages.  OWNER limits cache callbacks to a
-live Appkit lifecycle.  CACHE-KEY, CACHE-DIRECTORY, CACHE-UPDATE-FUNCTION, and
-CACHE-POLICY have the same meanings as in `appkit-media-play-video-source'.
+live Appkit lifecycle.  CACHE-KEY and CACHE-DIRECTORY select persistent
+progressive playback storage.  Automatic CACHE-POLICY retains only a complete
+cache; none leaves buffering session-local.  CACHE-UPDATE-FUNCTION receives a
+canonical resource copy after a complete cache is retained.
 MUTED controls the initial player audio state.  LIVE enforces live-stream
 semantics; REQUEST-HEADERS are video transport headers and do not become part
 of RESOURCE identity.  The caller must promptly create an inline or dedicated
@@ -577,12 +579,12 @@ surface, or close the returned session."
       (user-error "%s: invalid video cache policy: %S" label cache-policy))
     (cl-labels
         ((remember-cache
-          (_player local-file)
-          (when (or (null owner) (appkit-owner-live-p owner))
-            (setf (alist-get 'file resource nil nil #'eq) local-file)
-            (when (functionp cache-update-function)
-              (funcall cache-update-function (copy-tree resource)))
-            (message "%s: retained complete video playback cache" label))))
+           (_player local-file)
+           (when (or (null owner) (appkit-owner-live-p owner))
+             (setf (alist-get 'file resource nil nil #'eq) local-file)
+             (when (functionp cache-update-function)
+               (funcall cache-update-function (copy-tree resource)))
+             (message "%s: retained complete video playback cache" label))))
       (cond
        ((appkit-media-file-present-p file)
         (setq source file))
@@ -613,94 +615,23 @@ surface, or close the returned session."
         :cache-file cache-file
         :cache-complete-function cache-complete-function)))))
 
-(cl-defun appkit-media--play-video-resource
-    (resource label
-              &key owner cache-key cache-directory cache-update-function
-              (cache-policy appkit-media-video-cache-policy) live
-              request-headers)
-  "Stream canonical video RESOURCE for LABEL in an Appkit-owned session.
-
-OWNER owns the dedicated buffer.  CACHE-KEY and CACHE-DIRECTORY select the
-persistent target, CACHE-UPDATE-FUNCTION receives a completed resource, and
-CACHE-POLICY controls persistent promotion.  LIVE and REQUEST-HEADERS configure
-the video transport without changing RESOURCE identity."
-  (let (session opened-p)
+(cl-defun appkit-media-play-video-file
+    (path &optional client-label &key owner)
+  "Play local PATH for CLIENT-LABEL, optionally lifecycle-owned by OWNER."
+  (let ((label (or client-label "media")) session opened-p)
+    (unless (appkit-media-file-present-p path)
+      (user-error "%s: local video file does not exist: %s" label path))
     (unwind-protect
         (prog1
             (appkit-media-present-video-session
              (setq session
                    (appkit-media-video-session-create
-                    resource label
-                    :owner owner :cache-key cache-key
-                    :cache-directory cache-directory
-                    :cache-update-function cache-update-function
-                    :cache-policy cache-policy :live live
-                    :request-headers request-headers))
+                    (appkit-media-resource-create :file path :name (file-name-nondirectory path))
+                    label :owner owner))
              label :owner owner :start t)
           (setq opened-p t))
       (unless opened-p
         (appkit-media-video-session-close session)))))
-
-(cl-defun appkit-media-play-video-source
-    (source &optional client-label
-            &key owner cache-key cache-directory cache-update-function
-            (cache-policy appkit-media-video-cache-policy) live
-            request-headers)
-  "Stream local file or HTTPS URL SOURCE through video.el.
-
-Remote playback starts immediately.  LIVE enforces non-seekable live-stream
-semantics.  REQUEST-HEADERS are applied to the playback transport but excluded
-from canonical resource and cache identity.  Under automatic CACHE-POLICY, a
-complete progressive playback cache is retained under CACHE-KEY; `none' leaves
-buffering session-local.  CACHE-DIRECTORY overrides
-`appkit-media-video-cache-directory'.  CACHE-UPDATE-FUNCTION receives the
-canonical resource after a complete cache is retained.  CLIENT-LABEL names the
-viewer, and OWNER owns its buffer.  Explicit downloads use
-`appkit-media-copy-or-download-resource-async' instead."
-  (let ((label (or client-label "media")))
-    (unless (appkit-media--local-or-https-source-p source)
-      (user-error "%s: video source must be a local file or HTTPS URL" label))
-    (appkit-media--play-video-resource
-     (if (appkit-media-file-present-p source)
-         (appkit-media-resource-create
-          :file source :name (file-name-nondirectory source))
-       (appkit-media-resource-create
-        :url source :name (appkit-media-url-filename source)))
-     label
-     :owner owner
-     :cache-key cache-key
-     :cache-directory cache-directory
-     :cache-update-function cache-update-function
-     :cache-policy cache-policy
-     :live live
-     :request-headers request-headers)))
-
-(cl-defun appkit-media-play-video-url
-    (url &optional client-label
-         &key owner cache-key cache-directory cache-update-function
-         (cache-policy appkit-media-video-cache-policy) live request-headers)
-  "Stream video URL for CLIENT-LABEL.
-
-OWNER, CACHE-KEY, CACHE-DIRECTORY, CACHE-UPDATE-FUNCTION, CACHE-POLICY, LIVE,
-and REQUEST-HEADERS have the same meanings as in
-`appkit-media-play-video-source'."
-  (appkit-media-play-video-source
-   url client-label
-   :owner owner
-   :cache-key cache-key
-   :cache-directory cache-directory
-   :cache-update-function cache-update-function
-   :cache-policy cache-policy
-   :live live
-   :request-headers request-headers))
-
-(cl-defun appkit-media-play-video-file
-    (path &optional client-label &key owner)
-  "Play local PATH for CLIENT-LABEL, optionally lifecycle-owned by OWNER."
-  (unless (appkit-media-file-present-p path)
-    (user-error "%s: local video file does not exist: %s"
-                (or client-label "media") path))
-  (appkit-media-play-video-source path client-label :owner owner))
 
 (defun appkit-media--maybe-start-gif-animation (file)
   "Start GIF animation for FILE when its `image-mode' buffer is idle."
@@ -737,59 +668,6 @@ and REQUEST-HEADERS have the same meanings as in
      (lambda () (browse-url url t))
      (format "Open media: %s" url))))
 
-(cl-defun appkit-media-add-open-image-properties
-    (start end resource &key cache-key cache-directory
-           cache-update-function client-label)
-  "Attach browser-free image open handlers between START and END.
-
-RESOURCE follows the canonical appkit media resource shape.  CACHE-KEY,
-CACHE-DIRECTORY, CACHE-UPDATE-FUNCTION, and CLIENT-LABEL are forwarded to
-`appkit-media-open-resource'."
-  (let ((resource (appkit-media-resource-normalize resource)))
-    (when (and (or (appkit-media-file-present-p (alist-get 'file resource))
-                   (appkit-media-url-present-p (alist-get 'url resource)))
-               (< start end))
-      (appkit-media-add-action-properties
-       start end
-       (lambda ()
-         (appkit-media-open-resource
-          resource
-          :kind 'image
-          :cache-key cache-key
-          :cache-directory cache-directory
-          :cache-update-function cache-update-function
-          :client-label client-label))
-       "Open image in Emacs"))))
-
-(cl-defun appkit-media-add-play-video-properties
-    (start end video-source &optional client-label
-           &key owner cache-key cache-directory cache-update-function
-           (cache-policy appkit-media-video-cache-policy) live request-headers)
-  "Attach a video action between START and END.
-
-VIDEO-SOURCE, CLIENT-LABEL, OWNER, CACHE-KEY, CACHE-DIRECTORY,
-CACHE-UPDATE-FUNCTION, CACHE-POLICY, LIVE, and REQUEST-HEADERS are forwarded to
-`appkit-media-play-video-source'."
-  (when (and (appkit-media-url-present-p video-source)
-             (< start end))
-    (appkit-media-add-action-properties
-     start end
-     (lambda ()
-       (appkit-media-play-video-source
-        video-source client-label
-        :owner owner
-        :cache-key cache-key
-        :cache-directory cache-directory
-        :cache-update-function cache-update-function
-        :cache-policy cache-policy
-        :live live
-        :request-headers request-headers))
-     (format "Play video: %s" video-source))))
-
-(defun appkit-media--open-cache-file-base (directory key)
-  "Return cache file base in DIRECTORY for logical KEY."
-  (expand-file-name (md5 (format "%s" key)) directory))
-
 (defun appkit-media-image-cache-existing-file (cache-base)
   "Return an existing image cache file rooted at CACHE-BASE, or nil."
   (seq-find
@@ -813,40 +691,6 @@ CACHE-UPDATE-FUNCTION, CACHE-POLICY, LIVE, and REQUEST-HEADERS are forwarded to
     (set-buffer-multibyte nil)
     (insert-file-contents-literally file nil 0 limit)
     (buffer-string)))
-
-(defun appkit-media--resource-image-cache-key (resource cache-key)
-  "Return a disk-cache key for image RESOURCE and optional CACHE-KEY."
-  (or cache-key
-      (when-let* ((url (alist-get 'url resource)))
-        (format "open-image-url:%s" url))))
-
-(defun appkit-media--cache-image-resource-for-open
-    (resource cache-key cache-directory client-label callback errback)
-  "Cache RESOURCE under CACHE-KEY in CACHE-DIRECTORY.
-
-Pass its local path to CALLBACK, report failures to ERRBACK, and use
-CLIENT-LABEL in synchronous setup errors."
-  (unless (and (stringp cache-directory)
-               (not (string-empty-p cache-directory)))
-    (user-error "%s: image cache directory is required" client-label))
-  (let* ((url (alist-get 'url resource))
-         (key (appkit-media--resource-image-cache-key resource cache-key))
-         (existing
-          (and key
-               (appkit-media-image-cache-existing-file
-                (appkit-media--open-cache-file-base cache-directory key)))))
-    (if existing
-        (funcall callback existing)
-      (unless (appkit-media-url-present-p url)
-        (user-error "%s: image resource has no URL" client-label))
-      (let ((cache-base
-             (appkit-media--open-cache-file-base cache-directory key)))
-        (make-directory cache-directory t)
-        (appkit-media-cache-image-resource-async
-         resource cache-base
-         (lambda (downloaded)
-           (funcall callback downloaded))
-         errback)))))
 
 (defun appkit-media--async-error-text (error-data)
   "Return a readable message for asynchronous ERROR-DATA."
@@ -1227,135 +1071,6 @@ runtime, or nil after synchronous work.  HEADERS defaults to
   (expand-file-name
    (md5 (format "%s" cache-key))
    (expand-file-name "video" cache-directory)))
-
-(defun appkit-media--open-file-cache-target
-    (resource cache-key cache-directory)
-  "Return RESOURCE target for CACHE-KEY in CACHE-DIRECTORY."
-  (unless (and (stringp cache-directory)
-               (not (string-empty-p cache-directory)))
-    (user-error "Media: file cache directory is required"))
-  (let* ((url (alist-get 'url resource))
-         (name (appkit-media-sanitize-filename
-                (or (appkit-media-resource-name resource) "media.bin")))
-         (key (or cache-key (format "open-file-url:%s" url)))
-         (directory (expand-file-name "open" cache-directory)))
-    (expand-file-name
-     (format "%s-%s"
-             (substring (md5 (format "%s" key)) 0 10)
-             name)
-     directory)))
-
-(defun appkit-media--cache-file-resource-for-open
-    (resource cache-key cache-directory callback errback)
-  "Cache RESOURCE under CACHE-KEY in CACHE-DIRECTORY.
-
-Pass its path to CALLBACK, or a reason to ERRBACK."
-  (let ((target
-         (appkit-media--open-file-cache-target
-          resource cache-key cache-directory)))
-    (if (appkit-media-file-present-p target)
-        (funcall callback target)
-      (appkit-media-copy-or-download-resource-async
-       resource target callback errback))))
-
-
-(defun appkit-media--start-owned-open-transfer
-    (owner start success error)
-  "Run START and bind its asynchronous transfer to OWNER.
-
-START receives guarded success and error callbacks.  A dead OWNER cancels the
-transfer, and callbacks arriving after owner death have no visible effect."
-  (unless (or (null owner) (appkit-owner-live-p owner))
-    (user-error "Media owner is no longer live"))
-  (let (transfer lifecycle-handle completed-p)
-    (cl-labels
-        ((finish (callback value)
-           (unless completed-p
-             (setq completed-p t)
-             (when lifecycle-handle
-               (appkit-retire-handle lifecycle-handle))
-             (when (or (null owner) (appkit-owner-live-p owner))
-               (funcall callback value)))))
-      (setq transfer
-            (funcall start
-                     (lambda (value) (finish success value))
-                     (lambda (value) (finish error value))))
-      (when (and owner
-                 (appkit-media-transfer-p transfer)
-                 (not completed-p))
-        (if (or (null owner) (appkit-owner-live-p owner))
-            (condition-case err
-                (setq lifecycle-handle
-                      (appkit-register-handle
-                       owner 'function transfer
-                       #'appkit-media-cancel-transfer))
-              ((error quit)
-               (appkit-media-cancel-transfer transfer)
-               (signal (car err) (cdr err))))
-          (appkit-media-cancel-transfer transfer)))
-      transfer)))
-
-(cl-defun appkit-media-open-resource
-    (resource &key kind cache-key cache-directory cache-update-function
-              (cache-policy appkit-media-video-cache-policy)
-              (client-label "media") owner)
-  "Open canonical RESOURCE according to semantic KIND without a browser.
-
-Images and non-video remote files complete an atomic transfer before opening.
-Videos stream immediately; automatic CACHE-POLICY retains their progressive
-cache only if complete, while `none' keeps it session-local.  CACHE-DIRECTORY
-and CACHE-KEY identify reusable storage.  CACHE-UPDATE-FUNCTION receives a copy
-after a local cache is known, CLIENT-LABEL prefixes messages, and OWNER owns
-the transfer or viewer buffer."
-  (let* ((resource (appkit-media-resource-normalize resource))
-         (kind (appkit-media-resource-kind resource kind))
-         (file (alist-get 'file resource)))
-    (cl-labels
-        ((remember (local-file)
-           (setf (alist-get 'file resource nil nil #'eq) local-file)
-           (when (functionp cache-update-function)
-             (funcall cache-update-function (copy-tree resource)))
-           local-file)
-         (open-local (local-file)
-           (when (or (null owner) (appkit-owner-live-p owner))
-             (let ((remembered (remember local-file)))
-               (when (or (null owner) (appkit-owner-live-p owner))
-                 (appkit-media-open-file remembered))))))
-      (pcase kind
-        ('video
-         (appkit-media--play-video-resource
-          resource client-label
-          :owner owner
-          :cache-key cache-key
-          :cache-directory cache-directory
-          :cache-update-function cache-update-function
-          :cache-policy cache-policy))
-        ('image
-         (if (appkit-media-file-present-p file)
-             (open-local file)
-           (appkit-media--start-owned-open-transfer
-            owner
-            (lambda (success error)
-              (appkit-media--cache-image-resource-for-open
-               resource cache-key cache-directory client-label success error))
-            #'open-local
-            (lambda (reason)
-              (message "%s: failed to open image: %s"
-                       client-label reason)))
-           nil))
-        (_
-         (if (appkit-media-file-present-p file)
-             (open-local file)
-           (appkit-media--start-owned-open-transfer
-            owner
-            (lambda (success error)
-              (appkit-media--cache-file-resource-for-open
-               resource cache-key cache-directory success error))
-            #'open-local
-            (lambda (reason)
-              (message "%s: failed to open media: %s"
-                       client-label reason)))
-           nil))))))
 
 (provide 'appkit-media-resource)
 

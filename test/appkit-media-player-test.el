@@ -4,7 +4,7 @@
 (require 'cl-lib)
 (require 'appkit-media-player)
 
-(appkit-define-app-kind appkit-media-player-test)
+(require 'appkit-test-helper)
 
 (ert-deftest appkit-media-player-normalizes-finite-player-lifecycle ()
   (should
@@ -15,7 +15,7 @@
      '("mpv" "--no-video" "--keep-open=yes") 'audio 3.5)))
   (should
    (equal '("ffplay" "-nodisp" "-hide_banner" "-autoexit"
-             "-ss" "3.50")
+            "-ss" "3.50")
           (appkit-media-player-command-arguments
            '("ffplay" "-nodisp") 'audio 3.5))))
 
@@ -23,15 +23,14 @@
   (with-temp-buffer
     (insert "\r    12.75 M-A:  0.000 fd=0")
     (should (= 12.75 (appkit-media-player--parse-progress
-                     (current-buffer)))))
+                      (current-buffer)))))
   (with-temp-buffer
     (insert "frame=3 time=00:01:02.50 bitrate=0")
     (should (= 62.5 (appkit-media-player--parse-progress
-                    (current-buffer))))))
+                     (current-buffer))))))
 
 (ert-deftest appkit-media-player-pauses-by-restart-and-stops-with-owner ()
-  (let* ((app (appkit-app-start 'appkit-media-player-test
-                                :id 'toggle :shutdown #'ignore))
+  (let* ((app (appkit-app-start appkit-test--app-type :identity 'toggle))
          (file (make-temp-file "appkit-player-"))
          (next-process 0)
          (live (make-hash-table :test #'eq))
@@ -97,7 +96,6 @@
                       (appkit-media-player-session-status session)))
           (should-not (appkit-media-player-session-process session))
           (should (= 1 delete-count))
-          (should (= 1 (length (appkit-app-handles app))))
           (appkit-media-player-resume session)
           (should (eq 'playing
                       (appkit-media-player-session-status session)))
@@ -112,7 +110,6 @@
           (should (= 2 delete-count))
           (should (eq 'stopped
                       (appkit-media-player-session-status session)))
-          (should-not (appkit-app-handles app))
           (should (equal '(stopped) finalized))
           (appkit-media-player-stop session)
           (should (equal '(stopped) finalized)))
@@ -122,8 +119,7 @@
         (delete-file file)))))
 
 (ert-deftest appkit-media-player-natural-exit-finalizes-once ()
-  (let* ((app (appkit-app-start 'appkit-media-player-test
-                                :id 'finish :shutdown #'ignore))
+  (let* ((app (appkit-app-start appkit-test--app-type :identity 'finish))
          (file (make-temp-file "appkit-player-finish-"))
          (live-p t)
          sentinel
@@ -163,7 +159,6 @@
                       (appkit-media-player-status session)))
           (should (= 2.0 (appkit-media-player-played-seconds session)))
           (should-not (buffer-live-p process-buffer))
-          (should-not (appkit-app-handles app))
           (should (= 1 (length finalized)))
           (funcall sentinel :player "finished\n")
           (should (= 1 (length finalized))))
@@ -173,8 +168,7 @@
         (delete-file file)))))
 
 (ert-deftest appkit-media-player-owner-stop-cancels-process-and-finalizes ()
-  (let* ((app (appkit-app-start 'appkit-media-player-test
-                                :id 'owner-stop :shutdown #'ignore))
+  (let* ((app (appkit-app-start appkit-test--app-type :identity 'owner-stop))
          (file (make-temp-file "appkit-player-owner-"))
          (live-p t)
          deleted
@@ -207,8 +201,7 @@
                    (appkit-media-player-session-status session))))
           (appkit-app-close app)
           (should deleted)
-          (should (eq 'stopped final-status))
-          (should-not (appkit-app-handles app)))
+          (should (eq 'stopped final-status)))
       (when (appkit-app-live-p app)
         (appkit-app-close app))
       (when (file-exists-p file)

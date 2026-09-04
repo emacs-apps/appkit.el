@@ -187,6 +187,45 @@
         (should-not
          (appkit-scroll-observer-deferred-check-handle observer))))))
 
+(ert-deftest appkit-scroll-observer-defers-render-pass-callbacks-and-revokes-on-stop ()
+  (appkit-test-with-surface
+    (let* ((surface appkit-test-surface)
+           (buffer appkit-test-buffer)
+           (window 'appkit-scroll-window)
+           (scheduled 0) (calls 0)
+           callback callback-arguments posted observer)
+      (setq observer
+            (appkit-scroll-observer-install
+             surface :end-function
+             (lambda (&rest _)
+               (cl-incf calls)
+               (setq posted (appkit-surface-post surface 'next-page)))))
+      (setf (appkit-generated-renderer-render (appkit-surface-renderer surface))
+            (lambda (&rest _)
+              (appkit-scroll-observer-check observer window)
+              nil))
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (candidate) (eq candidate window)))
+                ((symbol-function 'window-buffer) (lambda (_window) buffer))
+                ((symbol-function 'get-buffer-window-list) (lambda (&rest _) (list window)))
+                ((symbol-function 'appkit-scroll-window-visible-range)
+                 (lambda (&rest _) (cons (point-min) (point-max))))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (_delay _repeat function &rest arguments)
+                   (cl-incf scheduled)
+                   (setq callback function callback-arguments arguments)
+                   'deferred-timer)))
+        (appkit-surface-send surface 'refresh)
+        (appkit-surface-send surface 'refresh)
+        (should (= calls 0))
+        (should (= scheduled 1))
+        (apply callback callback-arguments)
+        (should (= calls 1))
+        (should (eq posted 'enqueued))
+        (appkit-surface-stop surface)
+        (apply callback callback-arguments)
+        (should (= calls 1))))))
+
 (provide 'appkit-scroll-test)
 
 ;;; appkit-scroll-test.el ends here

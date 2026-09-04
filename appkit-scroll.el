@@ -105,7 +105,8 @@ composers when required."
   "Run OBSERVER callbacks for live WINDOW.
 
 Return `checked' after a reliable measurement, `unmeasured' when WINDOW is
-eligible but has not been redisplayed reliably, and nil otherwise."
+eligible but has not been redisplayed reliably, deferred during an active
+client pass, and nil otherwise."
   (let ((owner (appkit-scroll-observer-owner observer))
         (buffer (appkit-scroll-observer-buffer observer)))
     (when (and (appkit-scroll-observer-active-p observer)
@@ -114,31 +115,35 @@ eligible but has not been redisplayed reliably, and nil otherwise."
                (buffer-live-p buffer)
                (window-live-p window)
                (eq (window-buffer window) buffer))
-      (with-current-buffer buffer
-        (let* ((start
-                (appkit-scroll-observer--boundary
-                 (appkit-scroll-observer-start-boundary-function observer)
-                 (point-min)))
-               (end
-                (appkit-scroll-observer--boundary
-                 (appkit-scroll-observer-end-boundary-function observer)
-                 (point-max)))
-               (range
-                (appkit-scroll-window-visible-range window start end)))
-          (if (not range)
-              'unmeasured
-            (setf (appkit-scroll-observer-checking-p observer) t)
-            (unwind-protect
-                (progn
-                  (when-let* ((function
-                               (appkit-scroll-observer-start-function
-                                observer)))
-                    (funcall function window (car range) start))
-                  (when-let* ((function
-                               (appkit-scroll-observer-end-function observer)))
-                    (funcall function window (cdr range) end)))
-              (setf (appkit-scroll-observer-checking-p observer) nil))
-            'checked))))))
+      (if appkit-loop--active-loop
+          (progn
+            (appkit-scroll-observer--defer-check observer)
+            'deferred)
+        (with-current-buffer buffer
+          (let* ((start
+                  (appkit-scroll-observer--boundary
+                   (appkit-scroll-observer-start-boundary-function observer)
+                   (point-min)))
+                 (end
+                  (appkit-scroll-observer--boundary
+                   (appkit-scroll-observer-end-boundary-function observer)
+                   (point-max)))
+                 (range
+                  (appkit-scroll-window-visible-range window start end)))
+            (if (not range)
+                'unmeasured
+              (setf (appkit-scroll-observer-checking-p observer) t)
+              (unwind-protect
+                  (progn
+                    (when-let* ((function
+                                 (appkit-scroll-observer-start-function
+                                  observer)))
+                      (funcall function window (car range) start))
+                    (when-let* ((function
+                                 (appkit-scroll-observer-end-function observer)))
+                      (funcall function window (cdr range) end)))
+                (setf (appkit-scroll-observer-checking-p observer) nil))
+              'checked)))))))
 
 (defun appkit-scroll-observer--run-deferred-check (observer)
   "Run OBSERVER's one deferred post-redisplay measurement."
@@ -207,7 +212,7 @@ stale visible edge."
 
 (cl-defun appkit-scroll-observer-install
     (surface &key start-boundary-function end-boundary-function
-          start-function end-function)
+             start-function end-function)
   "Install and return a window-edge observer owned by SURFACE.
 
 START-BOUNDARY-FUNCTION and END-BOUNDARY-FUNCTION run in SURFACE's buffer and

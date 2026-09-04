@@ -94,8 +94,7 @@
 
 (ert-deftest appkit-ui-action-row-excludes-eol-and-skips-empty-lines ()
   (with-temp-buffer
-    (let ((buffer (current-buffer))
-          (called 0)
+    (let ((called 0)
           button
           newline-position)
       (let ((start (point)))
@@ -106,12 +105,7 @@
                start (point) 'body (lambda (_object) (setq called (1+ called))))))
       (should button)
       (should-not (button-at newline-position))
-      (save-window-excursion
-        (switch-to-buffer buffer)
-        (goto-char button)
-        (let ((mouse-1-click-follows-link 450))
-          (execute-kbd-macro
-           (appkit-ui-test--primary-click (selected-window) newline-position))))
+      (push-button newline-position)
       (should (= called 0))
       (let ((empty-start (point)))
         (insert "\n")

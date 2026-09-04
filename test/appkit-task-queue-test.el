@@ -52,8 +52,8 @@
          arguments))
 
 (ert-deftest appkit-task-queue-preserves-fifo-and-limit ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 2))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 2))
            (harness (appkit-task-queue-test--make-harness)))
       (dotimes (key 4)
         (should (appkit-task-queue-test--submit queue harness key)))
@@ -75,8 +75,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-drains-thirty-two-tasks-at-limit-four ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 4))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 4))
            (harness (appkit-task-queue-test--make-harness)))
       (dotimes (key 32)
         (appkit-task-queue-test--submit queue harness key))
@@ -94,8 +94,8 @@
       (should (= (appkit-task-queue-total-count queue) 0)))))
 
 (ert-deftest appkit-task-queue-deduplicates-active-and-waiting-keys ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness)))
       (should (appkit-task-queue-test--submit queue harness '(active 1)))
       (should (appkit-task-queue-test--submit queue harness '(waiting 1)))
@@ -108,8 +108,8 @@
       (should (appkit-task-queue-pending-p queue '(waiting 1))))))
 
 (ert-deftest appkit-task-queue-supports-synchronous-completion ()
-  (appkit-test-with-view
-    (let ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let ((queue (appkit-task-queue-create (appkit-current-surface) 1))
           (finishes 0)
           result
           (late-cancellations 0))
@@ -132,8 +132,8 @@
       (should (= late-cancellations 0)))))
 
 (ert-deftest appkit-task-queue-ignores-duplicate-and-stale-completions ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness))
            old-callback new-callback)
       (appkit-task-queue-test--submit queue harness 'same)
@@ -154,8 +154,8 @@
                      '((same first) (same second)))))))
 
 (ert-deftest appkit-task-queue-finish-error-releases-and-pumps ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness))
            (finish-runs 0)
            first-callback)
@@ -178,8 +178,8 @@
       (appkit-task-queue-test--complete harness 'second))))
 
 (ert-deftest appkit-task-queue-finish-quit-releases-and-pumps ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness))
            first-callback)
       (appkit-task-queue-test--submit
@@ -201,8 +201,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-warns-when-pump-also-fails-after-finish ()
-  (appkit-test-with-view
-    (let ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let ((queue (appkit-task-queue-create (appkit-current-surface) 1))
           callback
           primary-error
           warnings)
@@ -227,8 +227,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-starter-error-releases-and-pumps ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness))
            (bad-starts 0))
       (appkit-task-queue-test--submit queue harness 'blocker)
@@ -250,8 +250,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-starter-quit-releases-slot ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness)))
       (should
        (eq 'quit
@@ -271,8 +271,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-cancels-waiting-and-active-tasks ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness))
            (active-cancellations 0)
            active-callback)
@@ -299,11 +299,11 @@
       (appkit-task-queue-test--complete harness 'next))))
 
 (ert-deftest appkit-task-queue-cancel-keys-mutates-before-cancel-and-pumps-once ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 2))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 2))
            (harness (appkit-task-queue-test--make-harness))
            (targets '(drop-waiting-1 drop-active
-                     drop-waiting-2 drop-active))
+                      drop-waiting-2 drop-active))
            (cancellations 0)
            pending-at-cancel
            drop-callback
@@ -343,8 +343,8 @@
       (should (= (appkit-task-queue-queued-count queue) 0)))))
 
 (ert-deftest appkit-task-queue-cancel-keys-finishes-after-cancellation-quit ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 2))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 2))
            (harness (appkit-task-queue-test--make-harness))
            (first-cancellations 0)
            (second-cancellations 0))
@@ -374,8 +374,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-cancel-keys-finishes-after-cancellation-throw ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 2))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 2))
            (harness (appkit-task-queue-test--make-harness))
            (throwing-cancellations 0)
            (sibling-cancellations 0))
@@ -403,8 +403,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-cancel-closes-all-work-exactly-once ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 2))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 2))
            (harness (appkit-task-queue-test--make-harness))
            (cancellations 0)
            callbacks)
@@ -429,8 +429,8 @@
       (should-not (appkit-task-queue-test--harness-finishes harness)))))
 
 (ert-deftest appkit-task-queue-cancel-retires-everything-after-quit ()
-  (appkit-test-with-view
-    (let* ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let* ((view (appkit-current-surface))
            (queue (appkit-task-queue-create view 2))
            (harness (appkit-task-queue-test--make-harness))
            (quit-cancellations 0)
@@ -455,12 +455,11 @@
       (should (= other-cancellations 1))
       (should-not (appkit-task-queue-live-p queue))
       (should-not (appkit-task-queue-pending-p queue))
-      (should-not (appkit-handle-alive-p lifecycle-handle))
-      (should-not (memq lifecycle-handle (appkit-view-handles view))))))
+      (should-not (appkit-handle-alive-p lifecycle-handle)))))
 
 (ert-deftest appkit-task-queue-cancel-retires-everything-after-throw ()
-  (appkit-test-with-view
-    (let* ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let* ((view (appkit-current-surface))
            (queue (appkit-task-queue-create view 2))
            (harness (appkit-task-queue-test--make-harness))
            (throwing-cancellations 0)
@@ -485,25 +484,24 @@
       (should (= sibling-cancellations 1))
       (should-not (appkit-task-queue-live-p queue))
       (should-not (appkit-task-queue-pending-p queue))
-      (should-not (appkit-handle-alive-p lifecycle-handle))
-      (should-not (memq lifecycle-handle (appkit-view-handles view))))))
+      (should-not (appkit-handle-alive-p lifecycle-handle)))))
 
 (ert-deftest appkit-task-queue-cancels-handle-returned-by-starter ()
-  (appkit-test-with-view
-    (let ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let ((queue (appkit-task-queue-create (appkit-current-surface) 1))
           (cancellations 0))
       (appkit-task-queue-submit
        queue 'handle
        (lambda (_complete)
          (appkit-register-handle
-          (appkit-current-view) 'function
+          (appkit-current-surface) 'function
           (lambda () (setq cancellations (1+ cancellations))))))
       (should (appkit-task-queue-cancel-key queue 'handle))
       (should (= cancellations 1)))))
 
 (ert-deftest appkit-task-queue-retires-handle-on-asynchronous-completion ()
-  (appkit-test-with-view
-    (let* ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let* ((view (appkit-current-surface))
            (queue (appkit-task-queue-create view 1))
            (cancellations 0)
            (finishes 0)
@@ -520,18 +518,16 @@
          handle)
        :finish (lambda (&rest _arguments) (setq finishes (1+ finishes))))
       (should (appkit-handle-alive-p handle))
-      (should (memq handle (appkit-view-handles view)))
       (funcall callback 'done)
       (should (= finishes 1))
       (should-not (appkit-handle-alive-p handle))
-      (should-not (memq handle (appkit-view-handles view)))
       (should (= cancellations 0))
-      (appkit-kill-view view)
+      (appkit-surface-stop view)
       (should (= cancellations 0)))))
 
 (ert-deftest appkit-task-queue-retires-late-handle-on-sync-completion ()
-  (appkit-test-with-view
-    (let* ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let* ((view (appkit-current-surface))
            (queue (appkit-task-queue-create view 1))
            (cancellations 0)
            handle)
@@ -545,14 +541,13 @@
          (funcall complete 'done)
          handle))
       (should-not (appkit-handle-alive-p handle))
-      (should-not (memq handle (appkit-view-handles view)))
       (should (= cancellations 0))
-      (appkit-kill-view view)
+      (appkit-surface-stop view)
       (should (= cancellations 0)))))
 
 (ert-deftest appkit-task-queue-retires-late-handle-on-sync-finisher-error ()
-  (appkit-test-with-view
-    (let* ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let* ((view (appkit-current-surface))
            (queue (appkit-task-queue-create view 1))
            (cancellations 0)
            handle)
@@ -570,15 +565,14 @@
        :type 'error)
       (should (appkit-handle-p handle))
       (should-not (appkit-handle-alive-p handle))
-      (should-not (memq handle (appkit-view-handles view)))
       (should (= cancellations 0))
       (should-not (appkit-task-queue-pending-p queue))
-      (appkit-kill-view view)
+      (appkit-surface-stop view)
       (should (= cancellations 0)))))
 
 (ert-deftest appkit-task-queue-cancels-late-closure-after-reentrant-cancel ()
-  (appkit-test-with-view
-    (let ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let ((queue (appkit-task-queue-create (appkit-current-surface) 1))
           (cancellations 0))
       (appkit-task-queue-submit
        queue 'late
@@ -589,25 +583,25 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-cancels-late-handle-after-owner-kill ()
-  (appkit-test-with-view
-    (let ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let ((queue (appkit-task-queue-create (appkit-current-surface) 1))
           (cancellations 0))
       (appkit-task-queue-submit
        queue 'late
        (lambda (_complete)
          (let ((handle
                 (appkit-register-handle
-                 (appkit-current-view) 'function
+                 (appkit-current-surface) 'function
                  (lambda () (setq cancellations (1+ cancellations))))))
-           (appkit-kill-view (appkit-current-view))
+           (appkit-surface-stop (appkit-current-surface))
            handle)))
       (should (= cancellations 1))
       (should-not (appkit-task-queue-live-p queue))
       (should (= (appkit-task-queue-total-count queue) 0)))))
 
 (ert-deftest appkit-task-queue-view-kill-cleans-up-and-stales-callback ()
-  (appkit-test-with-view
-    (let* ((view (appkit-current-view))
+  (appkit-test-with-surface
+    (let* ((view (appkit-current-surface))
            (queue (appkit-task-queue-create view 1))
            (harness (appkit-task-queue-test--make-harness))
            (cancellations 0)
@@ -620,7 +614,7 @@
             (gethash 'active
                      (appkit-task-queue-test--harness-callbacks harness)))
       (appkit-task-queue-test--submit queue harness 'waiting)
-      (appkit-kill-view view)
+      (appkit-surface-stop view)
       (should-not (appkit-task-queue-live-p queue))
       (should (= cancellations 1))
       (should (= (appkit-task-queue-total-count queue) 0))
@@ -628,7 +622,7 @@
       (should-not (appkit-task-queue-test--harness-finishes harness)))))
 
 (ert-deftest appkit-task-queue-app-owner-cleans-up-on-stop ()
-  (let* ((app (appkit-app-start 'appkit-test :id 'queue-owner))
+  (let* ((app (appkit-app-start appkit-test--app-type :identity 'queue-owner))
          (queue (appkit-task-queue-create app 1))
          (cancellations 0)
          finishes
@@ -647,8 +641,8 @@
     (should-not finishes)))
 
 (ert-deftest appkit-task-queue-updates-live-concurrency-limit ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness)))
       (dotimes (key 4)
         (appkit-task-queue-test--submit queue harness key))
@@ -669,8 +663,8 @@
       (should-not (appkit-task-queue-pending-p queue)))))
 
 (ert-deftest appkit-task-queue-enumerates-and-cancels-nil-key ()
-  (appkit-test-with-view
-    (let* ((queue (appkit-task-queue-create (appkit-current-view) 1))
+  (appkit-test-with-surface
+    (let* ((queue (appkit-task-queue-create (appkit-current-surface) 1))
            (harness (appkit-task-queue-test--make-harness)))
       (appkit-task-queue-test--submit queue harness 'first)
       (appkit-task-queue-test--submit queue harness nil)

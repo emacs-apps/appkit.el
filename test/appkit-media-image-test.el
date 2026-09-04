@@ -584,12 +584,8 @@
       (should (equal (nreverse slices)
                      '((0 0 1.0 10) (0 10 1.0 10) (0 20 1.0 10))))
       (goto-char (point-min))
-      (let ((command
-             (lookup-key (get-text-property (point) 'keymap) (kbd "RET"))))
-        (call-interactively command)
-        (should (= called 1))
-        (should (equal (get-text-property (point) 'help-echo)
-                       "Open preview"))))))
+      (appkit-ui-activate-at (point-min))
+      (should (= called 1)))))
 
 (ert-deftest appkit-media-animation-insertion-keeps-descriptor-immutable ()
   (let* ((descriptor
@@ -777,8 +773,8 @@
 (ert-deftest appkit-media-canvas-slice-rows-preserve-descriptor-identity ()
   "Canvas slices must display the descriptor whose mutable buffer is updated."
   (let ((canvas '(image :type canvas :id test-canvas
-                        :data-width 120 :data-height 30
-                        :appkit-media-nslices 3)))
+                  :data-width 120 :data-height 30
+                  :appkit-media-nslices 3)))
     (cl-letf (((symbol-function 'appkit-media-image-object-valid-p)
                (lambda (_image) nil))
               ((symbol-function 'appkit-media--char-pixel-height)

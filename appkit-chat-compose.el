@@ -25,7 +25,7 @@
 (require 'appkit-core)
 (require 'appkit-ui)
 
-(appkit-define-app-kind appkit-chat-compose)
+(require 'appkit-surface)
 
 (defvar-local appkit-chat-compose--items nil
   "Committed compose items as plists with `:id' and `:text'.")
@@ -39,8 +39,8 @@
 (defvar-local appkit-chat-compose--serial 0
   "Serial used to assign stable compose item identifiers.")
 
-(defvar-local appkit-chat-compose--owned-app nil
-  "Appkit app started for this compose buffer, or nil when the client owns it.")
+(defvar-local appkit-chat-compose--surface nil
+  "Exact compose Surface, retained after stop to reject stale refresh requests.")
 
 (defvar-local appkit-chat-compose-context-function nil
   "Function returning generated compose context text, or nil.")
@@ -184,7 +184,9 @@ occupies no frame text."
   "Replace the complete chat-compose draft with ITEMS.
 
 Each item is a plist with optional `:text' and client-owned metadata.  The last
-item becomes the live composer input; earlier items become generated rows."
+item becomes the live composer input; earlier items become generated rows.
+Programmatic replacement preserves the current source generation and operation;
+use `appkit-compose-reset' explicitly to discard the compose session."
   (unless (listp items)
     (error "Appkit chat compose items must be a list: %S" items))
   (let* ((copies
@@ -202,7 +204,7 @@ item becomes the live composer input; earlier items become generated rows."
       (when (appkit-chatbuf-input-start-position)
         (appkit-chatbuf-input-set-text (or (plist-get last :text) "")))
       (appkit-chat-compose-refresh))
-    (appkit-compose-reset :generation 0)
+    (set-buffer-modified-p nil)
     (appkit-chat-compose-items)))
 
 (defun appkit-chat-compose-items ()
@@ -230,7 +232,6 @@ merged into the edited item, or appended as a new item."
         (push item items))
       (setq index (1+ index)))
     (nreverse items)))
-
 
 (defun appkit-chat-compose-item-index-at-point ()
   "Return the committed item index at point, or nil."
@@ -391,58 +392,76 @@ automatic separators between header, footer, and prompt."
                    (appkit-chat-compose--input-text)
                    "")))
 
-(defun appkit-chat-compose--ensure-view (app)
-  "Attach a compose view to the current buffer and return it.
+(defun appkit-chat-compose--initialize-mode ()
+  "Preserve a client-derived compose mode, initializing a fresh host otherwise."
+  (when-let* ((surface (appkit-current-surface)))
+    (unless (eq (appkit-surface-type-name (appkit-surface-type surface))
+                'appkit-chat-compose)
+      (error "Buffer already owns another Generated Surface")))
+  (unless (derived-mode-p 'appkit-chat-compose-mode)
+    (appkit-chat-compose-mode)))
 
-APP is an optional live appkit app.  When it is nil, start a buffer-owned
-compose app."
-  (or (and (appkit-view-live-p (appkit-current-view))
-           (appkit-current-view))
-      (let* ((owned (null app))
-             (target (or app
-                         (appkit-app-start
-                          'appkit-chat-compose
-                          :id (intern (format "compose-%x"
-                                              (sxhash-eq (current-buffer))))))))
-        (when owned
-          (setq-local appkit-chat-compose--owned-app target))
-        (appkit-attach-view
-         :app target
-         :id (list 'compose (intern (format "b%x" (sxhash-eq (current-buffer)))))
-         :mode major-mode
-         :sync-function #'appkit-chat-compose-refresh))))
+(defconst appkit-chat-compose--surface-type
+  (appkit-surface-type-create
+   :name 'appkit-chat-compose
+   :mode #'appkit-chat-compose--initialize-mode
+   :init (lambda (_context _input) (appkit-next :model nil :render t))
+   :update (lambda (_context model message)
+             (unless (eq message 'refresh)
+               (error "Unsupported compose Surface message: %S" message))
+             (appkit-next :model model :render t))
+   :renderer-factory #'appkit-chat-compose--renderer))
 
-(defun appkit-chat-compose--stop-owned-app ()
-  "Stop the compose app started for the current buffer, if any."
-  (when (appkit-app-live-p appkit-chat-compose--owned-app)
-    (appkit-app-close appkit-chat-compose--owned-app))
-  (setq-local appkit-chat-compose--owned-app nil))
+(defun appkit-chat-compose--renderer (_surface)
+  "Create the renderer for the actual editable compose host."
+  (appkit-generated-renderer-create
+   :mount (lambda (_surface _app-read-view _model)
+            (appkit-chat-timeline-ensure
+             :printer #'appkit-chat-compose--print-row
+             :anchor-property 'appkit-chat-compose-item-id))
+   :merge (lambda (_old new) new)
+   :render #'appkit-chat-compose--render
+   :recover nil
+   :unmount #'ignore))
 
-(defun appkit-chat-compose-refresh ()
-  "Refresh generated chat-compose presentation without rewriting live input."
+(defun appkit-chat-compose--ensure-surface (app)
+  "Mount the current compose buffer under APP, or as a standalone Surface."
+  (if-let* ((surface (appkit-current-surface)))
+      (progn
+        (unless (eq (appkit-surface-type-name (appkit-surface-type surface))
+                    'appkit-chat-compose)
+          (error "Buffer already owns another Generated Surface"))
+        (when (and app (not (eq app (appkit-surface-app surface))))
+          (error "Compose Surface already belongs to another App"))
+        (setq-local appkit-chat-compose--surface surface))
+    (setq-local appkit-chat-compose--surface
+                (appkit-open-generated-surface
+                 appkit-chat-compose--surface-type
+                 :app app :identity (and app (list 'compose (current-buffer)))
+                 :buffer (current-buffer)))))
+
+(defun appkit-chat-compose--render (_surface _app-read-view _model _request)
+  "Render generated compose rows while preserving the live editor input."
   (appkit-compose-without-tracking
-    (appkit-chat-compose--ensure-view nil)
-    (unless (appkit-chat-timeline-live-p)
-      (appkit-chat-timeline-ensure
-       :printer #'appkit-chat-compose--print-row
-       :anchor-property 'appkit-chat-compose-item-id))
     (appkit-chat-timeline-sync
      (appkit-chat-timeline-project
       (appkit-chat-compose--timeline-entries)
-      (lambda (entry)
-        (plist-get entry :id))))
-    (condition-case _
-        (appkit-chat-timeline-set-frame
-         (appkit-chat-compose--frame-header)
-         (appkit-chat-compose--frame-footer)
-         :bind-input-function #'appkit-chat-compose--bind-composer
-         :composer-visible-p t)
-      (error
-       (appkit-chat-compose--bind-composer)))
-    (setq-local header-line-format
-                '(:eval (appkit-chat-compose--header-line)))
-    (force-mode-line-update)
-    (appkit-chat-compose-body-region-bounds)))
+      (lambda (entry) (plist-get entry :id))))
+    (appkit-chat-timeline-set-frame
+     (appkit-chat-compose--frame-header)
+     (appkit-chat-compose--frame-footer)
+     :bind-input-function #'appkit-chat-compose--bind-composer
+     :composer-visible-p t)
+    (setq-local header-line-format '(:eval (appkit-chat-compose--header-line)))
+    (force-mode-line-update))
+  nil)
+
+(defun appkit-chat-compose-refresh ()
+  "Commit a compose refresh without rewriting live input or reviving a stopped host."
+  (if appkit-chat-compose--surface
+      (appkit-surface-send appkit-chat-compose--surface 'refresh)
+    (appkit-chat-compose--ensure-surface nil))
+  (appkit-chat-compose-body-region-bounds))
 
 (defun appkit-chat-compose-display-string ()
   "Return visible compose text, including header-line chrome."
@@ -568,7 +587,7 @@ compose app."
           parts-function footer-function)
   "Configure generated compose callbacks and refresh the current buffer.
 
-APP is an optional live appkit app that should own the compose view.
+APP is an optional live appkit app that should own the compose Surface.
 CONTEXT-FUNCTION returns a context string.  STATUS-FIELDS-FUNCTION returns a
 list of field plists with `:label', `:value', and optional `:action'.
 ATTACHMENTS-FUNCTION returns an attachment-section plist for a single part.
@@ -585,12 +604,13 @@ all protocol semantics and may be nil when a section is not needed."
       (when (and function (not (functionp function)))
         (error "Appkit chat compose %s callback is not callable: %S"
                (car entry) function))))
+  (appkit-chat-compose--initialize-mode)
   (setq-local appkit-chat-compose-context-function context-function
               appkit-chat-compose-status-fields-function status-fields-function
               appkit-chat-compose-attachments-function attachments-function
               appkit-chat-compose-parts-function parts-function
               appkit-chat-compose-footer-function footer-function)
-  (appkit-chat-compose--ensure-view app)
+  (appkit-chat-compose--ensure-surface app)
   (appkit-chatbuf-use-timeline-mode #'appkit-chat-compose-timeline-mode)
   (appkit-chat-compose-refresh))
 
@@ -608,8 +628,7 @@ composer holds the current uncommitted or in-edit body."
   (setq-local appkit-chat-compose--serial 0)
   (appkit-compose-setup
    :snapshot-function #'appkit-chat-compose-items
-   :source-bounds-function #'appkit-chatbuf-input-region-bounds)
-  (add-hook 'kill-buffer-hook #'appkit-chat-compose--stop-owned-app nil t))
+   :source-bounds-function #'appkit-chatbuf-input-region-bounds))
 
 (provide 'appkit-chat-compose)
 

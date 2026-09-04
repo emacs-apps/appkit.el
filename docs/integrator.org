@@ -81,7 +81,7 @@ frontier.
 ** Child compose editors
 
 Use ~appkit-compose-edit-buffer~ when one client-owned string needs a temporary
-native major-mode editor.  Pass the exact live app/view owner and a content-free
+native major-mode editor.  Pass the exact live App/Surface owner and a content-free
 buffer name.  Appkit owns recursive finish/cancel interaction and buffer
 lifecycle only; language selection, validation rules, structured-object
 insertion, and wire encoding remain client responsibilities.
@@ -99,6 +99,16 @@ draft with ~appkit-chat-compose-set-items~ and read it with
 ~appkit-chat-compose-items~; do not mirror that sequence in another buffer-local
 variable.  Status fields use the generic ~appkit-compose-*~ presentation
 functions.
+
+Pass the owning App to ~appkit-chat-compose-setup~ with ~:app~.  The editor uses
+a Generated Surface without replacing a client mode derived from
+~appkit-chat-compose-mode~.  Stopping that Surface preserves its buffer and
+draft, but revokes runtime work; refreshing it does not create a replacement App.
+
+~appkit-chat-compose-set-items~ installs a programmatic draft snapshot without
+resetting its source generation or active compose operation.  Persisting uploaded
+attachment IDs or a confirmed thread prefix therefore does not cancel publication.
+Use ~appkit-compose-reset~ explicitly when discarding the compose session.
 
 Part bodies remain plain strings in Appkit 0.3.0; the chat-compose item merge
 removes text properties.  Use the property-preserving ~appkit-chatbuf~ input
@@ -270,14 +280,27 @@ Closing either surface does not interrupt the other; video.el closes the player
 after its last inline or dedicated lease disappears.  A client's optional
 ~:close-function~ runs exactly once after video.el retires the inline surface.
 
-~appkit-media-play-video-source~ remains the one-call dedicated-viewer
-convenience API.  Remote playback starts immediately through video.el; finite
-media remains range-seekable.  It never waits for a full attachment download.
-Under the default ~automatic~ cache policy, Appkit gives video.el an atomic
-destination under ~appkit-media-video-cache-directory~ and retains the sparse
-progressive buffer only when it naturally becomes complete.  Existing complete
-entries are opened locally.  Use ~:cache-policy 'none~ for live playback and
-other streams that must leave all buffering session-local.
+For a host-owned Canvas, supply ~:visible-function~, ~:alive-function~, and
+~:activate-function~.  Use ~video-canvas-create~ for a standalone Canvas.  The
+activation callback publishes the supplied Canvas over the complete image span;
+copying native frames alone does not replace the host's static display.
+
+Explicit remote opens belong to the initiating Surface's Effects.  Use
+~appkit-media-image-acquisition-start~ or ~appkit-media-acquisition-start~ to
+acquire a local file; their callbacks only settle the Effect.  A subsequent
+committed update starts ~appkit-media-file-presentation-start~.  Shared preview
+and avatar acquisition belongs to declarative Resource demands, not rendering
+callbacks.
+
+Use ~appkit-media-video-presentation-start~ for managed dedicated playback.
+Remote playback starts immediately through video.el and finite media remains
+range-seekable; it never waits for a full attachment download.  Under the default
+~automatic~ cache policy, Appkit provides an atomic destination under
+~appkit-media-video-cache-directory~ and retains the progressive buffer only
+when it becomes complete.  Existing complete entries are opened locally.
+Use ~:cache-policy 'none~ for streams that must keep buffering session-local.
+Already-local files can use ~appkit-media-open-file~ or
+~appkit-media-play-video-file~ without remote acquisition orchestration.
 
 Clients provide a stable ~:cache-key~ based on protocol resource identity so
 rotating signed URLs address the same complete cache.  A cache is transparent
@@ -288,7 +311,7 @@ The boundary is strict: video.el owns GStreamer, canonical player state,
 temporary sparse buffering, render targets, Canvas transport, waiting UI,
 session presentation leases, dedicated buffers, and close-on-last-surface
 behavior.  Appkit owns canonical resources, persistent cache policy and
-identity, App/View owner handles, and thin resource-aware wrappers around
+identity, App/Surface lifetimes, and thin resource-aware wrappers around
 video.el sessions.  Applications provide resource adaptation and host geometry;
 they must pass the active surface or session instead of creating a second
 player for a dedicated-reader transition.

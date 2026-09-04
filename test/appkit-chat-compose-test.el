@@ -2,6 +2,7 @@
 
 (require 'cl-lib)
 (require 'ert)
+(require 'appkit-test-helper)
 (require 'appkit-chat-compose)
 
 (ert-deftest appkit-chat-compose-refresh-separates-body-and-generated-chrome ()
@@ -201,6 +202,55 @@
     (should (= 2 (appkit-compose-generation)))
     (appkit-chat-compose-drop-item)
     (should (= 3 (appkit-compose-generation)))))
+
+(defvar-local appkit-chat-compose-test--account nil)
+
+(define-derived-mode appkit-chat-compose-test-mode appkit-chat-compose-mode "Compose-Test")
+
+(ert-deftest appkit-chat-compose-preserves-client-mode-and-stopped-draft ()
+  (let ((app (appkit-app-start appkit-test--app-type :identity (make-symbol "compose-app")))
+        (buffer (generate-new-buffer " *appkit-compose-owner-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (appkit-chat-compose-test-mode)
+          (setq-local appkit-chat-compose-test--account "test-account")
+          (appkit-chat-compose-setup :app app)
+          (appkit-chat-compose-set-items '((:text "first") (:text "typed draft")))
+          (should (eq major-mode 'appkit-chat-compose-test-mode))
+          (should (equal appkit-chat-compose-test--account "test-account"))
+          (should-not buffer-read-only)
+          (let ((surface (appkit-current-surface)))
+            (appkit-app-close app)
+            (should (buffer-live-p buffer))
+            (should-not (appkit-surface-live-p surface))
+            (should (equal (mapcar (lambda (item) (plist-get item :text))
+                                   (appkit-chat-compose-items))
+                           '("first" "typed draft")))
+            (should-error (appkit-chat-compose-refresh))
+            (should-not (appkit-current-surface))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (appkit-app-live-p app) (appkit-app-close app)))))
+
+(ert-deftest appkit-chat-compose-replacement-preserves-active-publication ()
+  "Persisting publication progress must not cancel the owning operation."
+  (with-temp-buffer
+    (appkit-chat-compose-mode)
+    (appkit-chat-compose-setup)
+    (appkit-compose-touch)
+    (let* ((canceled 0)
+           (owner (appkit-compose-operation-begin
+                   'publish :cancel-function (lambda () (cl-incf canceled)))))
+      (appkit-chat-compose-set-items
+       '((:text "remaining" :attachments ((:id "uploaded")))))
+      (should (appkit-compose-operation-current-p owner))
+      (should (= 1 (appkit-compose-generation)))
+      (should (= 0 canceled))
+      (let ((item (car (appkit-chat-compose-items))))
+        (should (equal "remaining" (plist-get item :text)))
+        (should (equal '((:id "uploaded")) (plist-get item :attachments))))
+      (should (appkit-compose-operation-finish owner))
+      (should-not (appkit-compose-operation-active-p))
+      (should (= 0 canceled)))))
 
 (provide 'appkit-chat-compose-test)
 
