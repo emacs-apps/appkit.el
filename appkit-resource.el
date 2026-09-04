@@ -513,6 +513,33 @@
              (appkit-resource--coordinator-interests coordinator))
     found))
 
+(defun appkit-resource--release-entries (entries)
+  "Release ENTRIES completely and re-signal the first cleanup failure."
+  (let (conditions)
+    (appkit--run-cleanup-items
+     entries #'appkit-resource--release-entry
+     (lambda (condition) (push condition conditions)))
+    (setq conditions (nreverse conditions))
+    (appkit--warn-cleanup-conditions (cdr conditions) 'appkit-resource)
+    (when-let* ((condition (car conditions)))
+      (signal (car condition) (cdr condition)))))
+
+(defun appkit-resource--release-uninterested (coordinator)
+  "Remove and release every while-interested entry with no interest."
+  (let ((entries (appkit-resource--coordinator-entries coordinator))
+        releases)
+    (maphash
+     (lambda (key entry)
+       (when (and (eq (or (appkit-resource-demand-cache-policy
+                           (appkit-resource--entry-demand entry))
+                          'retain)
+                      'while-interested)
+                  (not (appkit-resource--key-interested-p coordinator key)))
+         (remhash key entries)
+         (push entry releases)))
+     (copy-hash-table entries))
+    (appkit-resource--release-entries releases)))
+
 (defun appkit-resource--prepare-demands (coordinator demands interest-table)
   "Validate DEMANDS and INTEREST-TABLE without mutating COORDINATOR."
   (unless (appkit-resource--proper-bounded-list-p
@@ -623,17 +650,7 @@
         (appkit-resource--replace-interests
          coordinator surface interest-table))
       (when update
-        (maphash
-         (lambda (key entry)
-           (when (and (eq (or (appkit-resource-demand-cache-policy
-                               (appkit-resource--entry-demand entry))
-                              'retain)
-                          'while-interested)
-                      (not (appkit-resource--key-interested-p coordinator key)))
-             (remhash key (appkit-resource--coordinator-entries coordinator))
-             (appkit-resource--release-entry entry)))
-         (copy-hash-table
-          (appkit-resource--coordinator-entries coordinator))))
+        (appkit-resource--release-uninterested coordinator))
       t)))
 
 (defun appkit-resource-detach-surface (surface)
@@ -641,33 +658,20 @@
   (when-let* ((app (appkit-surface-app surface))
               (coordinator (appkit-app-resource-coordinator app)))
     (remhash surface (appkit-resource--coordinator-interests coordinator))
-    (maphash
-     (lambda (key entry)
-       (when (and (eq (or (appkit-resource-demand-cache-policy
-                           (appkit-resource--entry-demand entry))
-                          'retain)
-                      'while-interested)
-                  (not (appkit-resource--key-interested-p coordinator key)))
-         (remhash key (appkit-resource--coordinator-entries coordinator))
-         (appkit-resource--release-entry entry)))
-     (copy-hash-table (appkit-resource--coordinator-entries coordinator)))))
+    (appkit-resource--release-uninterested coordinator)))
 
 (defun appkit-resource-coordinator-stop (coordinator)
   "Stop COORDINATOR and release every logical resource lease."
   (when (and (appkit-resource--coordinator-p coordinator)
              (appkit-resource--coordinator-alive-p coordinator))
-    (setf (appkit-resource--coordinator-alive-p coordinator) nil)
-    (let (conditions)
-      (maphash
-       (lambda (_key entry)
-         (condition-case condition
-             (appkit-resource--release-entry entry)
-           ((error quit) (push condition conditions))))
-       (appkit-resource--coordinator-entries coordinator))
+    (let (entries)
+      (setf (appkit-resource--coordinator-alive-p coordinator) nil)
+      (maphash (lambda (_key entry) (push entry entries))
+               (appkit-resource--coordinator-entries coordinator))
       (clrhash (appkit-resource--coordinator-entries coordinator))
       (clrhash (appkit-resource--coordinator-interests coordinator))
-      (appkit--warn-cleanup-conditions
-       (nreverse conditions) 'appkit-resource))))
+      (appkit-resource--release-entries entries)
+      t)))
 
 (provide 'appkit-resource)
 

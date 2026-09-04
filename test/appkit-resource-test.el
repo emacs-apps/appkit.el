@@ -322,6 +322,48 @@
     (should (= 0 (appkit-resource--broker-queue-count broker)))
     (appkit-resource--broker-retire queued t)))
 
+(ert-deftest appkit-resource-uninterested-cleanup-continues-after-errors ()
+  (let* ((cancellations 0)
+         (broker
+          (appkit-resource--broker-create
+           :acquisitions (make-hash-table :test #'equal)
+           :active-count 2 :max-active 2 :queue-count 0 :max-queued 1))
+         (coordinator
+          (appkit-resource--coordinator-create-internal
+           :entries (make-hash-table :test #'equal)
+           :interests (make-hash-table :test #'eq)
+           :max-entries 2 :max-interests 2 :alive-p t)))
+    (dotimes (key 2)
+      (let* ((demand
+              (appkit-resource-demand-create
+               :key key :input key :loader #'ignore
+               :acquisition-identity key :cache-policy 'while-interested))
+             (acquisition
+              (appkit-resource--acquisition-create
+               :broker broker :identity key :state 'active
+               :cancellation
+               (appkit-cancellation-create
+                :kind 'transport
+                :cancel (lambda ()
+                          (setq cancellations (1+ cancellations))
+                          (error "cancel failed")))))
+             (entry
+              (appkit-resource--entry-create
+               :coordinator coordinator :key key :demand demand
+               :acquisition acquisition)))
+        (setf (appkit-resource--acquisition-leases acquisition) (list entry))
+        (puthash key acquisition (appkit-resource--broker-acquisitions broker))
+        (puthash key entry (appkit-resource--coordinator-entries coordinator))))
+    (cl-letf (((symbol-function 'display-warning) #'ignore))
+      (should-error (appkit-resource--release-uninterested coordinator)
+                    :type 'error))
+    (should (= 2 cancellations))
+    (should (= 0 (hash-table-count
+                  (appkit-resource--coordinator-entries coordinator))))
+    (should (= 0 (hash-table-count
+                  (appkit-resource--broker-acquisitions broker))))
+    (should (= 0 (appkit-resource--broker-active-count broker)))))
+
 (provide 'appkit-resource-test)
 
 ;;; appkit-resource-test.el ends here
