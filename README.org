@@ -3,10 +3,12 @@
 
 * What it is
 
-Appkit is a protocol-neutral runtime for stateful Emacs clients.  It
-owns application and view lifecycle, keyed projections, mode-neutral
-compose sessions, chat composers, and reusable presentation geometry.
-Client packages own protocol models, transport, and branding.
+Appkit is a protocol-neutral runtime for stateful Emacs clients.  Its vNext
+control plane owns serialized App and Surface models, finite keyed Effects,
+generated-buffer lifecycle, and presentation commit ordering.  Reusable
+projection, compose, chat, media, markup, and geometry modules remain
+presentation mechanisms beneath that runtime.  Client packages own protocol
+types, transport adapters, domain transitions, and branding.
 
 Current consumers include ~disco.el~, ~emacs-qq~, ~emacs-slackit~,
 ~emacs-zulip~, and ~chirp~.  Appkit does not define Discord, QQ, Slack,
@@ -47,9 +49,9 @@ Human-facing, integration, and accepted design documentation uses Org.  Keep one
 Org source for each design surface and do not add a parallel ~README.md~ that
 would hide this landing page.
 
-- [[file:docs/integrator.org][Integrator guide]] — current ownership, surfaces, update model, namespaces, and tests
+- [[file:docs/integrator.org][Integrator guide]] — vNext ownership, closed transitions, generated Surfaces, and tests
 - [[file:docs/compose.org][Compose surfaces]] — implemented compose lifecycle and chat-specific geometry
-- [[file:docs/markup.org][Markup documents]] — accepted markup design, current implementation status, and Slackit/Disco adaptation
+- [[file:docs/markup.org][Markup documents]] — accepted markup design and Slackit/Disco adaptation
 
 * Development
 

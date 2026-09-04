@@ -21,6 +21,7 @@
 (require 'appkit-context)
 
 (declare-function appkit-surface-stop "appkit-surface")
+(declare-function appkit-surface--parent-fault "appkit-surface")
 (declare-function appkit-cancel-handles "appkit-core")
 
 (cl-defstruct (appkit-app-type

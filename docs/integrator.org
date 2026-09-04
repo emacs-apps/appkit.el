@@ -329,40 +329,49 @@ On Emacs versions that provide the built-in emoji database,
 ~appkit-chat-emoji-*~ adds shared ~:unicode_name:~ candidates grouped by
 the database's top-level Unicode categories.
 
-* Update model
+* Runtime update model
 
-An application starts an ~appkit-app~, attaches one ~appkit-view~ to
-each live buffer, and gives the view a synchronization function.
-External events update the client's canonical state and call
-~appkit-request-sync~ with opaque invalidations.  The synchronization
-function is the only event path that projects state back into
-generated buffer content.
+An application defines one immutable ~appkit-app-type~.  Its ~init~ and
+~update~ callbacks return ~appkit-next~ values: the next canonical model, an
+explicit render disposition, and a bounded list of closed commands.  Appkit
+serializes each accepted transition, advances the revision, folds commands,
+then commits post messages and starts finite keyed Effects.  Callbacks never
+receive the mutable loop or registry.
 
-Read-only ordered views initialize one ~appkit-projection~, project
-client entries into rows with stable keys, and synchronize those rows
-only from the view callback.  Appkit reconciles retained EWOC nodes,
-redraws rows affected by changed dependencies, and preserves semantic
-point and viewport state for every live window.
+A generated buffer defines one ~appkit-surface-type~ and one
+~appkit-generated-renderer~.  The Surface owns its local model; its parent App
+is exposed only as a pass-scoped read view.  Rendering runs after the final
+model commit for the pass, in the exact host buffer.  A renderer may merge
+requests and recover once, but may not mutate the domain model, post messages,
+or start work.
 
-Views with width-sensitive printers can enable responsive projection
-geometry.  Appkit then redraws retained keys when the chosen window's
-usable columns, text scale, or line-number geometry changes.
+Use ~appkit-app-send~ / ~appkit-surface-send~ for a synchronous external
+transition and ~appkit-app-post~ / ~appkit-surface-post~ for asynchronous
+external admission.  Neither public post path is legal while any Appkit loop
+is draining.  An ~init~, ~update~, renderer, Effect starter, or mapper that
+needs later work must return an ~appkit-command-post-message~ or
+~appkit-command-start-effect~ through ~appkit-next~ instead.  Expected domain
+rejection returns ~appkit-next-reject~; ~appkit-loop-reject~ is an internal
+state-machine result, not a client API.
 
-A request generation owns loading flags and tokens even if its
-original view was replaced.  Its callback must retire that ownership
-without projecting into a stale buffer.  Deferred user actions are
-tied to the same generation.
+An Effect starter receives owned input and observe/resolve/reject gates.
+Synchronous gate calls only stage payload; their mappers run in later passes.
+Replacing an equal Effect key revokes callback authority before physical
+cancellation.  Each Effect runtime coalesces ready instances behind one
+control wake, so synchronous completion cannot consume one control slot per
+active Effect.
 
-Each attached buffer retains a protocol-neutral fingerprint from the
-application kind, stable application id, and view id.  Detaching a
-view leaves that fingerprint behind so a later session can recover a
-renamed buffer.  Changing major mode clears it.  Appkit never steals
-a buffer from a different live view.
+The host buffer is persistent ownership; windows are temporary viewports.
+Major mode setup precedes attachment.  Killing the exact buffer or changing
+its major mode synchronously stops the Surface.  Renaming, burying, hiding all
+windows, or killing an indirect clone does not.  Generated structural edits
+are undo-free; editable document state remains governed by the compose/editor
+module that owns it.
 
-Generated structural edits are undo-free.  The editable tail composer
-keeps normal Emacs undo.  Position snapshots belong to Appkit: each
-live window preserves ~window-point~ and ~window-start~ by stable
-entry key plus an offset, with an absolute line and column fallback.
+Source, topic publish, terminal reset, existing-Surface policies, resource
+companions, and editable/hybrid Surface control are later protocol layers.
+Do not reproduce them with direct callbacks or restore the removed App/View
+control plane.
 
 * Source-preserving display markers
 
@@ -408,7 +417,15 @@ input.  Use ~appkit-evil-set-initial-states~ and
 
 * Namespaces
 
-Use these public prefixes directly:
+Use these runtime prefixes directly:
+
+- ~appkit-app-*~
+- ~appkit-surface-*~
+- ~appkit-command-*~
+- ~appkit-effect-*~
+- ~appkit-context-*~
+
+Presentation and interaction helpers retain their focused namespaces:
 
 - ~appkit-task-queue-*~
 - ~appkit-projection-*~
@@ -418,7 +435,7 @@ Use these public prefixes directly:
 - ~appkit-chat-timeline-*~
 - ~appkit-scroll-*~
 - ~appkit-ui-*~
-- ~appkit-view-*~
+- ~appkit-view-*~ (presentation geometry only)
 - ~appkit-chat-completion-*~
 - ~appkit-chat-ins-*~
 - ~appkit-discussion-*~
