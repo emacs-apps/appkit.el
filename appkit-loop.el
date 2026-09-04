@@ -47,6 +47,9 @@
   sequence
   incarnation
   payload
+  origin
+  source-address
+  source-revision
   reply-route
   ticket)
 
@@ -94,6 +97,12 @@
 
 (defvar appkit-loop--active-loop nil
   "Loop whose serialized pass currently owns runtime execution.")
+
+(defvar appkit-loop--current-envelope nil
+  "Envelope currently executing in the active serialized loop.")
+
+(defvar appkit-loop--pass-context nil
+  "Facade-owned snapshot shared by callbacks in the active pass.")
 
 (defun appkit-loop--check (loop)
   "Return LOOP, or signal a type error."
@@ -338,11 +347,12 @@ admission does not allocate a sequence number."
       (unwind-protect
           (condition-case err
               (progn
-                (setq result
-                      (funcall (appkit-loop--update loop)
-                               (appkit-loop--model loop)
-                               (appkit-loop-envelope-payload envelope))
-                      completed-p t))
+                (let ((appkit-loop--current-envelope envelope))
+                  (setq result
+                        (funcall (appkit-loop--update loop)
+                                 (appkit-loop--model loop)
+                                 (appkit-loop-envelope-payload envelope))
+                        completed-p t)))
             ((error quit)
              (setq condition err
                    completed-p t)))
@@ -406,7 +416,9 @@ remain for a later pass even when the count limit has not been reached."
   (appkit-loop--check loop)
   (when (or appkit-loop--active-loop (appkit-loop--draining-p loop))
     (error "Appkit loop pass is not reentrant"))
-  (let ((appkit-loop--active-loop loop))
+  (let ((appkit-loop--active-loop loop)
+        (appkit-loop--current-envelope nil)
+        (appkit-loop--pass-context nil))
     (if (not (eq (appkit-loop--status loop) 'running))
         0
       (appkit-loop--cancel-scheduled loop)

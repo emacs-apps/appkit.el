@@ -13,21 +13,22 @@
   (appkit-generated-renderer-create
    :mount
    (or mount-function
-       (lambda (_surface model) (funcall record (list 'mount model))))
+       (lambda (_surface _app-read-view model)
+         (funcall record (list 'mount model))))
    :merge
    (lambda (left right)
      (append (if (listp left) left (list left))
              (if (listp right) right (list right))))
    :render
    (or render-function
-       (lambda (_surface model request)
+       (lambda (_surface _app-read-view model request)
          (funcall record (list 'render model request))
          (let ((inhibit-read-only t))
            (erase-buffer)
            (insert (format "%S" model)))))
    :recover
    (or recover-function
-       (lambda (_surface model condition)
+       (lambda (_surface _app-read-view model condition)
          (funcall record
                   (list 'recover model (error-message-string condition)))
          (let ((inhibit-read-only t))
@@ -118,7 +119,7 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                      (lambda (event) (push event events)))))
                  :input 'ready))
           (should (eq init-mode 'appkit-surface-test-mode))
-          (should-not init-owner)
+          (should (eq init-owner surface))
           (should (appkit-surface-live-p surface))
           (with-current-buffer (appkit-surface-buffer surface)
             (should (eq (appkit-current-surface) surface))
@@ -192,7 +193,7 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                   (lambda (_surface)
                     (appkit-surface-test--renderer
                      (lambda (event) (push event events))
-                     (lambda (_surface _model _request)
+                     (lambda (_surface _app-read-view _model _request)
                        (error "incremental render failed")))))))
           (let ((ticket (appkit-surface-send surface 'committed)))
             (should (eq (appkit-loop-ticket-state ticket) 'accepted)))
@@ -219,9 +220,9 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                   (lambda (_surface)
                     (appkit-surface-test--renderer
                      (lambda (event) (push event events))
-                     (lambda (_surface _model _request)
+                     (lambda (_surface _app-read-view _model _request)
                        (error "render failed"))
-                     (lambda (_surface _model _condition)
+                     (lambda (_surface _app-read-view _model _condition)
                        (error "recover failed")))))))
           (let ((condition
                  (should-error
@@ -273,7 +274,8 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
        :renderer-factory
        (lambda (_surface)
          (appkit-generated-renderer-create
-          :mount (lambda (_surface _model) (error "mount failed"))
+          :mount
+          (lambda (_surface _app-read-view _model) (error "mount failed"))
           :merge (lambda (_left right) right)
           :render (lambda (&rest _arguments))
           :recover (lambda (&rest _arguments))

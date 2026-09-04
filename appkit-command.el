@@ -17,6 +17,10 @@
 
 (require 'cl-lib)
 (require 'appkit-effect)
+(require 'appkit-cleanup)
+
+(defconst appkit-render-none 'appkit-render-none
+  "Explicit disposition requesting no presentation work.")
 
 (defconst appkit-command-default-per-next-limit 32
   "Default maximum command count returned by one transition.")
@@ -134,6 +138,27 @@ oversized lists fail without an unbounded scan."
         (push (cdr entry) effects)))
     (appkit-command--batch-clear batch)
     (nreverse effects)))
+
+(defun appkit-command--revoke-effects (runtime commands warning-type)
+  "Revoke final Effect COMMANDS from RUNTIME, reporting as WARNING-TYPE."
+  (let (conditions)
+    (appkit--run-cleanup-items
+     commands
+     (lambda (command)
+       (appkit-effect-runtime-cancel
+        runtime (appkit-command--effect-key command)))
+     (lambda (condition) (push condition conditions)))
+    (setq conditions (nreverse conditions))
+    (appkit--warn-cleanup-conditions (cdr conditions) warning-type)
+    (when-let* ((condition (car conditions)))
+      (signal (car condition) (cdr condition)))))
+
+(defun appkit-command--start-effects (runtime commands)
+  "Start final Effect COMMANDS in RUNTIME in explicit order."
+  (dolist (command commands)
+    (when (appkit-command-start-effect-p command)
+      (appkit-effect-runtime-start
+       runtime (appkit-command-start-effect-effect command)))))
 
 (provide 'appkit-command)
 

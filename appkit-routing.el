@@ -23,17 +23,17 @@
                (:copier nil)
                (:conc-name appkit-runtime-address--))
   "An opaque address for one exact owner incarnation."
-  owner
-  owner-identity
-  incarnation)
+  (owner nil :read-only t)
+  (owner-identity nil :read-only t)
+  (incarnation nil :read-only t))
 
 (cl-defstruct (appkit-reply-route
                (:constructor appkit-reply-route--create)
                (:copier nil)
                (:conc-name appkit-reply-route--))
   "An opaque exact target paired with client CORRELATION."
-  target
-  correlation)
+  (target nil :read-only t)
+  (correlation nil :read-only t))
 
 (defun appkit-routing--address (loop)
   "Return an exact internal runtime address for LOOP's current incarnation."
