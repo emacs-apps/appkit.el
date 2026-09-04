@@ -3,8 +3,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'appkit-media-resource)
-
-(appkit-define-app-kind appkit-media-test)
+(require 'appkit-media-effect)
+(require 'appkit-test-helper)
 
 (ert-deftest appkit-media-resource-classifies-canonical-resources ()
   (should (equal "cat%20photo.PNG"
@@ -856,8 +856,8 @@
         (should-not (appkit-media-video-session-live-p session))))))
 
 (ert-deftest appkit-media-owned-video-buffer-stops-with-app ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'owned
-                               :shutdown #'ignore))
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'owned))
         viewer
         closed)
     (unwind-protect
@@ -893,19 +893,19 @@
       (when (buffer-live-p viewer)
         (kill-buffer viewer)))))
 
-(ert-deftest appkit-media-owned-video-buffer-stops-with-view ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'view
-                               :shutdown #'ignore))
-        (buffer (generate-new-buffer " *appkit-media-view-owner*"))
+(ert-deftest appkit-media-owned-video-buffer-stops-with-surface ()
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'surface))
+        (buffer (generate-new-buffer " *appkit-media-surface-owner*"))
         viewer
-        view
+        surface
         closed)
     (unwind-protect
         (progn
-          (with-current-buffer buffer
-            (setq view
-                  (appkit-attach-view
-                   :app app :id 'video :mode major-mode)))
+          (setq surface
+                (appkit-open-generated-surface
+                 appkit-test--surface-type
+                 :app app :identity 'video :buffer buffer))
           (cl-letf (((symbol-function 'video-session-create)
                      (lambda (&rest _) 'session))
                     ((symbol-function 'video-session-live-p)
@@ -925,14 +925,15 @@
                        viewer)))
             (let ((result
                    (appkit-media-play-video-source
-                    "https://example.invalid/view.mp4" "test" :owner view)))
+                    "https://example.invalid/surface.mp4"
+                    "test" :owner surface)))
               (should (eq result viewer)))
-            (should (= 1 (length (appkit-view-handles view))))
-            (appkit-kill-view view)
+            (should (= 1 (length (appkit-surface-handles surface))))
+            (appkit-surface-stop surface)
             (should-not (buffer-live-p viewer))
             (should closed)
-            (should-not (appkit-view-handles view))
-            (should-not (appkit-view-live-p view))))
+            (should-not (appkit-surface-handles surface))
+            (should-not (appkit-surface-live-p surface))))
       (when (appkit-app-live-p app)
         (appkit-app-close app))
       (dolist (candidate (list buffer viewer))
@@ -940,8 +941,8 @@
           (kill-buffer candidate))))))
 
 (ert-deftest appkit-media-video-buffer-kill-retires-owner ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'buffer-kill
-                               :shutdown #'ignore))
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'buffer-kill))
         viewer
         closed)
     (unwind-protect
@@ -977,8 +978,8 @@
         (kill-buffer viewer)))))
 
 (ert-deftest appkit-media-video-constructor-error-retires-owner ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'constructor-error
-                               :shutdown #'ignore))
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'constructor-error))
         viewer
         closed)
     (unwind-protect
@@ -1009,8 +1010,8 @@
         (appkit-app-close app)))))
 
 (ert-deftest appkit-media-video-constructor-throw-retires-owner ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'constructor-throw
-                               :shutdown #'ignore))
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'constructor-throw))
         viewer
         closed)
     (unwind-protect
@@ -1040,8 +1041,8 @@
         (appkit-app-close app)))))
 
 (ert-deftest appkit-media-video-stop-during-open-kills-viewer ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'reentrant
-                               :shutdown #'ignore))
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'reentrant))
         viewer
         closed)
     (cl-letf (((symbol-function 'video-session-create)
@@ -1066,8 +1067,8 @@
       (should-not (appkit-app-handles app)))))
 
 (ert-deftest appkit-media-video-dead-owner-never-opens ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'dead
-                               :shutdown #'ignore))
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'dead))
         opened)
     (appkit-app-close app)
     (cl-letf (((symbol-function 'video-session-create)
@@ -1079,8 +1080,8 @@
       (should-not opened))))
 
 (ert-deftest appkit-media-video-entrypoints-forward-exact-owner ()
-  (let ((app (appkit-app-start 'appkit-media-test :id 'forward
-                               :shutdown #'ignore))
+  (let ((app (appkit-app-start
+              appkit-test--app-type :identity 'forward))
         calls)
     (unwind-protect
         (cl-letf (((symbol-function 'appkit-media-play-video-source)
@@ -1206,19 +1207,19 @@
 
 (ert-deftest appkit-media-owned-file-open-cancels-and-ignores-late-success ()
   (let* ((directory (make-temp-file "appkit-media-owned-open" t))
-         (app (appkit-app-start 'appkit-media-test :id 'owned-open
-                                :shutdown #'ignore))
+         (app (appkit-app-start
+               appkit-test--app-type :identity 'owned-open))
          (buffer (generate-new-buffer " *appkit-media-owned-open*"))
-         view
+         surface
          success
          (cancel-count 0)
          opened)
     (unwind-protect
         (progn
-          (with-current-buffer buffer
-            (setq view
-                  (appkit-attach-view
-                   :app app :id 'file-open :mode major-mode)))
+          (setq surface
+                (appkit-open-generated-surface
+                 appkit-test--surface-type
+                 :app app :identity 'file-open :buffer buffer))
           (cl-letf
               (((symbol-function 'appkit-media--cache-file-resource-for-open)
                 (lambda (_resource _key _directory callback _errback)
@@ -1236,10 +1237,10 @@
              '((url . "https://example.invalid/report.pdf")
                (name . "report.pdf")
                (mime-type . "application/pdf"))
-             :kind 'file :cache-directory directory :owner view)
+             :kind 'file :cache-directory directory :owner surface)
             (should (functionp success))
-            (should (= 1 (length (appkit-view-handles view))))
-            (appkit-kill-view view)
+            (should (= 1 (length (appkit-surface-handles surface))))
+            (appkit-surface-stop surface)
             (should (= 1 cancel-count))
             (funcall success "/tmp/late-report.pdf")
             (should-not opened)))
@@ -1248,6 +1249,115 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory directory t))))
+
+(ert-deftest appkit-media-acquisition-starter-returns-transport-cancellation ()
+  (let* ((resource '((url . "https://example.invalid/file.bin")))
+         (input
+          (appkit-media-acquisition-create
+           resource "/tmp/appkit-media-effect.bin"
+           :headers '(("Accept" . "application/octet-stream"))))
+         canceled)
+    (cl-letf
+        (((symbol-function 'appkit-media-copy-or-download-resource-async)
+          (lambda (actual target _success _failure &rest keys)
+            (should
+             (equal (alist-get 'url actual)
+                    "https://example.invalid/file.bin"))
+            (should (equal target "/tmp/appkit-media-effect.bin"))
+            (should
+             (equal (plist-get keys :headers)
+                    '(("Accept" . "application/octet-stream"))))
+            'transfer))
+         ((symbol-function 'appkit-media-transfer-p)
+          (lambda (object) (eq object 'transfer)))
+         ((symbol-function 'appkit-media-cancel-transfer)
+          (lambda (object) (setq canceled object))))
+      (let ((capability
+             (appkit-media-acquisition-start
+              'context input #'ignore #'ignore #'ignore)))
+        (should (eq (appkit-cancellation-kind capability) 'transport))
+        (funcall (appkit-cancellation-cancel capability))
+        (should (eq canceled 'transfer))))))
+
+(ert-deftest appkit-media-image-acquisition-uses-ready-cache-synchronously ()
+  (let* ((input
+          (appkit-media-image-acquisition-create
+           '((url . "https://example.invalid/image"))
+           "/tmp/appkit-media-image"))
+         resolved)
+    (cl-letf
+        (((symbol-function 'appkit-media-image-cache-existing-file)
+          (lambda (_cache-base) "/tmp/appkit-media-image.webp"))
+         ((symbol-function 'appkit-media-cache-image-resource-async)
+          (lambda (&rest _)
+            (ert-fail "Ready image cache must not start transport"))))
+      (should-not
+       (appkit-media-image-acquisition-start
+        'context input #'ignore
+        (lambda (file) (setq resolved file))
+        #'ignore))
+      (should (equal resolved "/tmp/appkit-media-image.webp")))))
+
+(ert-deftest appkit-media-video-presentation-settles-when-viewer-closes ()
+  (let ((input
+         (appkit-media-video-presentation-create
+          '((url . "https://example.invalid/video.mp4"))
+          :label "Effect video"))
+        viewer
+        resolved
+        rejected
+        closed)
+    (cl-letf
+        (((symbol-function 'appkit-media-video-session-create)
+          (lambda (&rest _) 'session))
+         ((symbol-function 'appkit-media-present-video-session)
+          (lambda (&rest _)
+            (setq viewer (generate-new-buffer " *media-effect-viewer*"))))
+         ((symbol-function 'appkit-media-video-session-live-p)
+          (lambda (session) (and session (not closed))))
+         ((symbol-function 'appkit-media-video-session-close)
+          (lambda (_session) (setq closed t))))
+      (unwind-protect
+          (let ((capability
+                 (appkit-media-video-presentation-start
+                  'context input #'ignore
+                  (lambda (reason) (setq resolved reason))
+                  (lambda (reason) (setq rejected reason)))))
+            (should (appkit-cancellation-p capability))
+            (should (eq (appkit-cancellation-kind capability) 'logical))
+            (should-not resolved)
+            (kill-buffer viewer)
+            (should (eq resolved 'closed))
+            (should-not rejected))
+        (when (buffer-live-p viewer)
+          (kill-buffer viewer))))))
+
+(ert-deftest appkit-media-video-presentation-cancellation-does-not-settle ()
+  (let ((input
+         (appkit-media-video-presentation-create
+          '((url . "https://example.invalid/video.mp4"))))
+        viewer
+        resolved
+        closed)
+    (cl-letf
+        (((symbol-function 'appkit-media-video-session-create)
+          (lambda (&rest _) 'session))
+         ((symbol-function 'appkit-media-present-video-session)
+          (lambda (&rest _)
+            (setq viewer (generate-new-buffer " *media-effect-cancel*"))))
+         ((symbol-function 'appkit-media-video-session-live-p)
+          (lambda (session) (and session (not closed))))
+         ((symbol-function 'appkit-media-video-session-close)
+          (lambda (_session) (setq closed t))))
+      (let ((capability
+             (appkit-media-video-presentation-start
+              'context input #'ignore
+              (lambda (&rest _) (setq resolved t))
+              #'ignore)))
+        (funcall (appkit-cancellation-cancel capability))
+        (should closed)
+        (should-not (buffer-live-p viewer))
+        (should-not resolved)))))
 (provide 'appkit-media-resource-test)
 
 ;;; appkit-media-resource-test.el ends here

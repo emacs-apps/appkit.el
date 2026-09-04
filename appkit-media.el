@@ -18,6 +18,7 @@
 (require 'appkit-media-card)
 (require 'appkit-media-image)
 (require 'appkit-media-resource)
+(require 'appkit-media-effect)
 (require 'appkit-media-player)
 (require 'appkit-media-video)
 
