@@ -1141,7 +1141,6 @@
     "/definitely/missing/appkit-video.mp4" "client")
    :type 'user-error))
 
-
 (ert-deftest appkit-media-remote-transfer-rejects-unsafe-url-before-dispatch ()
   (let* ((directory (make-temp-file "appkit-media-url-scheme" t))
          (target (expand-file-name "nested/report.pdf" directory))
@@ -1297,6 +1296,21 @@
         (lambda (file) (setq resolved file))
         #'ignore))
       (should (equal resolved "/tmp/appkit-media-image.webp")))))
+
+(ert-deftest appkit-media-file-presentation-settles-after-local-open ()
+  (let (opened resolved rejected)
+    (cl-letf (((symbol-function 'appkit-media-open-file)
+               (lambda (file)
+                 (setq opened file)
+                 'viewer)))
+      (should-not
+       (appkit-media-file-presentation-start
+        'context "/tmp/report.pdf" #'ignore
+        (lambda (value) (setq resolved value))
+        (lambda (reason) (setq rejected reason))))
+      (should (equal opened "/tmp/report.pdf"))
+      (should (eq resolved 'viewer))
+      (should-not rejected))))
 
 (ert-deftest appkit-media-video-presentation-settles-when-viewer-closes ()
   (let ((input

@@ -27,8 +27,6 @@
   "Create owned media acquisition input for RESOURCE at TARGET.
 
 HEADERS are copied and validated by the transport when the Effect starts."
-  (unless (and (stringp target) (not (string-empty-p target)))
-    (error "Media acquisition target must be a non-empty filename"))
   (appkit-media--acquisition-create
    :resource (copy-tree (appkit-media-resource-normalize resource))
    :target (expand-file-name target)
@@ -40,9 +38,6 @@ HEADERS are copied and validated by the transport when the Effect starts."
 
 Return a transport cancellation capability, or nil after synchronous
 settlement."
-  (unless (appkit-media-acquisition-p input)
-    (signal 'wrong-type-argument
-            (list 'appkit-media-acquisition-p input)))
   (let ((transfer
          (appkit-media-copy-or-download-resource-async
           (appkit-media-acquisition-resource input)
@@ -71,8 +66,6 @@ settlement."
 (cl-defun appkit-media-image-acquisition-create
     (resource cache-base &key headers)
   "Create owned cached image acquisition input."
-  (unless (and (stringp cache-base) (not (string-empty-p cache-base)))
-    (error "Image acquisition cache base must be a non-empty filename"))
   (appkit-media--image-acquisition-create
    :resource (copy-tree (appkit-media-resource-normalize resource))
    :cache-base (expand-file-name cache-base)
@@ -81,9 +74,6 @@ settlement."
 (defun appkit-media-image-acquisition-start
     (_context input _observe resolve reject)
   "Start cached image acquisition INPUT and settle RESOLVE or REJECT."
-  (unless (appkit-media-image-acquisition-p input)
-    (signal 'wrong-type-argument
-            (list 'appkit-media-image-acquisition-p input)))
   (let ((cache-base (appkit-media-image-acquisition-cache-base input)))
     (if-let* ((cached (appkit-media-image-cache-existing-file cache-base)))
         (progn
@@ -106,6 +96,17 @@ settlement."
   (appkit-media-image-acquisition-start
    context input #'ignore resolve reject))
 
+(defun appkit-media-file-presentation-start
+    (_context file _observe resolve reject)
+  "Open local FILE after commit and settle the presentation Effect."
+  (condition-case condition
+      (progn
+        (funcall resolve (appkit-media-open-file file))
+        nil)
+    ((error quit)
+     (funcall reject (error-message-string condition))
+     nil)))
+
 (cl-defstruct (appkit-media-video-presentation
                (:constructor appkit-media--video-presentation-create)
                (:copier nil))
@@ -127,10 +128,6 @@ settlement."
               (cache-policy appkit-media-video-cache-policy)
               muted live request-headers buffer display-function (start t))
   "Create owned input for a managed video RESOURCE presentation."
-  (when (and buffer (not (buffer-live-p buffer)))
-    (error "Video presentation buffer is not live"))
-  (when (and display-function (not (functionp display-function)))
-    (signal 'wrong-type-argument (list 'functionp display-function)))
   (appkit-media--video-presentation-create
    :resource (copy-tree (appkit-media-resource-normalize resource))
    :label (or label "media")
@@ -147,9 +144,6 @@ settlement."
 (defun appkit-media-video-presentation-start
     (_context input _observe resolve reject)
   "Present video INPUT until its viewer closes or the Effect is cancelled."
-  (unless (appkit-media-video-presentation-p input)
-    (signal 'wrong-type-argument
-            (list 'appkit-media-video-presentation-p input)))
   (let (session viewer finished-p)
     (cl-labels
         ((close-presentation
