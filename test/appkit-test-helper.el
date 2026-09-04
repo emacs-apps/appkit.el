@@ -1,4 +1,4 @@
-;;; 00-appkit-test-helper.el --- Shared appkit test fixtures -*- lexical-binding: t; -*-
+;;; appkit-test-helper.el --- Shared appkit test fixtures -*- lexical-binding: t; -*-
 
 (require 'appkit-core)
 
@@ -21,4 +21,4 @@
 
 (provide 'appkit-test-helper)
 
-;;; 00-appkit-test-helper.el ends here
+;;; appkit-test-helper.el ends here

@@ -527,6 +527,7 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
      (should (= (appkit-effect-runtime-count
                  (appkit-surface-effect-runtime surface))
                 0)))))
+
 (ert-deftest appkit-surface-discards-folded-work-on-command-overflow ()
   (let ((events nil))
     (appkit-surface-test--with-surface

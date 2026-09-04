@@ -320,21 +320,16 @@
       (should (equal observed
                      '(faulted faulted (error "update failed")))))))
 
-(ert-deftest appkit-loop-records-fault-hook-cleanup-failure ()
-  (appkit-loop-test--with-loop
-      (loop
-       :model nil
-       :update (lambda (_model _message) (error "primary"))
-       :on-fault (lambda (_current _fault) (error "cleanup")))
-    (let ((condition
-           (should-error (appkit-loop-send loop 'fail) :type 'error)))
-      (should (equal (error-message-string condition) "primary")))
-    (should
-     (equal
-      (mapcar #'error-message-string
-              (appkit-loop-fault-secondary-conditions
-               (appkit-loop-fault loop)))
-      '("cleanup")))))
+(ert-deftest appkit-loop-fault-cleanup-does-not-mask-primary ()
+  (cl-letf (((symbol-function 'display-warning) #'ignore))
+    (appkit-loop-test--with-loop
+        (loop
+         :model nil
+         :update (lambda (_model _message) (error "primary"))
+         :on-fault (lambda (_current _fault) (error "cleanup")))
+      (let ((condition
+             (should-error (appkit-loop-send loop 'fail) :type 'error)))
+        (should (equal (error-message-string condition) "primary"))))))
 (provide 'appkit-loop-test)
 
 ;;; appkit-loop-test.el ends here

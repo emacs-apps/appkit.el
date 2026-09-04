@@ -18,6 +18,7 @@
 
 (require 'cl-lib)
 (require 'appkit-loop)
+(require 'appkit-cleanup)
 
 (cl-defstruct (appkit-cancellation
                (:constructor appkit-cancellation-create)
@@ -621,23 +622,23 @@ Stale delivery becomes a normal rejection without calling CLIENT-UPDATE."
   "Revoke and cancel every instance owned by RUNTIME.
 
 Return non-nil on the first stop.  Cleanup continues after individual
-cancellation failures, then re-signals the first condition."
+failures, warns for conditions after the first, then re-signals the first."
   (appkit-effect--assert-main-thread)
   (appkit-effect--runtime-check runtime)
   (when (appkit-effect--runtime-alive-p runtime)
-    (let (instances first-condition)
+    (let (instances conditions)
       (maphash (lambda (_key instance) (push instance instances))
                (appkit-effect--runtime-instances runtime))
       (clrhash (appkit-effect--runtime-instances runtime))
       (setf (appkit-effect--runtime-alive-p runtime) nil)
-      (dolist (instance instances)
-        (condition-case condition
-            (appkit-effect--revoke instance t)
-          ((error quit)
-           (unless first-condition
-             (setq first-condition condition)))))
-      (when first-condition
-        (signal (car first-condition) (cdr first-condition)))
+      (appkit--run-cleanup-items
+       instances
+       (lambda (instance) (appkit-effect--revoke instance t))
+       (lambda (condition) (push condition conditions)))
+      (setq conditions (nreverse conditions))
+      (appkit--warn-cleanup-conditions (cdr conditions) 'appkit-effect)
+      (when-let* ((condition (car conditions)))
+        (signal (car condition) (cdr condition)))
       t)))
 
 (provide 'appkit-effect)

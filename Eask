@@ -21,4 +21,5 @@
 (development
  (depends-on "evil"))
 
-(script "test" "eask test ert --quiet test/*.el")
+(script "test"
+        "eask test ert --quiet test/appkit-test-helper.el test/*-test.el")

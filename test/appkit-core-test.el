@@ -776,6 +776,37 @@
       (should (eq (appkit-view-state view) replacement))
       (should (eq cancelled 'transport)))))
 
+
+(ert-deftest appkit-cleanup-items-continue-after-error-and-quit ()
+  (let (conditions visited)
+    (appkit--run-cleanup-items
+     '(first failing quitting last)
+     (lambda (item)
+       (push item visited)
+       (pcase item
+         ('failing (error "cleanup failed"))
+         ('quitting (signal 'quit nil))))
+     (lambda (condition) (push condition conditions)))
+    (should (equal (nreverse visited) '(first failing quitting last)))
+    (setq conditions (nreverse conditions))
+    (should (equal (mapcar #'car conditions) '(error quit)))))
+
+(ert-deftest appkit-cleanup-items-continue-during-throw ()
+  (let (visited)
+    (should
+     (eq
+      (catch 'escape
+        (appkit--run-cleanup-items
+         '(first escaping last)
+         (lambda (item)
+           (push item visited)
+           (when (eq item 'escaping)
+             (throw 'escape 'escaped)))
+         #'ignore)
+        'returned)
+      'escaped))
+    (should (equal (nreverse visited) '(first escaping last)))))
+
 (provide 'appkit-core-test)
 
 ;;; appkit-core-test.el ends here

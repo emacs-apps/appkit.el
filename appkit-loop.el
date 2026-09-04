@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'appkit-cleanup)
 
 (cl-defstruct (appkit-loop-accepted
                (:constructor appkit-loop-accept (model))
@@ -54,8 +55,7 @@
   condition
   sequence
   payload
-  revision
-  secondary-conditions)
+  revision)
 
 (cl-defstruct (appkit-loop-pass
                (:constructor appkit-loop--pass-create)
@@ -134,10 +134,10 @@ UPDATE receives the current model and one message.  It must return either
 `appkit-loop-accept' or `appkit-loop-reject'.  AFTER-PASS, when non-nil,
 receives the loop and committed `appkit-loop-pass' statistics after a pass
 accepts at least one transition.  ON-FAULT receives the loop and fault record
-after admission closes and pending tickets terminate.  MAILBOX-CAPACITY bounds
-ordinary posts.  SEND-RESERVE provides additional admission reserved for
-synchronous barrier sends.  MESSAGE-LIMIT is the hard maximum processed by one
-pass."
+after admission closes and pending tickets terminate; it may signal `error' or
+`quit' but must not use `throw'.  MAILBOX-CAPACITY bounds ordinary posts.
+SEND-RESERVE provides additional admission reserved for synchronous barrier
+sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
   (appkit-loop--assert-main-thread)
   (unless (functionp update)
     (signal 'wrong-type-argument (list 'functionp update)))
@@ -285,8 +285,7 @@ admission does not allocate a sequence number."
             :sequence (and envelope
                            (appkit-loop-envelope-sequence envelope))
             :payload (and envelope (appkit-loop-envelope-payload envelope))
-            :revision (appkit-loop--revision loop)
-            :secondary-conditions nil)))
+            :revision (appkit-loop--revision loop))))
       (setf (appkit-loop--status loop) 'faulted
             (appkit-loop--fault loop) fault)
       (appkit-loop--cancel-scheduled loop)
@@ -296,11 +295,11 @@ admission does not allocate a sequence number."
       (appkit-loop--complete-pass-tickets loop 'faulted fault)
       (appkit-loop--purge loop 'faulted fault)
       (when-let* ((on-fault (appkit-loop--on-fault loop)))
-        (condition-case secondary
+        (condition-case cleanup-condition
             (funcall on-fault loop fault)
           ((error quit)
-           (push secondary
-                 (appkit-loop-fault-secondary-conditions fault)))))))
+           (appkit--warn-cleanup-conditions
+            (list cleanup-condition) 'appkit-loop))))))
   (appkit-loop--fault loop))
 
 (defun appkit-loop--apply-transition (loop envelope)

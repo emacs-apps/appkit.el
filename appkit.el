@@ -19,6 +19,7 @@
 
 ;;; Code:
 
+(require 'appkit-cleanup)
 (require 'appkit-core)
 (require 'appkit-loop)
 (require 'appkit-effect)

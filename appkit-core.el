@@ -16,6 +16,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'appkit-cleanup)
 
 (defgroup appkit nil
   "Runtime primitives for stateful Emacs buffer applications."
@@ -407,30 +408,6 @@ completions are inert and return nil."
     (appkit-retire-handle (appkit-view-operation-handle operation))
     t))
 
-(defun appkit--run-cleanup-items (items function condition-function)
-  "Apply FUNCTION to every element of ITEMS during lifecycle cleanup.
-
-ERROR and QUIT conditions are passed to CONDITION-FUNCTION.  If FUNCTION exits
-through another nonlocal transfer, remaining items still run during unwinding
-before that transfer resumes."
-  (let ((remaining items)
-        complete-p)
-    (unwind-protect
-        (progn
-          (while remaining
-            (let ((item (pop remaining)))
-              (condition-case err
-                  (funcall function item)
-                (error (funcall condition-function err))
-                (quit (funcall condition-function err)))))
-          (setq complete-p t))
-      ;; The normal path is iterative so cleanup size is not constrained by
-      ;; `max-lisp-eval-depth'.  Recursion is needed only while unwinding an
-      ;; arbitrary nonlocal transfer; this second invocation is itself
-      ;; iterative unless another cleanup item also transfers control.
-      (unless complete-p
-        (appkit--run-cleanup-items
-         remaining function condition-function)))))
 
 (defun appkit-cancel-handles (owner)
   "Cancel and forget all lifecycle handles owned by OWNER."

@@ -19,6 +19,7 @@
 (require 'cl-lib)
 (require 'appkit-loop)
 (require 'appkit-command)
+(require 'appkit-cleanup)
 
 (defconst appkit-render-none 'appkit-render-none
   "Explicit disposition requesting no generated presentation work.")
@@ -156,25 +157,21 @@
                 (error-message-string render-condition)
                 (error-message-string recovery-condition)))))))
 
-(defmacro appkit-surface--record-first-condition (variable &rest body)
-  "Run BODY and store its first error or quit in VARIABLE."
-  (declare (indent 1) (debug (symbolp body)))
-  `(condition-case condition
-       (progn ,@body)
-     ((error quit)
-      (unless ,variable
-        (setq ,variable condition)))))
 
 (defun appkit-surface--revoke-effect-commands (surface commands)
   "Revoke Effects superseded or cancelled by final COMMANDS for SURFACE."
   (let ((runtime (appkit-surface-effect-runtime surface))
-        first-condition)
-    (dolist (command commands)
-      (appkit-surface--record-first-condition first-condition
-        (appkit-effect-runtime-cancel
-         runtime (appkit-command--effect-key command))))
-    (when first-condition
-      (signal (car first-condition) (cdr first-condition)))))
+        conditions)
+    (appkit--run-cleanup-items
+     commands
+     (lambda (command)
+       (appkit-effect-runtime-cancel
+        runtime (appkit-command--effect-key command)))
+     (lambda (condition) (push condition conditions)))
+    (setq conditions (nreverse conditions))
+    (appkit--warn-cleanup-conditions (cdr conditions) 'appkit-surface)
+    (when-let* ((condition (car conditions)))
+      (signal (car condition) (cdr condition)))))
 
 (defun appkit-surface--start-effect-commands (surface commands)
   "Start final Effect COMMANDS for SURFACE in their explicit order."
@@ -216,29 +213,34 @@
 (defun appkit-surface--cleanup-open (surface buffer created-p renderer-created-p)
   "Clean a failed Surface open without hiding its primary nonlocal exit."
   (when (appkit-surface-p surface)
-    (setf (appkit-surface-alive-p surface) nil)
-    (when-let* ((runtime (appkit-surface-effect-runtime surface)))
-      (condition-case nil
-          (appkit-effect-runtime-stop runtime)
-        ((error quit) nil)))
-    (when-let* ((loop (appkit-surface-loop surface)))
-      (condition-case nil
-          (appkit-loop-stop loop)
-        ((error quit) nil)))
-    (when (and renderer-created-p (appkit-surface-renderer surface))
-      (condition-case nil
-          (with-current-buffer buffer
-            (funcall
-             (appkit-generated-renderer-unmount
-              (appkit-surface-renderer surface))
-             surface))
-        ((error quit) nil))))
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (when (eq appkit--current-surface surface)
-        (setq-local appkit--current-surface nil)))
-    (when created-p
-      (kill-buffer buffer))))
+    (setf (appkit-surface-alive-p surface) nil))
+  (let (conditions)
+    (appkit--run-cleanup-forms conditions
+      (when-let* ((runtime
+                   (and (appkit-surface-p surface)
+                        (appkit-surface-effect-runtime surface))))
+        (appkit-effect-runtime-stop runtime))
+      (when-let* ((loop
+                   (and (appkit-surface-p surface)
+                        (appkit-surface-loop surface))))
+        (appkit-loop-stop loop))
+      (when (and (appkit-surface-p surface)
+                 renderer-created-p
+                 (appkit-surface-renderer surface)
+                 (buffer-live-p buffer))
+        (with-current-buffer buffer
+          (funcall
+           (appkit-generated-renderer-unmount
+            (appkit-surface-renderer surface))
+           surface)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (when (eq appkit--current-surface surface)
+            (setq-local appkit--current-surface nil))))
+      (when (and created-p (buffer-live-p buffer))
+        (kill-buffer buffer)))
+    (appkit--warn-cleanup-conditions
+     (nreverse conditions) 'appkit-surface)))
 
 (cl-defun appkit-open-generated-surface
     (type &key input buffer buffer-name select
@@ -347,19 +349,17 @@ FOLDED-COMMAND-LIMIT, and MAX-ACTIVE-EFFECTS bound deferred work."
   (appkit-loop--assert-main-thread)
   (when (appkit-surface-alive-p surface)
     (let ((buffer (appkit-surface-buffer surface))
-          first-condition)
+          conditions)
       ;; Revoke host identity before client cleanup can reenter.
       (setf (appkit-surface-alive-p surface) nil)
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (when (eq appkit--current-surface surface)
             (setq-local appkit--current-surface nil))))
-      (appkit-surface--record-first-condition first-condition
+      (appkit--run-cleanup-forms conditions
         (appkit-effect-runtime-stop
-         (appkit-surface-effect-runtime surface)))
-      (appkit-surface--record-first-condition first-condition
-        (appkit-loop-stop (appkit-surface-loop surface)))
-      (appkit-surface--record-first-condition first-condition
+         (appkit-surface-effect-runtime surface))
+        (appkit-loop-stop (appkit-surface-loop surface))
         (when (and (buffer-live-p buffer)
                    (appkit-surface-renderer surface))
           (with-current-buffer buffer
@@ -367,8 +367,10 @@ FOLDED-COMMAND-LIMIT, and MAX-ACTIVE-EFFECTS bound deferred work."
              (appkit-generated-renderer-unmount
               (appkit-surface-renderer surface))
              surface))))
-      (when first-condition
-        (signal (car first-condition) (cdr first-condition)))
+      (setq conditions (nreverse conditions))
+      (appkit--warn-cleanup-conditions (cdr conditions) 'appkit-surface)
+      (when-let* ((condition (car conditions)))
+        (signal (car condition) (cdr condition)))
       t)))
 
 (defun appkit-surface--host-detach ()

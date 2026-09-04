@@ -3,10 +3,7 @@
 (require 'ert)
 
 (require 'appkit-chat-history)
-(require 'appkit-test-helper
-         (expand-file-name
-          "00-appkit-test-helper"
-          (file-name-directory (or load-file-name buffer-file-name))))
+(require 'appkit-test-helper)
 
 (ert-deftest appkit-chat-history-reset-is-an-unknown-production-window ()
   (with-temp-buffer
