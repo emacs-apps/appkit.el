@@ -25,7 +25,7 @@
 (require 'seq)
 (require 'svg nil t)
 (require 'appkit-core)
-(require 'appkit-view)
+(require 'appkit-geometry)
 (require 'appkit-media-card)
 
 (defgroup appkit-media nil
@@ -153,7 +153,7 @@ FRAME defaults to the selected frame."
 
 Prefer BUFFER's canonical graphical display window, then another live
 image-capable frame.  Return nil when no such frame exists."
-  (or (appkit-view-display-frame
+  (or (appkit-geometry-display-frame
        buffer #'appkit-media-inline-image-rendering-available-p)
       (seq-find
        #'appkit-media-inline-image-rendering-available-p
@@ -794,7 +794,7 @@ the image's protocol alt text.  HELP-ECHO describes ACTION."
 (defun appkit-media--char-pixel-width ()
   "Return one default-face column width for the current render target."
   (save-excursion
-    (let ((window (appkit-view-display-window)))
+    (let ((window (appkit-geometry-display-window)))
       (max 1
            (or (and window
                     (ignore-errors (window-font-width window 'default)))
@@ -814,7 +814,7 @@ does not use `line-pixel-height': asynchronous rendering can run while the
 selected window displays an unrelated full-size image, making that function
 return the source image height instead of a character height."
   (save-excursion
-    (let ((window (appkit-view-display-window)))
+    (let ((window (appkit-geometry-display-window)))
       (max 1
            (or (and window
                     (ignore-errors
@@ -825,7 +825,7 @@ return the source image height instead of a character height."
 
 (defun appkit-media--base-char-pixel-height ()
   "Return unscaled default-face height for the current render target."
-  (let ((window (appkit-view-display-window)))
+  (let ((window (appkit-geometry-display-window)))
     (max 1
          (or (and window
                   (frame-char-height (window-frame window)))

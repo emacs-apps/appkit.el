@@ -178,7 +178,7 @@ display properties, styles only the textual leading span, and bounds the
 combined fragment through ~appkit-ui-render-one-line-preview~.
 
 Pass the same preview model as ~:preview~ to
-~appkit-view-one-line-row-create~ or ~appkit-chatbuf-aux-render~.  The
+~appkit-presentation-one-line-row-create~ or ~appkit-chatbuf-aux-render~.  The
 directory renderer places it in one row column; the chatbuf renderer
 places it on the second line of the reply/edit card.  One-line rows accept
 ~:context-open~ and ~:context-close~ delimiters; Appkit measures their actual
@@ -368,6 +368,15 @@ windows, or killing an indirect clone does not.  Generated structural edits
 are undo-free; editable document state remains governed by the compose/editor
 module that owns it.
 
+Width-sensitive Generated Surfaces should call
+~appkit-surface-enable-responsive-geometry~ with a callback that posts their
+bounded geometry render request, then call
+~appkit-surface-refresh-responsive-geometry~ after the host is displayed.
+Renderers read the measured canonical-window width through
+~appkit-surface-responsive-width~.  Window and line-number changes notify only
+when the measurement changes; a no-argument text-scale hook always notifies so
+clients can retire pixel caches and rebuild images for the new face metrics.
+
 Source, topic publish, terminal reset, existing-Surface policies, resource
 companions, and editable/hybrid Surface control are later protocol layers.
 Do not reproduce them with direct callbacks or restore the removed App/View
@@ -435,7 +444,7 @@ Presentation and interaction helpers retain their focused namespaces:
 - ~appkit-chat-timeline-*~
 - ~appkit-scroll-*~
 - ~appkit-ui-*~
-- ~appkit-view-*~ (presentation geometry only)
+- ~appkit-geometry-*~
 - ~appkit-chat-completion-*~
 - ~appkit-chat-ins-*~
 - ~appkit-discussion-*~

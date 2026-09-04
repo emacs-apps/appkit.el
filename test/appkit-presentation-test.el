@@ -1,14 +1,14 @@
-;;; appkit-view-test.el --- Tests for appkit-view helpers -*- lexical-binding: t; -*-
+;;; appkit-presentation-test.el --- Tests for Appkit presentation helpers -*- lexical-binding: t; -*-
 
 (require 'ert)
 (require 'cl-lib)
-(require 'appkit-view)
+(require 'appkit-presentation)
 (require 'appkit-test-helper)
 
-(ert-deftest appkit-view-render-list-spec-renders-items-and-footer ()
+(ert-deftest appkit-presentation-render-list-spec-renders-items-and-footer ()
   (with-temp-buffer
-    (appkit-view-render-list-spec
-     (appkit-view-list-spec-create
+    (appkit-presentation-render-list-spec
+     (appkit-presentation-list-spec-create
       :title "Threads"
       :summary "2 items"
       :items '("one" "two")
@@ -19,12 +19,12 @@
     (should (string-match-p "- one" (buffer-string)))
     (should (string-match-p "footer" (buffer-string)))))
 
-(ert-deftest appkit-view-render-list-spec-preserving-position-restores-anchor ()
+(ert-deftest appkit-presentation-render-list-spec-preserving-position-restores-anchor ()
   (with-temp-buffer
     (let ((items '(("a" . "first")
                    ("b" . "second"))))
       (cl-labels ((render-spec (rows)
-                    (appkit-view-list-spec-create
+                    (appkit-presentation-list-spec-create
                      :items rows
                      :item-inserter
                      (lambda (item)
@@ -36,38 +36,38 @@
                           (list 'row-id (car item))))))))
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (appkit-view-render-list-spec (render-spec items)))
+          (appkit-presentation-render-list-spec (render-spec items)))
         (goto-char (point-min))
         (search-forward "second")
         (beginning-of-line)
-        (appkit-view-render-list-spec-preserving-position
+        (appkit-presentation-render-list-spec-preserving-position
          (render-spec '(("a" . "first updated")
                         ("b" . "second updated")))
          :anchor-property 'row-id)
         (should (equal "b" (get-text-property (point) 'row-id)))
         (should (looking-at-p "second updated"))))))
 
-(ert-deftest appkit-view-canonicalize-number-supports-ratio-and-bounds ()
-  (should (= 42 (appkit-view-canonicalize-number 42 100)))
-  (should (= 35 (appkit-view-canonicalize-number 0.35 100)))
-  (should (= 20 (appkit-view-canonicalize-number '(0.1 20 60) 100)))
-  (should (= 60 (appkit-view-canonicalize-number '(0.8 20 60) 100)))
-  (should (= 90 (appkit-view-canonicalize-number '(0.9 20) 100))))
+(ert-deftest appkit-presentation-canonicalize-number-supports-ratio-and-bounds ()
+  (should (= 42 (appkit-presentation-canonicalize-number 42 100)))
+  (should (= 35 (appkit-presentation-canonicalize-number 0.35 100)))
+  (should (= 20 (appkit-presentation-canonicalize-number '(0.1 20 60) 100)))
+  (should (= 60 (appkit-presentation-canonicalize-number '(0.8 20 60) 100)))
+  (should (= 90 (appkit-presentation-canonicalize-number '(0.9 20) 100))))
 
-(ert-deftest appkit-view-one-line-column-widths-follow-context-ratio ()
-  (let ((widths (appkit-view-one-line-column-widths 60 '(0.45 20))))
+(ert-deftest appkit-presentation-one-line-column-widths-follow-context-ratio ()
+  (let ((widths (appkit-presentation-one-line-column-widths 60 '(0.45 20))))
     (should (= 27 (plist-get widths :context-inner-width)))
     (should (= 30 (plist-get widths :preview-width)))
     (should (= 1 (plist-get widths :separator-width))))
-  (let ((widths (appkit-view-one-line-column-widths 30 '(0.45 20))))
+  (let ((widths (appkit-presentation-one-line-column-widths 30 '(0.45 20))))
     (should (= 20 (plist-get widths :context-inner-width)))
     (should (= 7 (plist-get widths :preview-width)))
     (should (= 1 (plist-get widths :separator-width)))))
 
-(ert-deftest appkit-view-one-line-row-collapses-preview-newlines ()
+(ert-deftest appkit-presentation-one-line-row-collapses-preview-newlines ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create :context "Group\nName" :preview (appkit-ui-one-line-preview-create :text "first line\nsecond line\r\nthird") :time "12:34")
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create :context "Group\nName" :preview (appkit-ui-one-line-preview-create :text "first line\nsecond line\r\nthird") :time "12:34")
      :width 80
      :icon-slot-width 4
      :context-width-spec '(0.32 16 30))
@@ -76,14 +76,14 @@
     (should (string-match-p "first line second line third"
                             (buffer-string)))))
 
-(ert-deftest appkit-view-one-line-row-renders-rich-preview-in-preview-column ()
+(ert-deftest appkit-presentation-one-line-row-renders-rich-preview-in-preview-column ()
   (let* ((image '(image :type png :data "bytes"))
          (prefix (propertize "[image]" 'display image)))
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
               ((symbol-function 'display-images-p) (lambda (&rest _) t)))
       (with-temp-buffer
-        (appkit-view-insert-one-line-row
-         (appkit-view-one-line-row-create
+        (appkit-presentation-insert-one-line-row
+         (appkit-presentation-one-line-row-create
           :context "Group"
           :preview
           (appkit-ui-one-line-preview-create
@@ -110,10 +110,10 @@
                (ensure-list
                 (get-text-property (- (point) 6) 'face))))))))
 
-(ert-deftest appkit-view-one-line-row-places-normalized-context-trail-inside-brackets ()
+(ert-deftest appkit-presentation-one-line-row-places-normalized-context-trail-inside-brackets ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create :context "Group"
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create :context "Group"
 				      :context-trail "  7\nnew  " :preview (appkit-ui-one-line-preview-create :text "preview") )
      :width 60
      :context-width-spec 20)
@@ -125,20 +125,20 @@
       (should (< open context trail close)))
     (should (= 1 (count-lines (point-min) (point-max))))))
 
-(ert-deftest appkit-view-one-line-row-allows-zero-width-icon-slot ()
+(ert-deftest appkit-presentation-one-line-row-allows-zero-width-icon-slot ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create
       :context "Channel"
       :preview (appkit-ui-one-line-preview-create :text "preview"))
      :width 60
      :icon-slot-width 0)
     (should (string-prefix-p "[Channel" (buffer-string)))))
 
-(ert-deftest appkit-view-one-line-row-supports-client-context-delimiters ()
+(ert-deftest appkit-presentation-one-line-row-supports-client-context-delimiters ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create
       :context "Guild > Channel"
       :context-open "<"
       :context-close ">"
@@ -154,10 +154,10 @@
       (should (< open context trail close)))
     (should-not (string-match-p "\\[" (buffer-string)))))
 
-(ert-deftest appkit-view-one-line-row-measures-wide-context-delimiters ()
+(ert-deftest appkit-presentation-one-line-row-measures-wide-context-delimiters ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create
       :context "Voice"
       :context-open "「"
       :context-close "」"
@@ -171,11 +171,11 @@
     (search-forward "12:34")
     (should (= 60 (current-column)))))
 
-(ert-deftest appkit-view-one-line-row-applies-face-only-to-context-trail ()
+(ert-deftest appkit-presentation-one-line-row-applies-face-only-to-context-trail ()
   (with-temp-buffer
     (let ((trail (propertize "42" 'appkit-test-trail t)))
-      (appkit-view-insert-one-line-row
-       (appkit-view-one-line-row-create :context "Group"
+      (appkit-presentation-insert-one-line-row
+       (appkit-presentation-one-line-row-create :context "Group"
 					:context-trail trail
 					:context-trail-face 'font-lock-warning-face :preview (appkit-ui-one-line-preview-create :text "preview") )
        :width 60
@@ -190,10 +190,10 @@
       (should-not (get-text-property (1- trail-start) 'face))
       (should-not (get-text-property close 'face)))))
 
-(ert-deftest appkit-view-one-line-row-preserves-context-trail-text-properties ()
+(ert-deftest appkit-presentation-one-line-row-preserves-context-trail-text-properties ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create :context "Group"
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create :context "Group"
 				      :context-trail
 				      (concat (propertize "12\n" 'face 'success)
 					      (propertize "@3" 'face 'warning)) :preview (appkit-ui-one-line-preview-create :text "preview") )
@@ -207,11 +207,11 @@
       (should (eq 'warning (get-text-property (+ trail-start 3) 'face)))
       (should (eq 'warning (get-text-property (+ trail-start 4) 'face))))))
 
-(ert-deftest appkit-view-one-line-row-keeps-context-column-with-trails ()
+(ert-deftest appkit-presentation-one-line-row-keeps-context-column-with-trails ()
   (with-temp-buffer
     (dolist (trail '(nil "7" "12345"))
-      (appkit-view-insert-one-line-row
-       (appkit-view-one-line-row-create :context "Group"
+      (appkit-presentation-insert-one-line-row
+       (appkit-presentation-one-line-row-create :context "Group"
 					:context-trail trail :preview (appkit-ui-one-line-preview-create :text "preview") )
        :width 60
        :context-width-spec 20))
@@ -224,10 +224,10 @@
         (forward-line 1))
       (should (= 1 (length (delete-dups closing-columns)))))))
 
-(ert-deftest appkit-view-one-line-row-long-context-retains-right-aligned-trail ()
+(ert-deftest appkit-presentation-one-line-row-long-context-retains-right-aligned-trail ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create :context (make-string 80 ?x)
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create :context (make-string 80 ?x)
 				      :context-trail "NEW" :preview (appkit-ui-one-line-preview-create :text "preview") )
      :width 60
      :context-width-spec 16)
@@ -256,29 +256,29 @@
                          (point) 'display nil trail-start)
                         'display)))))))
 
-(ert-deftest appkit-view-one-line-row-does-not-infer-hover-from-help ()
+(ert-deftest appkit-presentation-one-line-row-does-not-infer-hover-from-help ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create :context "Group" :preview (appkit-ui-one-line-preview-create :text "preview") :time "12:34"
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create :context "Group" :preview (appkit-ui-one-line-preview-create :text "preview") :time "12:34"
 				      :help-echo "Open Group")
      :width 80)
     (should (equal "Open Group" (get-text-property (point-min) 'help-echo)))
     (should-not (text-property-not-all
                  (point-min) (point-max) 'mouse-face nil))))
 
-(ert-deftest appkit-view-one-line-row-supports-explicit-hover-face ()
+(ert-deftest appkit-presentation-one-line-row-supports-explicit-hover-face ()
   (with-temp-buffer
-    (appkit-view-insert-one-line-row
-     (appkit-view-one-line-row-create :context "Group" :preview (appkit-ui-one-line-preview-create :text "preview") :time "12:34"
+    (appkit-presentation-insert-one-line-row
+     (appkit-presentation-one-line-row-create :context "Group" :preview (appkit-ui-one-line-preview-create :text "preview") :time "12:34"
 				      :mouse-face 'highlight)
      :width 80)
     (should (eq 'highlight (get-text-property (point-min) 'mouse-face)))))
 
-(ert-deftest appkit-view-one-line-row-keeps-context-column-across-time-formats ()
+(ert-deftest appkit-presentation-one-line-row-keeps-context-column-across-time-formats ()
   (with-temp-buffer
     (dolist (time '("" "Thu•" "29.06.26•"))
-      (appkit-view-insert-one-line-row
-       (appkit-view-one-line-row-create :context "channel" :preview (appkit-ui-one-line-preview-create :text "preview") :time time)
+      (appkit-presentation-insert-one-line-row
+       (appkit-presentation-one-line-row-create :context "channel" :preview (appkit-ui-one-line-preview-create :text "preview") :time time)
        :width 80
        :time-slot-width 9))
     (let (targets)
@@ -290,10 +290,11 @@
         (forward-line 1))
       (should (= 1 (length (delete-dups targets)))))))
 
-(ert-deftest appkit-view-chars-xwidth-does-not-select-display-window ()
+(ert-deftest appkit-presentation-chars-xwidth-does-not-select-display-window ()
+  (select-window (get-largest-window))
   (let ((original-window (selected-window))
         other-window
-        (buffer (generate-new-buffer " *appkit-view-width*")))
+        (buffer (generate-new-buffer " *appkit-presentation-width*")))
     (unwind-protect
         (progn
           (setq other-window (split-window original-window))
@@ -309,7 +310,7 @@
                          (lambda (_string &optional measured-buffer)
                            (should (eq measured-buffer buffer))
                            9)))
-                (should (= 9 (appkit-view--chars-xwidth 1 other-window))))
+                (should (= 9 (appkit-geometry-columns-pixel-width 1 other-window))))
               (should (= expected-point (point)))
               (should (eq original-window (selected-window))))))
       (when (window-live-p other-window)
@@ -317,10 +318,11 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest appkit-view-default-line-pixel-height-keeps-insertion-point ()
+(ert-deftest appkit-geometry-default-line-pixel-height-keeps-insertion-point ()
+  (select-window (get-largest-window))
   (let ((original-window (selected-window))
         other-window
-        (buffer (generate-new-buffer " *appkit-view-line-height*")))
+        (buffer (generate-new-buffer " *appkit-presentation-line-height*")))
     (unwind-protect
         (progn
           (setq other-window (split-window original-window))
@@ -335,7 +337,7 @@
                            (with-selected-window
                                (or window (selected-window))
                              16))))
-                (should (= 16 (appkit-view-default-line-pixel-height))))
+                (should (= 16 (appkit-geometry-default-line-pixel-height))))
               (should (= expected-point (point)))
               (should (eq original-window (selected-window))))))
       (when (window-live-p other-window)
@@ -343,31 +345,31 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest appkit-view-move-to-column-inserts-align-spacer-when-needed ()
+(ert-deftest appkit-geometry-insert-alignment-space-inserts-align-spacer-when-needed ()
   (with-temp-buffer
     (insert "abc")
     (let ((insert-pos (point)))
-      (appkit-view-move-to-column 3)
+      (appkit-geometry-insert-alignment-space 3)
       (should (= (point) (1+ insert-pos)))
-      (should (>= (appkit-view-current-column) 3))
+      (should (>= (appkit-geometry-current-column) 3))
       (let ((display-prop (get-text-property insert-pos 'display)))
         (should (consp display-prop))
         (should (eq (car display-prop) 'space))
         (should (plist-member (cdr display-prop) :align-to))))))
 
-(ert-deftest appkit-view-move-to-column-always-inserts-absolute-spacer ()
+(ert-deftest appkit-geometry-insert-alignment-space-always-inserts-absolute-spacer ()
   (with-temp-buffer
     (insert "abcdef")
     (let ((insert-pos (point)))
-      (appkit-view-move-to-column 2)
+      (appkit-geometry-insert-alignment-space 2)
       (should (= (point) (1+ insert-pos)))
       (should (equal '(space :align-to 2)
                      (get-text-property insert-pos 'display))))))
 
-(ert-deftest appkit-view-display-space-keeps-source-width-constant ()
-  (let ((columns (appkit-view-display-space :columns 8))
-        (pixels (appkit-view-display-space :pixels 24))
-        (aligned (appkit-view-display-space :align-to 40)))
+(ert-deftest appkit-geometry-display-space-keeps-source-width-constant ()
+  (let ((columns (appkit-geometry-display-space :columns 8))
+        (pixels (appkit-geometry-display-space :pixels 24))
+        (aligned (appkit-geometry-display-space :align-to 40)))
     (should (= 1 (length columns)))
     (should (equal '(space :width 8)
                    (get-text-property 0 'display columns)))
@@ -376,9 +378,9 @@
     (should (equal '(space :align-to 40)
                    (get-text-property 0 'display aligned)))
     (should-error
-     (appkit-view-display-space :columns 1 :pixels 2))))
+     (appkit-geometry-display-space :columns 1 :pixels 2))))
 
-(ert-deftest appkit-view-window-fill-column-uses-remapped-width-and-margins ()
+(ert-deftest appkit-geometry-window-width-uses-remapped-width-and-margins ()
   (let* ((win (selected-window))
          (buffer (window-buffer win))
          (margins (window-margins win))
@@ -388,13 +390,13 @@
                       1)))
     (with-current-buffer buffer
       (let ((display-line-numbers-mode nil))
-        (should (= (appkit-view-window-fill-column win 1) expected))))))
+        (should (= (appkit-geometry-window-width win 1) expected))))))
 
-(ert-deftest appkit-view-display-window-prefers-focus-then-widest ()
+(ert-deftest appkit-geometry-display-window-prefers-focus-then-widest ()
   (save-window-excursion
     (delete-other-windows)
-    (let* ((buffer (generate-new-buffer " *appkit-view-display*"))
-           (other-buffer (generate-new-buffer " *appkit-view-other*"))
+    (let* ((buffer (generate-new-buffer " *appkit-presentation-display*"))
+           (other-buffer (generate-new-buffer " *appkit-presentation-other*"))
            (first-window (selected-window))
            (second-window (split-window-right))
            (other-window (split-window-below)))
@@ -408,102 +410,39 @@
                          (if (eq window second-window) 80 40))))
               (select-window first-window)
               (with-current-buffer buffer
-                (should (eq first-window (appkit-view-display-window))))
+                (should (eq first-window (appkit-geometry-display-window))))
               (select-window other-window)
               (with-current-buffer buffer
-                (should (eq second-window (appkit-view-display-window))))))
+                (should (eq second-window (appkit-geometry-display-window))))))
         (kill-buffer buffer)
         (kill-buffer other-buffer)))))
 
-(ert-deftest appkit-view-display-window-supports-frame-capability-filter ()
+(ert-deftest appkit-geometry-display-window-supports-frame-capability-filter ()
   (save-window-excursion
     (with-temp-buffer
       (set-window-buffer (selected-window) (current-buffer))
       (should
        (eq (selected-window)
-           (appkit-view-display-window nil (lambda (_frame) t))))
+           (appkit-geometry-display-window nil (lambda (_frame) t))))
       (should-not
-       (appkit-view-display-window nil (lambda (_frame) nil)))
+       (appkit-geometry-display-window nil (lambda (_frame) nil)))
       (should-not
-       (appkit-view-display-frame nil (lambda (_frame) nil))))))
+       (appkit-geometry-display-frame nil (lambda (_frame) nil))))))
 
-(ert-deftest appkit-view-responsive-geometry-coalesces-display-changes ()
-  (save-window-excursion
-    (appkit-test-with-view
-     (let ((view (appkit-current-view))
-           (width 30)
-           requests)
-       (set-window-buffer (selected-window) (current-buffer))
-       (cl-letf (((symbol-function 'appkit-view-window-fill-column)
-                  (lambda (&rest _arguments) width))
-                 ((symbol-function 'appkit-request-sync)
-                  (lambda (&rest arguments)
-                    (push arguments requests))))
-         (appkit-view-enable-responsive-geometry view)
-         (appkit-view-enable-responsive-geometry view)
-         (should (= 28 (appkit-view-responsive-width 2)))
-         (dolist (hook
-                  (list window-state-change-functions
-                        display-line-numbers-mode-hook
-                        text-scale-mode-hook))
-           (should (memq #'appkit-view-refresh-responsive-geometry hook)))
-         (should
-          (= 1
-             (cl-count #'appkit-view-refresh-responsive-geometry
-                       window-state-change-functions)))
-         (setq width 40)
-         (run-hook-with-args
-          'window-state-change-functions (selected-window))
-         (run-hook-with-args
-          'window-state-change-functions (selected-window))
-         (run-hooks 'text-scale-mode-hook))
-       (should
-        (equal (nreverse requests)
-               (list (list view :part 'geometry :position t)
-                     (list view :part 'geometry :position t))))))))
-
-(ert-deftest appkit-view-responsive-geometry-seeds-hidden-buffer-width ()
-  (appkit-test-with-view
-   (let ((view (appkit-current-view))
-         (fill-column 72))
-     (cl-letf (((symbol-function 'appkit-view-display-window)
-                (lambda () nil)))
-       (appkit-view-enable-responsive-geometry view)
-       (should (= 72 (appkit-view-responsive-width)))))))
-
-(ert-deftest appkit-view-responsive-geometry-ignores-detached-view ()
-  (save-window-excursion
-    (appkit-test-with-view
-     (let ((view (appkit-current-view))
-           (measurements 0))
-       (set-window-buffer (selected-window) (current-buffer))
-       (appkit-view-enable-responsive-geometry view)
-       (appkit-kill-view view)
-       (cl-letf (((symbol-function 'appkit-view-window-fill-column)
-                  (lambda (&rest _arguments)
-                    (cl-incf measurements)))
-                 ((symbol-function 'appkit-request-sync)
-                  (lambda (&rest _arguments)
-                    (ert-fail "Detached view requested geometry sync"))))
-         (run-hook-with-args
-          'window-state-change-functions (selected-window))
-         (run-hooks 'text-scale-mode-hook))
-       (should (= measurements 0))))))
-
-(ert-deftest appkit-view-elide-string-adds-display-ellipsis ()
+(ert-deftest appkit-presentation-elide-string-adds-display-ellipsis ()
   (let* ((text "abcdefghijklmnopqrstuvwxyz")
-         (elided (appkit-view-elide-string text 8 'shadow)))
+         (elided (appkit-presentation-elide-string text 8 'shadow)))
     (should (> (length elided) 8))
     (let ((display-pos (next-single-property-change 0 'display elided)))
       (should (integerp display-pos))
       (should (equal "…"
                      (get-text-property display-pos 'display elided))))))
 
-(ert-deftest appkit-view-elide-string-noop-when-string-fits ()
+(ert-deftest appkit-presentation-elide-string-noop-when-string-fits ()
   (let ((text "short"))
-    (should (equal text (appkit-view-elide-string text 12 'shadow)))))
+    (should (equal text (appkit-presentation-elide-string text 12 'shadow)))))
 
-(ert-deftest appkit-view-elide-string-for-columns-uses-pixel-width ()
+(ert-deftest appkit-presentation-elide-string-for-columns-uses-pixel-width ()
   (cl-labels ((pixel-width
 		(text)
 		(let ((total 0))
@@ -514,12 +453,12 @@
                               ((= character ?🏆) 30)
                               ((= character ?…) 10)
                               (t 10))))))))
-    (cl-letf (((symbol-function 'appkit-view--string-pixel-width)
+    (cl-letf (((symbol-function 'appkit-presentation--string-pixel-width)
                (lambda (text &optional _face) (pixel-width text)))
-              ((symbol-function 'appkit-view--chars-xwidth)
+              ((symbol-function 'appkit-geometry-columns-pixel-width)
                (lambda (columns &optional _window) (* columns 10))))
       (let* ((text "🏆abcdefgh")
-             (elided (appkit-view-elide-string-for-columns text 5 'shadow))
+             (elided (appkit-presentation-elide-string-for-columns text 5 'shadow))
              (display-position
               (next-single-property-change 0 'display elided)))
         (should (= 2 display-position))
@@ -530,15 +469,15 @@
             (pixel-width
              (concat (substring elided 0 display-position) "…"))))))))
 
-(ert-deftest appkit-view-safe-elide-boundary-preserves-emoji-clusters ()
-  (should (= 0 (appkit-view--safe-elide-boundary "👍🏽ok" 1)))
-  (should (= 1 (appkit-view--safe-elide-boundary "👩‍💻ok" 2)))
-  (should (= 0 (appkit-view--safe-elide-boundary "🇨🇳ok" 1))))
+(ert-deftest appkit-presentation-safe-elide-boundary-preserves-emoji-clusters ()
+  (should (= 0 (appkit-presentation--safe-elide-boundary "👍🏽ok" 1)))
+  (should (= 1 (appkit-presentation--safe-elide-boundary "👩‍💻ok" 2)))
+  (should (= 0 (appkit-presentation--safe-elide-boundary "🇨🇳ok" 1))))
 
-(ert-deftest appkit-view-insert-label-row-applies-struct-fields ()
+(ert-deftest appkit-presentation-insert-label-row-applies-struct-fields ()
   (with-temp-buffer
-    (appkit-view-insert-label-row
-     (appkit-view-label-row-create
+    (appkit-presentation-insert-label-row
+     (appkit-presentation-label-row-create
       :label "Section"
       :prefix "[+] "
       :suffix " (4)"
@@ -550,9 +489,9 @@
     (should (equal 'font-lock-keyword-face
                    (get-text-property (point) 'face)))))
 
-(ert-deftest appkit-view-insert-label-line-supports-prefix-icon-and-suffix ()
+(ert-deftest appkit-presentation-insert-label-line-supports-prefix-icon-and-suffix ()
   (with-temp-buffer
-    (appkit-view-insert-label-line
+    (appkit-presentation-insert-label-line
      "Guild"
      :prefix "  [-] "
      :icon-inserter (lambda ()
@@ -566,9 +505,9 @@
     (should (equal 'guild (get-text-property (point) 'row-kind)))
     (should (equal "toggle" (get-text-property (point) 'help-echo)))))
 
-(ert-deftest appkit-view-insert-heading-line-applies-face-and-properties ()
+(ert-deftest appkit-presentation-insert-heading-line-applies-face-and-properties ()
   (with-temp-buffer
-    (appkit-view-insert-heading-line
+    (appkit-presentation-insert-heading-line
      "Heading"
      :face 'font-lock-keyword-face
      :line-properties '(row-kind section))

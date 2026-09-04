@@ -21,6 +21,7 @@
 (require 'appkit-command)
 (require 'appkit-app)
 (require 'appkit-core)
+(require 'appkit-geometry)
 (require 'appkit-context)
 
 (cl-defstruct (appkit-surface-type
@@ -516,6 +517,107 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                             (format "Surface host cleanup failed: %s"
                                     (error-message-string condition))
                             :warning)))))))
+
+(defvar-local appkit-surface--responsive-owner nil
+  "Generated Surface owning the responsive geometry state.")
+
+(defvar-local appkit-surface--responsive-window nil
+  "Canonical window used for the Generated Surface width measurement.")
+
+(defvar-local appkit-surface--responsive-width nil
+  "Last Generated Surface presentation width measured in columns.")
+
+(defvar-local appkit-surface--responsive-callback nil
+  "Callback invoked after Generated Surface geometry changes.")
+
+(defvar-local appkit-surface--responsive-hook nil
+  "Buffer-local hook closure refreshing Generated Surface geometry.")
+
+(defun appkit-surface-responsive-width (surface &optional margin-columns)
+  "Return SURFACE's responsive width less MARGIN-COLUMNS.
+
+Return nil unless SURFACE owns the current buffer's responsive geometry."
+  (when (and (appkit-surface-p surface)
+             (eq surface appkit-surface--responsive-owner)
+             (eq (current-buffer) (appkit-surface-buffer surface)))
+    (unless appkit-surface--responsive-width
+      (setq-local
+       appkit-surface--responsive-width
+       (or (when-let* ((window (appkit-geometry-display-window)))
+             (setq-local appkit-surface--responsive-window window)
+             (appkit-geometry-window-width window))
+           (and (integerp fill-column) (> fill-column 0) fill-column))))
+    (when (numberp appkit-surface--responsive-width)
+      (max 1
+           (- appkit-surface--responsive-width
+              (max 0 (or margin-columns 0)))))))
+
+(defun appkit-surface-refresh-responsive-geometry (surface &rest events)
+  "Remeasure SURFACE and notify its geometry callback when required.
+
+Hook EVENTS suppress an unchanged-window notification.  An explicit call
+without EVENTS always notifies, covering redisplay after text scaling and
+cache retirement."
+  (when (appkit-surface-live-p surface)
+    (with-current-buffer (appkit-surface-buffer surface)
+      (when (eq surface appkit-surface--responsive-owner)
+        (when-let* ((window (appkit-geometry-display-window))
+                    (width (appkit-geometry-window-width window)))
+          (let ((changed
+                 (or (not (eq window appkit-surface--responsive-window))
+                     (not (equal width
+                                 appkit-surface--responsive-width)))))
+            (setq-local appkit-surface--responsive-window window
+                        appkit-surface--responsive-width width)
+            (when (and (functionp appkit-surface--responsive-callback)
+                       (or (null events) changed))
+              (funcall appkit-surface--responsive-callback surface width))
+            width))))))
+
+(defun appkit-surface-enable-responsive-geometry (surface callback)
+  "Make SURFACE observe canonical-window geometry through CALLBACK.
+
+CALLBACK receives SURFACE and the measured width.  Hook lifetime is owned by
+SURFACE; stopping it removes every installed hook."
+  (unless (appkit-surface-live-p surface)
+    (error "Cannot enable geometry for an unavailable Surface"))
+  (unless (functionp callback)
+    (error "Surface geometry callback is not callable: %S" callback))
+  (with-current-buffer (appkit-surface-buffer surface)
+    (unless (eq surface (appkit-current-surface))
+      (error "Cannot enable geometry for a detached Surface"))
+    (setq-local appkit-surface--responsive-callback callback)
+    (unless (eq surface appkit-surface--responsive-owner)
+      (setq-local appkit-surface--responsive-owner surface
+                  appkit-surface--responsive-window
+                  (appkit-geometry-display-window)
+                  appkit-surface--responsive-width
+                  (or (appkit-geometry-window-width
+                       appkit-surface--responsive-window)
+                      (and (integerp fill-column) (> fill-column 0) fill-column))
+                  appkit-surface--responsive-hook
+                  (lambda (&rest events)
+                    (apply #'appkit-surface-refresh-responsive-geometry
+                           surface events)))
+      (dolist (hook '(window-state-change-functions
+                      display-line-numbers-mode-hook
+                      text-scale-mode-hook))
+        (add-hook hook appkit-surface--responsive-hook t t)
+        (appkit-register-handle
+         surface 'hook
+         (list hook appkit-surface--responsive-hook t (current-buffer))))
+      (appkit-register-handle
+       surface 'function
+       (lambda ()
+         (when (buffer-live-p (appkit-surface-buffer surface))
+           (with-current-buffer (appkit-surface-buffer surface)
+             (when (eq surface appkit-surface--responsive-owner)
+               (setq-local appkit-surface--responsive-owner nil
+                           appkit-surface--responsive-window nil
+                           appkit-surface--responsive-width nil
+                           appkit-surface--responsive-callback nil
+                           appkit-surface--responsive-hook nil))))))))
+  surface)
 
 (provide 'appkit-surface)
 

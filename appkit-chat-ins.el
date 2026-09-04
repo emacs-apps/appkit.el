@@ -20,7 +20,7 @@
 (require 'subr-x)
 (require 'appkit-media-card)
 (require 'appkit-ui)
-(require 'appkit-view)
+(require 'appkit-geometry)
 
 (defun appkit-chat-ins--current-line-prefix-width ()
   "Return the display prefix width already attached to the current line."
@@ -50,7 +50,7 @@ right-aligned line."
         (let* ((tail-width (string-width raw))
                (target-column (max 0 (- target-width tail-width)))
                (current-column (+ prefix-width
-                                  (appkit-view-current-column))))
+                                  (appkit-geometry-current-column))))
           (when (and overflow-newline-p
                      (> current-column
                         (max 0 (- target-column
@@ -66,7 +66,7 @@ right-aligned line."
                            (,(+ tail-width
                                 (max 0 right-edge-margin))
                             . width)))))
-            (appkit-view-move-to-column target-column)))
+            (appkit-geometry-insert-alignment-space target-column)))
       (insert " "))
     (insert rendered)
     (cons start (point))))

@@ -4,6 +4,7 @@
 
 (require 'ert)
 (require 'appkit-surface)
+(require 'appkit-geometry)
 
 (define-derived-mode appkit-surface-test-mode special-mode "Appkit-Surface")
 
@@ -70,6 +71,82 @@
                    (appkit-open-generated-surface ,type ,@arguments))
              ,@body)
          (appkit-surface-test--cleanup ,surface)))))
+
+(ert-deftest appkit-geometry-insert-alignment-space-uses-remapped-buffer-metrics ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'appkit-geometry-display-window)
+               (lambda (&rest _) (selected-window)))
+              ((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+              ((symbol-function 'frame-char-width) (lambda (&rest _) 8))
+              ((symbol-function 'appkit-geometry-columns-pixel-width)
+               (lambda (columns &optional _window) (* columns 12))))
+      (let ((position (point)))
+        (appkit-geometry-insert-alignment-space 10)
+        (should
+         (equal '(space :align-to (120))
+                (get-text-property position 'display)))))))
+
+(ert-deftest appkit-geometry-alignment-keeps-right-edge-across-remap ()
+  (cl-labels
+      ((right-edge
+        (columns character-pixels)
+        (with-temp-buffer
+          (cl-letf (((symbol-function 'appkit-geometry-display-window)
+                     (lambda (&rest _) (selected-window)))
+                    ((symbol-function 'display-graphic-p)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'frame-char-width)
+                     (lambda (&rest _) 8))
+                    ((symbol-function 'appkit-geometry-columns-pixel-width)
+                     (lambda (count &optional _window)
+                       (* count character-pixels))))
+            (let ((position (point)))
+              (appkit-geometry-insert-alignment-space (- columns 5))
+              (+ (car (nth 2 (get-text-property position 'display)))
+                 (* 5 character-pixels)))))))
+    ;; Both remaps describe a 960-pixel text area.  The timestamp's right edge
+    ;; must stay at that same pixel even though its column count changes.
+    (should (= 960 (right-edge 120 8)))
+    (should (= 960 (right-edge 80 12)))))
+
+(ert-deftest appkit-surface-responsive-geometry-observes-and-cleans-hooks ()
+  (save-window-excursion
+    (let ((width 30) callbacks hook)
+      (appkit-surface-test--with-surface
+          (surface
+           (appkit-surface-test--type
+            :init (lambda (_context input)
+                    (appkit-next :model input :render appkit-render-none))
+            :update (lambda (_context model _message)
+                      (appkit-next :model model :render appkit-render-none))
+            :renderer-factory
+            (lambda (_surface)
+              (appkit-surface-test--renderer #'ignore))))
+        (set-window-buffer (selected-window) (appkit-surface-buffer surface))
+        (with-current-buffer (appkit-surface-buffer surface)
+          (cl-letf (((symbol-function 'appkit-geometry-display-window)
+                     (lambda (&rest _) (selected-window)))
+                    ((symbol-function 'appkit-geometry-window-width)
+                     (lambda (&rest _) width)))
+            (appkit-surface-enable-responsive-geometry
+             surface
+             (lambda (owner measured)
+               (push (list owner measured) callbacks)))
+            (setq hook appkit-surface--responsive-hook)
+            (should (= 30 (appkit-surface-responsive-width surface)))
+            (appkit-surface-refresh-responsive-geometry surface)
+            (setq width 40)
+            (funcall hook 'window-change)
+            ;; A no-argument text-scale hook must redraw even when column width
+            ;; stays unchanged, because image pixel geometry has changed.
+            (funcall hook)
+            (should (equal (mapcar #'cadr (nreverse callbacks))
+                           '(30 40 40)))
+            (appkit-surface-stop surface)
+            (should-not appkit-surface--responsive-owner)
+            (should-not (memq hook window-state-change-functions))
+            (should-not (memq hook display-line-numbers-mode-hook))
+            (should-not (memq hook text-scale-mode-hook))))))))
 
 (cl-defun appkit-surface-test--effect
     (key record &key synchronous label cancel-error)

@@ -19,7 +19,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'appkit-media-image)
-(require 'appkit-view)
+(require 'appkit-geometry)
 
 (defun appkit-chat-avatar--spacing-pixels (spacing font-height)
   "Return SPACING converted to pixels relative to FONT-HEIGHT."
@@ -38,7 +38,7 @@
   ;; EWOC printer while another window has focus, so leaking that movement
   ;; makes the remainder of the row print at an unrelated buffer position.
   (save-excursion
-    (let ((window (appkit-view-display-window)))
+    (let ((window (appkit-geometry-display-window)))
       (max
        1
        (or (and window
@@ -63,7 +63,7 @@
   ;; Keep geometry queries observational: window font APIs may select the
   ;; queried window's point as an implementation detail.
   (save-excursion
-    (let ((window (appkit-view-display-window)))
+    (let ((window (appkit-geometry-display-window)))
       (max 1
            (or (and window
                     (ignore-errors (window-font-width window 'default)))
@@ -78,7 +78,7 @@
 (defun appkit-chat-avatar--render-frame ()
   "Return an image-capable frame used to render avatars."
   (or (appkit-media-image-capable-frame (current-buffer))
-      (appkit-view-display-frame (current-buffer))
+      (appkit-geometry-display-frame (current-buffer))
       (selected-frame)))
 
 (defun appkit-chat-avatar-two-line-pixel-size ()

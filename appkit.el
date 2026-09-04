@@ -12,9 +12,9 @@
 ;;; Commentary:
 
 ;; appkit is a runtime layer for stateful Emacs buffer applications.  It owns
-;; app/view lifecycle, mutation boundaries, invalidation scheduling, keyed
-;; history projection, telega-style same-buffer chat input mechanics, media,
-;; and reusable presentation geometry.  It deliberately does not own
+;; App/Surface lifecycle, mutation boundaries, keyed history projection,
+;; telega-style same-buffer chat input mechanics, media, and reusable
+;; presentation geometry.  It deliberately does not own
 ;; application business objects, protocol adapters, or client branding.
 
 ;;; Code:
@@ -27,6 +27,7 @@
 (require 'appkit-effect)
 (require 'appkit-command)
 (require 'appkit-app)
+(require 'appkit-geometry)
 (require 'appkit-surface)
 (require 'appkit-task-queue)
 (require 'appkit-transaction)
@@ -51,7 +52,7 @@
 (require 'appkit-markup-markdown-ts)
 (require 'appkit-markup-codecs)
 (require 'appkit-markup-compose)
-(require 'appkit-view)
+(require 'appkit-presentation)
 (require 'appkit-mode-line)
 (require 'appkit-chat-avatar)
 (require 'appkit-chat-ins)

@@ -534,7 +534,7 @@
     (insert "render position")
     (goto-char 4)
     (let ((origin (point)))
-      (cl-letf (((symbol-function 'appkit-view-display-window)
+      (cl-letf (((symbol-function 'appkit-geometry-display-window)
                  (lambda (&rest _arguments) 'target-window))
                 ((symbol-function 'window-font-height)
                  (lambda (window face)
