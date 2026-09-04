@@ -350,15 +350,13 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
           'stale
         (appkit-loop--enqueue-control
          loop message incarnation reply-route
-         origin source-address source-revision))))
+         origin source-address source-revision))))(defun appkit-loop-post (loop message)
+  "Try to enqueue MESSAGE in LOOP's data lane and return its outcome.\n\nThis is an external ingress for host events and callback adapters.  Client\nphases must return a closed post command; posting from any active pass signals\na contract error.  The result is one of `enqueued', `full', `stopped', or\n`faulted'.  A failed admission does not allocate a sequence number."
+  (when appkit-loop--active-loop
+    (error "Appkit loop posts are not allowed from an active pass"))
+  (appkit-loop--post-addressed loop message
+                               (appkit-loop-incarnation loop)))
 
-(defun appkit-loop-post (loop message)
-  "Try to enqueue MESSAGE in LOOP's data lane and return its outcome.
-
-The result is one of `enqueued', `full', `stopped', or `faulted'.  A failed
-admission does not allocate a sequence number."
-  (appkit-loop--post-addressed
-   loop message (appkit-loop-incarnation loop)))
 
 
 (defun appkit-loop--complete-ticket (ticket state outcome &optional revision)

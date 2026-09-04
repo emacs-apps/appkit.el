@@ -144,15 +144,17 @@
 
 (defun appkit-surface--client-update (surface context model message)
   "Run and stage SURFACE's client transition in CONTEXT."
-  (let ((result
-         (funcall
-          (appkit-surface-type-update (appkit-surface-type surface))
-          context model message)))
-    (cond
-     ((appkit-next-p result)
-      (appkit-loop-accept (appkit-surface--stage-next surface result)))
-     ((appkit-loop-rejected-p result) result)
-     (t (appkit-surface--validate-next surface result)))))
+  (let
+      ((result
+        (funcall
+         (appkit-surface-type-update (appkit-surface-type surface))
+         context model message)))
+    (if (appkit-next-rejected-p result)
+        (appkit-loop-reject (appkit-next-rejected-reason result))
+      (appkit-loop-accept
+       (appkit-surface--stage-next surface
+                                   (appkit-surface--validate-next
+                                    surface result))))))
 
 (defun appkit-surface--update (surface model message)
   "Dispatch MESSAGE and run SURFACE's client update against MODEL."

@@ -46,6 +46,11 @@ set; its owner runtime validates the applicable capacity."
   (unless render-supplied-p
     (error "Transition result requires an explicit render disposition"))
   (appkit-next--create :model model :render render :commands commands))
+(cl-defstruct
+    (appkit-next-rejected (:constructor appkit-next-reject (reason))
+                          (:copier nil))
+  "A normal client-domain rejection carrying REASON." reason)
+
 
 (cl-defstruct (appkit-command
                (:constructor nil)

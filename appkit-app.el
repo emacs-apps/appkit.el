@@ -90,18 +90,18 @@
    (appkit-app-command-batch app)
    (appkit-next-commands next)
    (appkit-app-command-limit app))
-  (appkit-next-model next))
-
-(defun appkit-app--client-update (app context model message)
+  (appkit-next-model next))(defun appkit-app--client-update (app context model message)
   "Run APP's client update in CONTEXT against MODEL and MESSAGE."
-  (let ((result
-         (funcall (appkit-app-type-update (appkit-app-type app))
-                  context model message)))
-    (if (appkit-loop-rejected-p result)
-        result
+  (let
+      ((result
+        (funcall (appkit-app-type-update (appkit-app-type app))
+                 context model message)))
+    (if (appkit-next-rejected-p result)
+        (appkit-loop-reject (appkit-next-rejected-reason result))
       (appkit-loop-accept
-       (appkit-app--stage-next
-        app (appkit-app--validate-next app result))))))
+       (appkit-app--stage-next app
+                               (appkit-app--validate-next app result))))))
+
 
 (defun appkit-app--update (app model message)
   "Dispatch MESSAGE and run APP's client update against MODEL."

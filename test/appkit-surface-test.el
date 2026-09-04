@@ -259,7 +259,7 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                           (appkit-next :model 'initial :render appkit-render-none))
                   :update
                   (lambda (_surface _model _message)
-                    (appkit-loop-reject 'not-allowed))
+                    (appkit-next-reject 'not-allowed))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer
