@@ -330,7 +330,7 @@
           (appkit-app-close app))))))
 
 (ert-deftest appkit-source-outbound-results-enter-later-pass ()
-  (let (resolve app adapter-inputs)
+  (let (resolve emit app adapter-inputs)
     (let* ((outbound
             (lambda (_context _input payload result-gate)
               (push payload adapter-inputs)
@@ -351,7 +351,8 @@
                 (appkit-source-spec-create
                  :key 'stream :identity 'live :input 'owned
                  :start
-                 (lambda (&rest _arguments)
+                 (lambda (_context _input emit-gate _close-gate)
+                   (setq emit emit-gate)
                    (appkit-source-cancellation-create :kind 'logical))
                  :event #'appkit-source-test--event-message
                  :closed #'appkit-source-test--closed-message
@@ -379,10 +380,12 @@
                     '((outbound second backpressured)
                       (outbound first accepted))))
             (appkit-app-send app '(send stale third))
-            (should (= 1 (appkit-loop-run-pass (appkit-app-loop app))))
+            (dotimes (index 3)
+              (funcall emit index)
+              (should (= 1 (appkit-loop-run-pass (appkit-app-loop app)))))
             (should
-             (equal (car (last (plist-get (appkit-app-model app) :events)))
-                    '(outbound third stale))))
+             (member '(outbound third stale)
+                     (plist-get (appkit-app-model app) :events))))
             (appkit-app-send app '(send live invalid))
             (should (funcall resolve 'invalid-outcome))
             (should (= 1 (appkit-loop-run-pass (appkit-app-loop app))))

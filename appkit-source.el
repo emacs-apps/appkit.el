@@ -66,7 +66,7 @@
                (:copier nil))
   loop instances desired pending-starts max-sources
   ready-head ready-tail ready-count wake-pending-p
-  orphan-head orphan-tail sequence alive-p)
+  sequence alive-p)
 
 (cl-defun appkit-source-spec-create
     (&key key identity input start event closed outbound
@@ -165,25 +165,28 @@
       (appkit-source--instance-result-head instance)
       (appkit-source--instance-close-item instance)))
 
+(defun appkit-source--enqueue-ready-value (runtime value)
+  "Append VALUE to RUNTIME's bounded ready queue."
+  (let ((cell (list value)))
+    (if (appkit-source-runtime-ready-tail runtime)
+        (setcdr (appkit-source-runtime-ready-tail runtime) cell)
+      (setf (appkit-source-runtime-ready-head runtime) cell))
+    (setf (appkit-source-runtime-ready-tail runtime) cell
+          (appkit-source-runtime-ready-count runtime)
+          (1+ (appkit-source-runtime-ready-count runtime)))))
+
 (defun appkit-source--enqueue-ready (instance)
   "Queue INSTANCE once behind its Source runtime wake."
   (unless (appkit-source--instance-ready-p instance)
-    (let* ((runtime (appkit-source--instance-runtime instance))
-           (cell (list instance)))
-      (setf (appkit-source--instance-ready-p instance) t)
-      (if (appkit-source-runtime-ready-tail runtime)
-          (setcdr (appkit-source-runtime-ready-tail runtime) cell)
-        (setf (appkit-source-runtime-ready-head runtime) cell))
-      (setf (appkit-source-runtime-ready-tail runtime) cell
-            (appkit-source-runtime-ready-count runtime)
-            (1+ (appkit-source-runtime-ready-count runtime))))))
+    (setf (appkit-source--instance-ready-p instance) t)
+    (appkit-source--enqueue-ready-value
+     (appkit-source--instance-runtime instance) instance)))
 
 (defun appkit-source--ensure-wake (runtime)
   "Ensure RUNTIME has one bounded control wake for staged callback data."
   (when (and (appkit-source-runtime-alive-p runtime)
              (not (appkit-source-runtime-wake-pending-p runtime))
-             (or (appkit-source-runtime-ready-head runtime)
-                 (appkit-source-runtime-orphan-head runtime)))
+             (appkit-source-runtime-ready-head runtime))
     (let* ((loop (appkit-source-runtime-loop runtime))
            (outcome
             (appkit-loop--post-control-addressed
@@ -212,13 +215,10 @@
     (setf (appkit-source--instance-result-tail instance) cell)))
 
 (defun appkit-source--append-orphan (runtime item)
-  "Append standalone result ITEM to RUNTIME."
-  (let ((cell (list item)))
-    (if (appkit-source-runtime-orphan-tail runtime)
-        (setcdr (appkit-source-runtime-orphan-tail runtime) cell)
-      (setf (appkit-source-runtime-orphan-head runtime) cell))
-    (setf (appkit-source-runtime-orphan-tail runtime) cell)
-    (appkit-source--ensure-wake runtime)))
+  "Queue standalone result ITEM in RUNTIME's fair-ready order."
+  (appkit-source--enqueue-ready-value runtime item)
+  (appkit-source--ensure-wake runtime))
+
 (defun appkit-source--stage-runtime-fault (runtime condition)
   "Stage runtime contract CONDITION for faulting RUNTIME's owner in a pass."
   (appkit-source--append-orphan
@@ -723,16 +723,17 @@
                  returned))))))))
 
 (defun appkit-source--pop-ready (runtime)
-  "Pop one ready Source instance from RUNTIME."
+  "Pop one ready Source instance or standalone item from RUNTIME."
   (when-let* ((cell (appkit-source-runtime-ready-head runtime)))
-    (let ((instance (car cell))
+    (let ((value (car cell))
           (rest (cdr cell)))
       (setf (appkit-source-runtime-ready-head runtime) rest
             (appkit-source-runtime-ready-tail runtime) (last rest)
             (appkit-source-runtime-ready-count runtime)
-            (1- (appkit-source-runtime-ready-count runtime))
-            (appkit-source--instance-ready-p instance) nil)
-      instance)))
+            (1- (appkit-source-runtime-ready-count runtime)))
+      (when (appkit-source--instance-p value)
+        (setf (appkit-source--instance-ready-p value) nil))
+      value)))
 
 (defun appkit-source--first-item (instance)
   "Return INSTANCE's earliest retained event/result/close item."
@@ -817,30 +818,29 @@
     appkit-source-stale)
    (t
     (setf (appkit-source-runtime-wake-pending-p runtime) nil)
-    (let (instance item)
-      (while (and (setq instance (appkit-source--pop-ready runtime))
-                  (not (and (appkit-source--current-p instance)
-                            (setq item (appkit-source--first-item instance))))))
+    (let (ready item)
+      (while
+          (and
+           (setq ready (appkit-source--pop-ready runtime))
+           (not
+            (or (appkit-source--item-p ready)
+                (and (appkit-source--current-p ready)
+                     (setq item (appkit-source--first-item ready)))))))
       (cond
-       (item
-        (appkit-source--pop-item instance item)
-        (when (appkit-source--instance-pending-p instance)
-          (appkit-source--enqueue-ready instance))
+       ((appkit-source--item-p ready)
         (appkit-source--ensure-wake runtime)
-        (appkit-source--map-item instance item))
-       ((appkit-source-runtime-orphan-head runtime)
-        (let* ((cell (appkit-source-runtime-orphan-head runtime))
-               (orphan (car cell))
-               (rest (cdr cell)))
-          (setf (appkit-source-runtime-orphan-head runtime) rest
-                (appkit-source-runtime-orphan-tail runtime) (last rest))
-          (appkit-source--ensure-wake runtime)
-          (if (eq (appkit-source--item-kind orphan) 'fault)
-              (let ((condition (appkit-source--item-payload orphan)))
-                (signal (car condition) (cdr condition)))
-            (funcall (appkit-source--item-mapper orphan)
-                     (appkit-source--item-mapper-input orphan)
-                     (appkit-source--item-payload orphan)))))
+        (if (eq (appkit-source--item-kind ready) 'fault)
+            (let ((condition (appkit-source--item-payload ready)))
+              (signal (car condition) (cdr condition)))
+          (funcall (appkit-source--item-mapper ready)
+                   (appkit-source--item-mapper-input ready)
+                   (appkit-source--item-payload ready))))
+       (item
+        (appkit-source--pop-item ready item)
+        (when (appkit-source--instance-pending-p ready)
+          (appkit-source--enqueue-ready ready))
+        (appkit-source--ensure-wake runtime)
+        (appkit-source--map-item ready item))
        (t
         (appkit-source--ensure-wake runtime)
         appkit-source-stale))))))
@@ -875,8 +875,6 @@
       (setf (appkit-source-runtime-ready-head runtime) nil
             (appkit-source-runtime-ready-tail runtime) nil
             (appkit-source-runtime-ready-count runtime) 0
-            (appkit-source-runtime-orphan-head runtime) nil
-            (appkit-source-runtime-orphan-tail runtime) nil
             (appkit-source-runtime-wake-pending-p runtime) nil)
       (setq conditions (nreverse conditions))
       (appkit--warn-cleanup-conditions (cdr conditions) 'appkit-source)
