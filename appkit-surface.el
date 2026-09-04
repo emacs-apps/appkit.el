@@ -54,7 +54,8 @@
   renderer
   pending-render
   renderer-valid-p
-  alive-p)
+  alive-p
+  ready-p)
 
 (defvar-local appkit--current-surface nil
   "Generated Appkit Surface attached to the current buffer.")
@@ -67,9 +68,11 @@
        appkit--current-surface))
 
 (defun appkit-surface-live-p (surface)
-  "Return non-nil when SURFACE remains attached to its exact live buffer."
+  "Return non-nil when SURFACE is ready on its exact live buffer."
   (and (appkit-surface-p surface)
        (appkit-surface-alive-p surface)
+       (appkit-surface-ready-p surface)
+       (eq (appkit-loop-status (appkit-surface-loop surface)) 'running)
        (buffer-live-p (appkit-surface-buffer surface))
        (with-current-buffer (appkit-surface-buffer surface)
          (eq appkit--current-surface surface))))
@@ -223,7 +226,8 @@
 
 (defun appkit-surface--on-fault (surface _loop _fault)
   "Revoke SURFACE work immediately after its loop faults."
-  (setf (appkit-surface-pending-render surface) appkit-render-none)
+  (setf (appkit-surface-ready-p surface) nil
+        (appkit-surface-pending-render surface) appkit-render-none)
   (appkit-command--batch-clear (appkit-surface-command-batch surface))
   (appkit-effect-runtime-stop (appkit-surface-effect-runtime surface)))
 
@@ -236,36 +240,43 @@
 (defun appkit-surface--cleanup-open (surface buffer created-p renderer-created-p)
   "Clean a failed Surface open without hiding its primary nonlocal exit."
   (when (appkit-surface-p surface)
-    (setf (appkit-surface-alive-p surface) nil))
-  (let (conditions)
-    (appkit--run-cleanup-forms conditions
-      (when-let* ((runtime
-                   (and (appkit-surface-p surface)
-                        (appkit-surface-effect-runtime surface))))
-        (appkit-effect-runtime-stop runtime))
-      (when-let* ((loop
-                   (and (appkit-surface-p surface)
-                        (appkit-surface-loop surface))))
-        (appkit-loop-stop loop))
-      (when (and (appkit-surface-p surface)
-                 renderer-created-p
-                 (appkit-surface-renderer surface)
-                 (buffer-live-p buffer))
-        (with-current-buffer buffer
-          (funcall
-           (appkit-generated-renderer-unmount
-            (appkit-surface-renderer surface))
-           surface)))
-      (when (appkit-surface-p surface)
-        (appkit-surface--unregister surface))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (when (eq appkit--current-surface surface)
-            (setq-local appkit--current-surface nil))))
-      (when (and created-p (buffer-live-p buffer))
-        (kill-buffer buffer)))
-    (appkit--warn-cleanup-conditions
-     (nreverse conditions) 'appkit-surface)))
+    (setf (appkit-surface-ready-p surface) nil))
+  (let* ((loop
+          (and (appkit-surface-p surface)
+               (appkit-surface-loop surface)))
+         (owns-stop-p (and loop (appkit-loop--begin-stop loop)))
+         conditions)
+    (unwind-protect
+        (progn
+          (when owns-stop-p
+            (setf (appkit-surface-alive-p surface) nil)
+            (appkit--run-cleanup-forms conditions
+              (when-let* ((runtime
+                           (appkit-surface-effect-runtime surface)))
+                (appkit-effect-runtime-stop runtime))
+              (when (and renderer-created-p
+                         (appkit-surface-renderer surface)
+                         (buffer-live-p buffer))
+                (with-current-buffer buffer
+                  (funcall
+                   (appkit-generated-renderer-unmount
+                    (appkit-surface-renderer surface))
+                   surface)))
+              (appkit-surface--unregister surface)
+              (when (buffer-live-p buffer)
+                (with-current-buffer buffer
+                  (when (eq appkit--current-surface surface)
+                    (setq-local appkit--current-surface nil))))))
+          (unless loop
+            (when (appkit-surface-p surface)
+              (setf (appkit-surface-alive-p surface) nil)))
+          (appkit--run-cleanup-forms conditions
+            (when (and created-p (buffer-live-p buffer))
+              (kill-buffer buffer)))
+          (appkit--warn-cleanup-conditions
+           (nreverse conditions) 'appkit-surface))
+      (when owns-stop-p
+        (appkit-loop--finish-stop loop)))))
 
 (cl-defun appkit-open-generated-surface
     (type &key app identity input buffer buffer-name select
@@ -318,7 +329,8 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                    :renderer nil
                    :pending-render appkit-render-none
                    :renderer-valid-p nil
-                   :alive-p t))
+                   :alive-p t
+                   :ready-p nil))
             (let ((loop
                    (appkit-loop-create
                     :owner-identity
@@ -369,7 +381,14 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                surface app-read-view model)
               (setf (appkit-surface-renderer-valid-p surface) t)
               (appkit-surface--commit-pending
-               surface app-read-view model)))
+               surface app-read-view model)
+              (unless (and (appkit-surface-alive-p surface)
+                           (eq appkit--current-surface surface)
+                           (eq (appkit-loop-status
+                                (appkit-surface-loop surface))
+                               'running))
+                (error "Surface stopped during startup"))
+              (setf (appkit-surface-ready-p surface) t)))
           (when select
             (pop-to-buffer host))
           (setq completed-p t)
@@ -381,44 +400,50 @@ MAX-ACTIVE-EFFECTS bound deferred work."
 (defun appkit-surface-send (surface message)
   "Synchronously send MESSAGE to live SURFACE."
   (unless (appkit-surface-live-p surface)
-    (error "Cannot send to a detached Surface"))
+    (error "Cannot send to an unavailable Surface"))
   (appkit-loop-send (appkit-surface-loop surface) message))
 
 (defun appkit-surface-post (surface message)
   "Asynchronously post MESSAGE to live SURFACE."
   (unless (appkit-surface-live-p surface)
-    (error "Cannot post to a detached Surface"))
+    (error "Cannot post to an unavailable Surface"))
   (appkit-loop-post (appkit-surface-loop surface) message))
 
 (defun appkit-surface-stop (surface)
   "Stop and detach SURFACE, preserving its buffer."
   (appkit-loop--assert-main-thread)
-  (when (appkit-surface-alive-p surface)
-    (let ((buffer (appkit-surface-buffer surface))
-          conditions)
-      ;; Revoke host identity before client cleanup can reenter.
-      (setf (appkit-surface-alive-p surface) nil)
-      (appkit-surface--unregister surface)
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (when (eq appkit--current-surface surface)
-            (setq-local appkit--current-surface nil))))
-      (appkit--run-cleanup-forms conditions
-        (appkit-effect-runtime-stop
-         (appkit-surface-effect-runtime surface))
-        (appkit-loop-stop (appkit-surface-loop surface))
-        (when (and (buffer-live-p buffer)
-                   (appkit-surface-renderer surface))
-          (with-current-buffer buffer
-            (funcall
-             (appkit-generated-renderer-unmount
-              (appkit-surface-renderer surface))
-             surface))))
-      (setq conditions (nreverse conditions))
-      (appkit--warn-cleanup-conditions (cdr conditions) 'appkit-surface)
-      (when-let* ((condition (car conditions)))
-        (signal (car condition) (cdr condition)))
-      t)))
+  (when (appkit-surface-p surface)
+    (let ((loop (appkit-surface-loop surface)))
+      (when (appkit-loop--begin-stop loop)
+        (let ((buffer (appkit-surface-buffer surface))
+              conditions)
+          ;; Revoke host identity before client cleanup can reenter.
+          (setf (appkit-surface-ready-p surface) nil
+                (appkit-surface-alive-p surface) nil)
+          (appkit-surface--unregister surface)
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (when (eq appkit--current-surface surface)
+                (setq-local appkit--current-surface nil))))
+          (unwind-protect
+              (progn
+                (appkit--run-cleanup-forms conditions
+                  (appkit-effect-runtime-stop
+                   (appkit-surface-effect-runtime surface))
+                  (when (and (buffer-live-p buffer)
+                             (appkit-surface-renderer surface))
+                    (with-current-buffer buffer
+                      (funcall
+                       (appkit-generated-renderer-unmount
+                        (appkit-surface-renderer surface))
+                       surface))))
+                (setq conditions (nreverse conditions))
+                (appkit--warn-cleanup-conditions
+                 (cdr conditions) 'appkit-surface)
+                (when-let* ((condition (car conditions)))
+                  (signal (car condition) (cdr condition)))
+                t)
+            (appkit-loop--finish-stop loop)))))))
 
 (defun appkit-surface--host-detach ()
   "Synchronously stop the Surface owned by the current buffer."

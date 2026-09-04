@@ -99,19 +99,27 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
      :failure (lambda (owned reason) (list 'effect-failed owned reason)))))
 
 (ert-deftest appkit-surface-initializes-mode-before-attachment ()
-  (let (events init-mode init-owner surface)
+  (let (events init-mode init-owner init-ready init-send-condition surface
+               (update-count 0))
     (unwind-protect
         (progn
           (setq surface
                 (appkit-open-generated-surface
                  (appkit-surface-test--type
                   :init
-                  (lambda (_surface input)
+                  (lambda (_context input)
                     (setq init-mode major-mode
-                          init-owner (appkit-current-surface))
+                          init-owner (appkit-current-surface)
+                          init-ready
+                          (appkit-surface-ready-p init-owner)
+                          init-send-condition
+                          (condition-case condition
+                              (appkit-surface-send init-owner 'too-early)
+                            ((error quit) condition)))
                     (appkit-next :model input :render 'initial))
                   :update
-                  (lambda (_surface model _message)
+                  (lambda (_context model _message)
+                    (setq update-count (1+ update-count))
                     (appkit-next :model model :render appkit-render-none))
                   :renderer-factory
                   (lambda (_surface)
@@ -120,6 +128,9 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                  :input 'ready))
           (should (eq init-mode 'appkit-surface-test-mode))
           (should (eq init-owner surface))
+          (should-not init-ready)
+          (should (consp init-send-condition))
+          (should (= update-count 0))
           (should (appkit-surface-live-p surface))
           (with-current-buffer (appkit-surface-buffer surface)
             (should (eq (appkit-current-surface) surface))
@@ -555,6 +566,130 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
      (should (eq (appkit-surface-status surface) 'faulted))
      (should (eq (appkit-surface-model surface) 'first))
      (should (equal events '((mount nil)))))))
+
+(ert-deftest appkit-surface-renderer-and-starter-cannot-send-before-ready ()
+  (let* (surface
+         attempts
+         (update-count 0)
+         (attempt
+          (lambda (phase current)
+            (push
+             (list
+              phase
+              (eq (appkit-current-surface) current)
+              (appkit-surface-ready-p current)
+              (condition-case nil
+                  (progn
+                    (appkit-surface-send current phase)
+                    'sent)
+                (error 'blocked)))
+             attempts)))
+         (effect
+          (appkit-effect-create
+           :key 'initial
+           :input nil
+           :start
+           (lambda (&rest _arguments)
+             (funcall attempt 'starter (appkit-current-surface))
+             (appkit-cancellation-create :kind 'logical :cancel nil))
+           :success (lambda (&rest _arguments) nil)
+           :failure (lambda (&rest _arguments) nil))))
+    (appkit-surface-test--with-surface
+     (current
+      (appkit-surface-test--type
+       :init
+       (lambda (_context input)
+         (appkit-next
+          :model input
+          :render 'initial
+          :commands
+          (list (appkit-command-start-effect effect))))
+       :update
+       (lambda (_context model _message)
+         (setq update-count (1+ update-count))
+         (appkit-next :model model :render appkit-render-none))
+       :renderer-factory
+       (lambda (leaked)
+         (funcall attempt 'factory leaked)
+         (appkit-generated-renderer-create
+          :mount
+          (lambda (mounted &rest _arguments)
+            (funcall attempt 'mount mounted))
+          :merge (lambda (_left right) right)
+          :render
+          (lambda (rendered &rest _arguments)
+            (funcall attempt 'render rendered))
+          :recover (lambda (&rest _arguments))
+          :unmount (lambda (&rest _arguments)))))
+      :input 'ready)
+     (setq surface current
+           attempts (nreverse attempts))
+     (should (= update-count 0))
+     (should (appkit-surface-ready-p surface))
+     (should (appkit-surface-live-p surface))
+     (should (equal (mapcar #'car attempts)
+                    '(factory mount render starter)))
+     (dolist (entry attempts)
+       (should (nth 1 entry))
+       (should-not (nth 2 entry))
+       (should (eq (nth 3 entry) 'blocked))))))
+
+(ert-deftest appkit-surface-fault-remains-attached-until-owner-stop ()
+  (let (app surface buffer)
+    (unwind-protect
+        (progn
+          (setq app
+                (appkit-app-start
+                 (appkit-app-type-create
+                  :name 'fault-parent
+                  :init
+                  (lambda (_context input)
+                    (appkit-next
+                     :model input :render appkit-render-none))
+                  :update
+                  (lambda (_context model _message)
+                    (appkit-next
+                     :model model :render appkit-render-none)))
+                 :input nil))
+          (setq surface
+                (appkit-open-generated-surface
+                 (appkit-surface-test--type
+                  :init
+                  (lambda (_context input)
+                    (appkit-next
+                     :model input :render appkit-render-none))
+                  :update
+                  (lambda (&rest _arguments)
+                    (error "Surface transition fault"))
+                  :renderer-factory
+                  (lambda (_surface)
+                    (appkit-surface-test--renderer #'ignore)))
+                 :app app :identity 'faulted)
+                buffer (appkit-surface-buffer surface))
+          (should-error (appkit-surface-send surface 'fault)
+                        :type 'error)
+          (should (eq (appkit-surface-status surface) 'faulted))
+          (should (appkit-surface-alive-p surface))
+          (should-not (appkit-surface-ready-p surface))
+          (should-not (appkit-surface-live-p surface))
+          (should (= (appkit-app-surface-count app) 1))
+          (with-current-buffer buffer
+            (should (eq (appkit-current-surface) surface)))
+          (should-error (appkit-surface-send surface 'after-fault)
+                        :type 'error)
+          (should (appkit-app-close app))
+          (should (eq (appkit-surface-status surface) 'stopped))
+          (should (= (appkit-app-surface-count app) 0))
+          (should (buffer-live-p buffer))
+          (with-current-buffer buffer
+            (should-not (appkit-current-surface))))
+      (when (and app
+                 (not (eq (appkit-app-status app) 'stopped)))
+        (condition-case nil
+            (appkit-app-close app)
+          ((error quit) nil)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 (provide 'appkit-surface-test)
 
 ;;; appkit-surface-test.el ends here

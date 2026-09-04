@@ -70,6 +70,17 @@
   start-revision
   end-revision)
 
+(cl-defstruct (appkit-loop-lane
+               (:constructor nil)
+               (:constructor appkit-loop--lane-create (capacity))
+               (:copier nil)
+               (:conc-name appkit-loop--lane-))
+  "One bounded FIFO lane owned by an Appkit loop."
+  head
+  tail
+  (count 0)
+  capacity)
+
 (cl-defstruct (appkit-loop
                (:constructor appkit-loop--create)
                (:copier nil)
@@ -81,18 +92,13 @@
   model
   incarnation
   revision
-  data-head
-  data-tail
-  data-count
-  data-capacity
+  data-lane
+  control-lane
   send-reserve
   message-limit
   next-sequence
-  draining-p
-  sync-driving-p
   scheduled-handle
   status
-  pass-tickets
   fault)
 
 (defvar appkit-loop--active-loop nil
@@ -103,6 +109,12 @@
 
 (defvar appkit-loop--pass-context nil
   "Facade-owned snapshot shared by callbacks in the active pass.")
+
+(defvar appkit-loop--send-context nil
+  "Cons of the loop and ticket owned by the current synchronous send.")
+
+(defvar appkit-loop--pass-tickets nil
+  "Accepted tickets awaiting completion in the current pass.")
 
 (defun appkit-loop--check (loop)
   "Return LOOP, or signal a type error."
@@ -136,13 +148,15 @@
   (appkit-loop--fault (appkit-loop--check loop)))
 
 (defun appkit-loop-pending-count (loop)
-  "Return the number of queued envelopes in LOOP."
-  (appkit-loop--data-count (appkit-loop--check loop)))
+  "Return the total number of queued data and control envelopes in LOOP."
+  (setq loop (appkit-loop--check loop))
+  (+ (appkit-loop--lane-count (appkit-loop--control-lane loop))
+     (appkit-loop--lane-count (appkit-loop--data-lane loop))))
 
 (cl-defun appkit-loop-create
     (&key (owner-identity (make-symbol "appkit-owner-"))
           model update after-pass on-fault (mailbox-capacity 64)
-          (send-reserve 1) (message-limit 32))
+          (control-capacity 16) (send-reserve 1) (message-limit 32))
   "Create a running UI-free loop with initial MODEL and UPDATE.
 
 OWNER-IDENTITY is the stable opaque identity captured by exact runtime
@@ -152,8 +166,9 @@ receives the loop and committed `appkit-loop-pass' statistics after a pass
 accepts at least one transition.  ON-FAULT receives the loop and fault record
 after admission closes and pending tickets terminate; it may signal `error' or
 `quit' but must not use `throw'.  MAILBOX-CAPACITY bounds ordinary posts.
-SEND-RESERVE provides additional admission reserved for synchronous barrier
-sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
+CONTROL-CAPACITY independently bounds required runtime work.  SEND-RESERVE
+provides additional data admission reserved for synchronous barrier sends.
+MESSAGE-LIMIT is the hard maximum processed across both lanes by one pass."
   (appkit-loop--assert-main-thread)
   (unless (functionp update)
     (signal 'wrong-type-argument (list 'functionp update)))
@@ -161,6 +176,7 @@ sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
     (unless (or (null callback) (functionp callback))
       (signal 'wrong-type-argument (list 'functionp callback))))
   (dolist (entry `((,mailbox-capacity . mailbox-capacity)
+                   (,control-capacity . control-capacity)
                    (,send-reserve . send-reserve)
                    (,message-limit . message-limit)))
     (unless (and (integerp (car entry)) (> (car entry) 0))
@@ -176,19 +192,54 @@ sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
    :model model
    :incarnation 1
    :revision 0
-   :data-head nil
-   :data-tail nil
-   :data-count 0
-   :data-capacity mailbox-capacity
+   :data-lane (appkit-loop--lane-create mailbox-capacity)
+   :control-lane (appkit-loop--lane-create control-capacity)
    :send-reserve send-reserve
    :message-limit message-limit
    :next-sequence 0
-   :draining-p nil
-   :sync-driving-p nil
    :scheduled-handle nil
    :status 'running
-   :pass-tickets nil
    :fault nil))
+
+(defun appkit-loop--lane-room-p (lane &optional reserve)
+  "Return non-nil when LANE can admit one item using optional RESERVE."
+  (< (appkit-loop--lane-count lane)
+     (+ (appkit-loop--lane-capacity lane) (or reserve 0))))
+
+(defun appkit-loop--lane-enqueue (lane cell)
+  "Append CELL to LANE."
+  (if (appkit-loop--lane-tail lane)
+      (setcdr (appkit-loop--lane-tail lane) cell)
+    (setf (appkit-loop--lane-head lane) cell))
+  (setf (appkit-loop--lane-tail lane) cell
+        (appkit-loop--lane-count lane)
+        (1+ (appkit-loop--lane-count lane))))
+
+(defun appkit-loop--lane-cutoff (lane maximum)
+  "Return LANE's frozen tail sequence, capped by optional MAXIMUM."
+  (when-let* ((tail (appkit-loop--lane-tail lane)))
+    (let ((sequence
+           (appkit-loop-envelope-sequence (car tail))))
+      (if maximum (min sequence maximum) sequence))))
+
+(defun appkit-loop--lane-dequeue-through (lane cutoff)
+  "Remove and return LANE's first envelope when at or before CUTOFF."
+  (when-let* ((cell (appkit-loop--lane-head lane)))
+    (when (and cutoff
+               (<= (appkit-loop-envelope-sequence (car cell)) cutoff))
+      (setf (appkit-loop--lane-head lane) (cdr cell)
+            (appkit-loop--lane-count lane)
+            (1- (appkit-loop--lane-count lane)))
+      (unless (appkit-loop--lane-head lane)
+        (setf (appkit-loop--lane-tail lane) nil))
+      (car cell))))
+
+(defun appkit-loop--lane-purge (lane)
+  "Clear LANE and return its former linked list."
+  (prog1 (appkit-loop--lane-head lane)
+    (setf (appkit-loop--lane-head lane) nil
+          (appkit-loop--lane-tail lane) nil
+          (appkit-loop--lane-count lane) 0)))
 
 (defun appkit-loop--cancel-scheduled (loop)
   "Cancel LOOP's pending scheduler handle, if any."
@@ -205,46 +256,64 @@ sends.  MESSAGE-LIMIT is the hard maximum processed by one pass."
       (appkit-loop-run-pass loop))))
 
 (defun appkit-loop--schedule (loop)
-  "Ensure LOOP has one scheduled pass when it has pending work."
+  "Ensure LOOP has one scheduled pass when either lane has pending work."
   (when (and (eq (appkit-loop--status loop) 'running)
-             (> (appkit-loop--data-count loop) 0)
-             (not (appkit-loop--draining-p loop))
-             (not (appkit-loop--sync-driving-p loop))
+             (> (appkit-loop-pending-count loop) 0)
+             (not (eq appkit-loop--active-loop loop))
+             (not (eq (car-safe appkit-loop--send-context) loop))
              (null (appkit-loop--scheduled-handle loop)))
     (setf (appkit-loop--scheduled-handle loop)
           (run-at-time 0 nil #'appkit-loop--scheduled-pass loop))))
 
-(defun appkit-loop--enqueue
-    (loop payload ticket limit &optional incarnation reply-route
+(defun appkit-loop--make-envelope-cell
+    (loop payload ticket incarnation reply-route
           origin source-address source-revision)
-  "Append PAYLOAD and optional TICKET to LOOP below LIMIT.
+  "Allocate one queued envelope cell and its LOOP sequence."
+  (let* ((sequence (appkit-loop--next-sequence loop))
+         (envelope
+          (appkit-loop--envelope-create
+           :sequence sequence
+           :incarnation incarnation
+           :payload payload
+           :origin origin
+           :source-address source-address
+           :source-revision source-revision
+           :reply-route reply-route
+           :ticket ticket)))
+    (setf (appkit-loop--next-sequence loop) (1+ sequence))
+    (when ticket
+      (setf (appkit-loop-ticket-sequence ticket) sequence))
+    (list envelope)))
 
-INCARNATION defaults to LOOP's current incarnation.  REPLY-ROUTE, ORIGIN,
-SOURCE-ADDRESS, and SOURCE-REVISION are causal metadata for routed delivery."
-  (if (>= (appkit-loop--data-count loop) limit)
-      'full
-    (let* ((sequence (appkit-loop--next-sequence loop))
-           (envelope
-            (appkit-loop--envelope-create
-             :sequence sequence
-             :incarnation (or incarnation (appkit-loop--incarnation loop))
-             :payload payload
-             :origin origin
-             :source-address source-address
-             :source-revision source-revision
-             :reply-route reply-route
-             :ticket ticket))
-           (cell (list envelope)))
-      (if (appkit-loop--data-tail loop)
-          (setcdr (appkit-loop--data-tail loop) cell)
-        (setf (appkit-loop--data-head loop) cell))
-      (setf (appkit-loop--data-tail loop) cell
-            (appkit-loop--data-count loop)
-            (1+ (appkit-loop--data-count loop))
-            (appkit-loop--next-sequence loop)
-            (1+ sequence))
-      (when ticket
-        (setf (appkit-loop-ticket-sequence ticket) sequence))
+(defun appkit-loop--enqueue-data
+    (loop payload ticket &optional incarnation reply-route
+          origin source-address source-revision)
+  "Append PAYLOAD and optional TICKET to LOOP's bounded data lane."
+  (let ((lane (appkit-loop--data-lane loop))
+        (reserve (and ticket (appkit-loop--send-reserve loop))))
+    (if (not (appkit-loop--lane-room-p lane reserve))
+        'full
+      (appkit-loop--lane-enqueue
+       lane
+       (appkit-loop--make-envelope-cell
+        loop payload ticket
+        (or incarnation (appkit-loop--incarnation loop))
+        reply-route origin source-address source-revision))
+      (appkit-loop--schedule loop)
+      'enqueued)))
+
+(defun appkit-loop--enqueue-control
+    (loop payload incarnation &optional reply-route
+          origin source-address source-revision)
+  "Append PAYLOAD to LOOP's exactly bounded control lane."
+  (let ((lane (appkit-loop--control-lane loop)))
+    (if (not (appkit-loop--lane-room-p lane))
+        'full
+      (appkit-loop--lane-enqueue
+       lane
+       (appkit-loop--make-envelope-cell
+        loop payload nil incarnation reply-route
+        origin source-address source-revision))
       (appkit-loop--schedule loop)
       'enqueued)))
 
@@ -258,35 +327,39 @@ SOURCE-ADDRESS, and SOURCE-REVISION are causal metadata for routed delivery."
 (defun appkit-loop--post-addressed
     (loop message incarnation &optional reply-route
           origin source-address source-revision)
-  "Post MESSAGE to LOOP only at exact INCARNATION.
+  "Post MESSAGE to LOOP's data lane only at exact INCARNATION.
 
 Optional arguments retain routed delivery metadata in the admitted envelope."
   (appkit-loop--assert-main-thread)
   (appkit-loop--check loop)
-  (if (/= incarnation (appkit-loop--incarnation loop))
-      'stale
-    (or (appkit-loop--admission-status loop)
-        (appkit-loop--enqueue
-         loop message nil (appkit-loop--data-capacity loop)
-         incarnation reply-route origin source-address source-revision))))
+  (or (appkit-loop--admission-status loop)
+      (if (/= incarnation (appkit-loop--incarnation loop))
+          'stale
+        (appkit-loop--enqueue-data
+         loop message nil incarnation reply-route
+         origin source-address source-revision))))
+
+(defun appkit-loop--post-control-addressed
+    (loop message incarnation &optional reply-route
+          origin source-address source-revision)
+  "Post runtime MESSAGE to LOOP's control lane at exact INCARNATION."
+  (appkit-loop--assert-main-thread)
+  (appkit-loop--check loop)
+  (or (appkit-loop--admission-status loop)
+      (if (/= incarnation (appkit-loop--incarnation loop))
+          'stale
+        (appkit-loop--enqueue-control
+         loop message incarnation reply-route
+         origin source-address source-revision))))
 
 (defun appkit-loop-post (loop message)
-  "Try to enqueue MESSAGE in LOOP and return its admission outcome.
+  "Try to enqueue MESSAGE in LOOP's data lane and return its outcome.
 
 The result is one of `enqueued', `full', `stopped', or `faulted'.  A failed
 admission does not allocate a sequence number."
   (appkit-loop--post-addressed
    loop message (appkit-loop-incarnation loop)))
 
-(defun appkit-loop--dequeue (loop)
-  "Remove and return LOOP's first envelope."
-  (when-let* ((cell (appkit-loop--data-head loop)))
-    (setf (appkit-loop--data-head loop) (cdr cell)
-          (appkit-loop--data-count loop)
-          (1- (appkit-loop--data-count loop)))
-    (unless (appkit-loop--data-head loop)
-      (setf (appkit-loop--data-tail loop) nil))
-    (car cell)))
 
 (defun appkit-loop--complete-ticket (ticket state outcome &optional revision)
   "Complete pending TICKET once with STATE, OUTCOME, and REVISION."
@@ -297,20 +370,18 @@ admission does not allocate a sequence number."
     t))
 
 (defun appkit-loop--purge (loop ticket-state outcome)
-  "Clear LOOP's mailbox, completing tickets with TICKET-STATE and OUTCOME."
-  (let ((cell (appkit-loop--data-head loop)))
-    (setf (appkit-loop--data-head loop) nil
-          (appkit-loop--data-tail loop) nil
-          (appkit-loop--data-count loop) 0)
-    (while cell
+  "Clear both LOOP lanes, completing data tickets with TICKET-STATE and OUTCOME."
+  (let ((data (appkit-loop--lane-purge (appkit-loop--data-lane loop))))
+    (appkit-loop--lane-purge (appkit-loop--control-lane loop))
+    (while data
       (appkit-loop--complete-ticket
-       (appkit-loop-envelope-ticket (car cell)) ticket-state outcome)
-      (setq cell (cdr cell)))))
+       (appkit-loop-envelope-ticket (car data)) ticket-state outcome)
+      (setq data (cdr data)))))
 
-(defun appkit-loop--complete-pass-tickets (loop state outcome)
-  "Complete LOOP's accepted pass tickets with STATE and OUTCOME."
-  (let ((entries (nreverse (appkit-loop--pass-tickets loop))))
-    (setf (appkit-loop--pass-tickets loop) nil)
+(defun appkit-loop--complete-pass-tickets (state outcome)
+  "Complete current pass tickets with STATE and OUTCOME."
+  (let ((entries (nreverse appkit-loop--pass-tickets)))
+    (setq appkit-loop--pass-tickets nil)
     (dolist (entry entries)
       (appkit-loop--complete-ticket
        (car entry) state outcome
@@ -332,7 +403,7 @@ admission does not allocate a sequence number."
       (when envelope
         (appkit-loop--complete-ticket
          (appkit-loop-envelope-ticket envelope) 'faulted fault))
-      (appkit-loop--complete-pass-tickets loop 'faulted fault)
+      (appkit-loop--complete-pass-tickets 'faulted fault)
       (appkit-loop--purge loop 'faulted fault)
       (when-let* ((on-fault (appkit-loop--on-fault loop)))
         (condition-case cleanup-condition
@@ -375,7 +446,7 @@ admission does not allocate a sequence number."
                 (appkit-loop-accepted-model result)
                 (appkit-loop--revision loop) revision)
           (when ticket
-            (push (cons ticket revision) (appkit-loop--pass-tickets loop)))
+            (push (cons ticket revision) appkit-loop--pass-tickets))
           'accepted))
        ((appkit-loop-rejected-p result)
         (appkit-loop--complete-ticket
@@ -410,47 +481,61 @@ admission does not allocate a sequence number."
      (condition
       (appkit-loop--enter-fault loop condition nil))
      ((eq (appkit-loop--status loop) 'running)
-      (appkit-loop--complete-pass-tickets loop 'accepted nil)))))
+      (appkit-loop--complete-pass-tickets 'accepted nil)))))
 
 (defun appkit-loop-run-pass (loop)
-  "Run at most one frozen, bounded mailbox pass for LOOP.
+  "Run at most one frozen, bounded two-lane pass for LOOP.
 
-Return the number of envelopes removed.  Messages enqueued during this pass
-remain for a later pass even when the count limit has not been reached."
+Both lane cutoffs are frozen before processing begins.  Already-arrived
+control envelopes drain before data envelopes.  Work admitted during the pass
+waits for a later pass, and MESSAGE-LIMIT bounds the two lanes together.
+Return the total number of envelopes removed."
   (appkit-loop--assert-main-thread)
   (appkit-loop--check loop)
-  (when (or appkit-loop--active-loop (appkit-loop--draining-p loop))
+  (when appkit-loop--active-loop
     (error "Appkit loop pass is not reentrant"))
-  (let ((appkit-loop--active-loop loop)
-        (appkit-loop--current-envelope nil)
-        (appkit-loop--pass-context nil))
-    (if (not (eq (appkit-loop--status loop) 'running))
-        0
-      (appkit-loop--cancel-scheduled loop)
-      (let ((cutoff
-             (when-let* ((tail (appkit-loop--data-tail loop)))
-               (appkit-loop-envelope-sequence (car tail))))
-            (limit (appkit-loop--message-limit loop))
-            (start-revision (appkit-loop--revision loop))
-            (processed 0)
-            (accepted 0))
-        (setf (appkit-loop--draining-p loop) t)
-        (setf (appkit-loop--pass-tickets loop) nil)
-        (unwind-protect
-            (progn
-              (while (and cutoff
-                          (eq (appkit-loop--status loop) 'running)
-                          (< processed limit)
-                          (appkit-loop--data-head loop)
-                          (<= (appkit-loop-envelope-sequence
-                               (car (appkit-loop--data-head loop)))
-                              cutoff))
-                (let* ((envelope (appkit-loop--dequeue loop))
-                       (outcome
-                        (appkit-loop--apply-transition loop envelope)))
-                  (setq processed (1+ processed))
-                  (when (eq outcome 'accepted)
-                    (setq accepted (1+ accepted)))))
+  (let ((processed 0))
+    (unwind-protect
+        (let ((appkit-loop--active-loop loop)
+              (appkit-loop--current-envelope nil)
+              (appkit-loop--pass-context nil)
+              (appkit-loop--pass-tickets nil))
+          (when (eq (appkit-loop--status loop) 'running)
+            (appkit-loop--cancel-scheduled loop)
+            (let* ((send-context
+                    (and (eq (car-safe appkit-loop--send-context) loop)
+                         appkit-loop--send-context))
+                   (sync-cutoff
+                    (and send-context
+                         (appkit-loop-ticket-sequence (cdr send-context))))
+                   (control-lane (appkit-loop--control-lane loop))
+                   (data-lane (appkit-loop--data-lane loop))
+                   (control-cutoff
+                    (appkit-loop--lane-cutoff control-lane sync-cutoff))
+                   (data-cutoff
+                    (appkit-loop--lane-cutoff data-lane sync-cutoff))
+                   (limit (appkit-loop--message-limit loop))
+                   (start-revision (appkit-loop--revision loop))
+                   (accepted 0)
+                   (lane control-lane)
+                   (cutoff control-cutoff)
+                   (phase 0)
+                   envelope)
+              (while (< phase 2)
+                (while
+                    (and (eq (appkit-loop--status loop) 'running)
+                         (< processed limit)
+                         (setq envelope
+                               (appkit-loop--lane-dequeue-through
+                                lane cutoff)))
+                  (let ((outcome
+                         (appkit-loop--apply-transition loop envelope)))
+                    (setq processed (1+ processed))
+                    (when (eq outcome 'accepted)
+                      (setq accepted (1+ accepted)))))
+                (setq phase (1+ phase)
+                      lane data-lane
+                      cutoff data-cutoff))
               (when (and (> accepted 0)
                          (eq (appkit-loop--status loop) 'running))
                 (appkit-loop--finish-pass
@@ -459,10 +544,9 @@ remain for a later pass even when the count limit has not been reached."
                   :processed processed
                   :accepted accepted
                   :start-revision start-revision
-                  :end-revision (appkit-loop--revision loop)))))
-          (setf (appkit-loop--draining-p loop) nil)
-          (appkit-loop--schedule loop))
-        processed))))
+                  :end-revision (appkit-loop--revision loop)))))))
+      (appkit-loop--schedule loop))
+    processed))
 
 (defun appkit-loop--resignal-fault (loop)
   "Re-signal LOOP's stored fault condition."
@@ -475,54 +559,67 @@ remain for a later pass even when the count limit has not been reached."
 
 A send uses reserved capacity and drives as many bounded passes as necessary
 without crossing messages queued after its ticket.  Return `reentrant-send'
-when called from a pass, `busy' when all send reserve is occupied, and
-`stopped' or `faulted' when LOOP cannot admit work.  An admitted send that
-encounters a runtime fault re-signals the stored condition."
+when called from a pass or another send, `busy' when all send reserve is
+occupied, and `stopped' or `faulted' when LOOP cannot admit work.  An admitted
+send that encounters a runtime fault re-signals the stored condition."
   (appkit-loop--assert-main-thread)
   (appkit-loop--check loop)
   (cond
-   ((or appkit-loop--active-loop (appkit-loop--draining-p loop))
+   ((or appkit-loop--active-loop appkit-loop--send-context)
     'reentrant-send)
    ((appkit-loop--admission-status loop))
-   ((>= (appkit-loop--data-count loop)
-        (+ (appkit-loop--data-capacity loop)
-           (appkit-loop--send-reserve loop)))
+   ((not
+     (appkit-loop--lane-room-p
+      (appkit-loop--data-lane loop) (appkit-loop--send-reserve loop)))
     'busy)
    (t
     (let ((ticket (appkit-loop--ticket-create :state 'pending)))
       (appkit-loop--cancel-scheduled loop)
-      (setf (appkit-loop--sync-driving-p loop) t)
       (unwind-protect
-          (progn
-            (appkit-loop--enqueue
-             loop message ticket
-             (+ (appkit-loop--data-capacity loop)
-                (appkit-loop--send-reserve loop)))
+          (let ((appkit-loop--send-context (cons loop ticket)))
+            (unless (eq (appkit-loop--enqueue-data loop message ticket)
+                        'enqueued)
+              (error "Appkit loop send admission invariant failed"))
             (while (and (eq (appkit-loop-ticket-state ticket) 'pending)
                         (eq (appkit-loop--status loop) 'running))
               (appkit-loop-run-pass loop)))
-        (setf (appkit-loop--sync-driving-p loop) nil)
         (appkit-loop--schedule loop))
       (if (eq (appkit-loop-ticket-state ticket) 'faulted)
           (appkit-loop--resignal-fault loop)
         ticket)))))
 
-(defun appkit-loop-stop (loop)
-  "Stop LOOP, discard pending messages, and terminate pending tickets.
+(defun appkit-loop--begin-stop (loop)
+  "Atomically close LOOP admission and revoke all queued authority.
 
-Return non-nil when this call performs the transition.  Repeated calls are
-inert."
+Return non-nil only for the caller that changes LOOP to `stopping'."
   (appkit-loop--assert-main-thread)
   (appkit-loop--check loop)
-  (when (or appkit-loop--active-loop (appkit-loop--draining-p loop))
-    (error "Cannot stop an Appkit loop from an active pass"))
-  (unless (eq (appkit-loop--status loop) 'stopped)
+  (unless (memq (appkit-loop--status loop) '(stopping stopped))
+    (when appkit-loop--active-loop
+      (error "Cannot stop an Appkit loop from an active pass"))
     (setf (appkit-loop--status loop) 'stopping
           (appkit-loop--incarnation loop)
           (1+ (appkit-loop--incarnation loop)))
     (appkit-loop--cancel-scheduled loop)
+    (appkit-loop--complete-pass-tickets 'stopped nil)
     (appkit-loop--purge loop 'stopped nil)
+    t))
+
+(defun appkit-loop--finish-stop (loop)
+  "Change LOOP from `stopping' to `stopped'."
+  (appkit-loop--assert-main-thread)
+  (appkit-loop--check loop)
+  (when (eq (appkit-loop--status loop) 'stopping)
     (setf (appkit-loop--status loop) 'stopped)
+    t))
+
+(defun appkit-loop-stop (loop)
+  "Stop LOOP, discard queued work, and terminate pending tickets.
+
+Return non-nil when this call performs both stop phases.  Reentrant or repeated
+calls are inert."
+  (when (appkit-loop--begin-stop loop)
+    (appkit-loop--finish-stop loop)
     t))
 
 (provide 'appkit-loop)

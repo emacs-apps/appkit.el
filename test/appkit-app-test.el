@@ -113,6 +113,203 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest appkit-app-validates-ui-free-next-before-staging ()
+  (let (app
+        (staged-next-count 0))
+    (unwind-protect
+        (progn
+          (setq app
+                (appkit-app-start
+                 (appkit-app-type-create
+                  :name 'validate-before-stage
+                  :init
+                  (lambda (_context input)
+                    (appkit-next
+                     :model input :render appkit-render-none))
+                  :update
+                  (lambda (_context _model message)
+                    (appkit-next
+                     :model message
+                     :render 'forbidden-ui
+                     :commands
+                     (list
+                      (appkit-command-cancel-effect 'must-not-stage)))))
+                 :input 'committed))
+          (let ((original-batch-add
+                 (symbol-function 'appkit-command--batch-add)))
+            (cl-letf (((symbol-function 'appkit-command--batch-add)
+                       (lambda (&rest arguments)
+                         (setq staged-next-count (1+ staged-next-count))
+                         (apply original-batch-add arguments))))
+              (should-error (appkit-app-send app 'invalid)
+                            :type 'error)))
+          (should (= staged-next-count 0))
+          (should (eq (appkit-app-model app) 'committed))
+          (should (eq (appkit-app-status app) 'faulted)))
+      (when (and app
+                 (not (eq (appkit-app-status app) 'stopped)))
+        (appkit-app-close app)))))
+
+(ert-deftest appkit-app-startup-failure-never-becomes-live ()
+  (let (failed-app
+        (shutdown-count 0))
+    (should-error
+     (appkit-app-start
+      (appkit-app-type-create
+       :name 'failed-startup
+       :init
+       (lambda (_context input)
+         (appkit-next
+          :model input
+          :render appkit-render-none
+          :commands
+          (list
+           (appkit-command-start-effect
+            (appkit-effect-create
+             :key 'initial
+             :input nil
+             :start
+             (lambda (&rest _arguments)
+               (error "initial Effect failed"))
+             :success (lambda (&rest _arguments) nil)
+             :failure (lambda (&rest _arguments) nil))))))
+       :update
+       (lambda (_context model _message)
+         (appkit-next :model model :render appkit-render-none))
+       :shutdown
+       (lambda (app)
+         (setq failed-app app
+               shutdown-count (1+ shutdown-count))))
+      :input 'staged)
+     :type 'error)
+    (should (appkit-app-p failed-app))
+    (should-not (appkit-app-live-p failed-app))
+    (should (eq (appkit-app-status failed-app) 'stopped))
+    (should (= shutdown-count 1))))
+
+(ert-deftest appkit-app-close-owns-reentrant-surface-cleanup ()
+  (let (app surface buffer app-address surface-address
+            app-post-outcome surface-post-outcome
+            (shutdown-count 0)
+            (unmount-count 0))
+    (unwind-protect
+        (progn
+          (setq app
+                (appkit-app-start
+                 (appkit-app-type-create
+                  :name 'reentrant-close
+                  :init
+                  (lambda (_context input)
+                    (appkit-next
+                     :model input :render appkit-render-none))
+                  :update
+                  (lambda (_context model _message)
+                    (appkit-next
+                     :model model :render appkit-render-none))
+                  :shutdown
+                  (lambda (_app)
+                    (setq shutdown-count (1+ shutdown-count)
+                          app-post-outcome
+                          (appkit-routing--post app-address 'too-late))))
+                 :input nil)
+                app-address
+                (appkit-routing--address (appkit-app-loop app)))
+          (setq surface
+                (appkit-open-generated-surface
+                 (appkit-surface-type-create
+                  :name 'reentrant-close-surface
+                  :mode #'special-mode
+                  :init
+                  (lambda (_context input)
+                    (appkit-next
+                     :model input :render appkit-render-none))
+                  :update
+                  (lambda (_context model _message)
+                    (appkit-next
+                     :model model :render appkit-render-none))
+                  :renderer-factory
+                  (lambda (_surface)
+                    (appkit-generated-renderer-create
+                     :mount (lambda (&rest _arguments))
+                     :merge (lambda (_left right) right)
+                     :render (lambda (&rest _arguments))
+                     :recover (lambda (&rest _arguments))
+                     :unmount
+                     (lambda (_surface)
+                       (setq unmount-count (1+ unmount-count)
+                             surface-post-outcome
+                             (appkit-routing--post
+                              surface-address 'too-late))
+                       (appkit-app-close app)
+                       (error "unmount cleanup failed")))))
+                 :app app :identity 'owned)
+                buffer (appkit-surface-buffer surface)
+                surface-address
+                (appkit-routing--address (appkit-surface-loop surface)))
+          (should-error (appkit-app-close app) :type 'error)
+          (should (= shutdown-count 1))
+          (should (= unmount-count 1))
+          (should (eq app-post-outcome 'stopped))
+          (should (eq surface-post-outcome 'stopped))
+          (should (eq (appkit-app-status app) 'stopped))
+          (should (eq (appkit-surface-status surface) 'stopped))
+          (should (= (appkit-app-surface-count app) 0))
+          (should (buffer-live-p buffer))
+          (with-current-buffer buffer
+            (should-not (appkit-current-surface))))
+      (when (and app
+                 (not (eq (appkit-app-status app) 'stopped)))
+        (condition-case nil
+            (appkit-app-close app)
+          ((error quit) nil)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest appkit-app-fault-discards-whole-pass-deferred-work ()
+  (let* ((target
+          (appkit-loop-create
+           :model nil
+           :update
+           (lambda (model message)
+             (appkit-loop-accept (cons message model)))))
+         (target-address (appkit-routing--address target))
+         app)
+    (unwind-protect
+        (progn
+          (setq app
+                (appkit-app-start
+                 (appkit-app-type-create
+                  :name 'faulted-pass
+                  :init
+                  (lambda (_context _input)
+                    (appkit-next
+                     :model nil :render appkit-render-none))
+                  :update
+                  (lambda (_context model message)
+                    (pcase message
+                      ('commit
+                       (appkit-next
+                        :model (cons 'committed model)
+                        :render appkit-render-none
+                        :commands
+                        (list
+                         (appkit-command-post-message
+                          :target target-address
+                          :message 'must-not-escape
+                          :delivery 'report))))
+                      ('fault
+                       (error "fault after accepted transition")))))))
+          (appkit-app-post app 'commit)
+          (appkit-app-post app 'fault)
+          (should (= (appkit-loop-run-pass (appkit-app-loop app)) 2))
+          (should (eq (appkit-app-status app) 'faulted))
+          (should (= (appkit-loop-revision (appkit-app-loop app)) 1))
+          (should (equal (appkit-app-model app) '(committed)))
+          (should (zerop (appkit-loop-pending-count target))))
+      (when (and app (not (eq (appkit-app-status app) 'stopped)))
+        (appkit-app-close app))
+      (appkit-loop-stop target))))
+
 (provide 'appkit-app-test)
 
 ;;; appkit-app-test.el ends here

@@ -14,14 +14,16 @@
   messages)
 
 (cl-defun appkit-effect-test--make-harness
-    (&key (mailbox-capacity 16) (message-limit 16) (max-active 8)
-          client-update)
+    (&key (mailbox-capacity 16) (control-capacity 16) (message-limit 16)
+          (max-active 8) client-update on-fault)
   "Create a loop and Effect runtime controlled by CLIENT-UPDATE."
   (let (runtime loop harness)
     (setq loop
           (appkit-loop-create
            :model nil
            :mailbox-capacity mailbox-capacity
+           :control-capacity control-capacity
+           :on-fault on-fault
            :message-limit message-limit
            :update
            (lambda (model input)
@@ -257,27 +259,57 @@
                          (failure overflow (observation-overflow)))))
         (should (= (appkit-effect-runtime-count runtime) 0))))))
 
-(ert-deftest appkit-effect-retries-wake-after-mailbox-capacity ()
+(ert-deftest appkit-effect-wake-bypasses-full-data-lane ()
   (appkit-effect-test--with-harness
-      (harness :mailbox-capacity 1 :message-limit 1)
+      (harness :mailbox-capacity 1 :control-capacity 1 :message-limit 1)
     (let* ((runtime (appkit-effect-test--harness-runtime harness))
            (loop (appkit-effect-test--harness-loop harness)))
       (appkit-loop-post loop 'blocker)
       (appkit-effect-runtime-start
        runtime
        (appkit-effect-test--spec
-        'retry
+        'reserved
         (lambda (_context _input _observe resolve _reject)
           (funcall resolve 'ready)
           nil)))
-      (should (= (appkit-loop-pending-count loop) 1))
-      (appkit-loop-run-pass loop)
-      (with-timeout (1 (ert-fail "Effect wake retry did not complete"))
-        (while (= (appkit-effect-runtime-count runtime) 1)
-          (accept-process-output nil 0.01)))
+      (should (= (appkit-loop-pending-count loop) 2))
+      (should (= (appkit-loop-run-pass loop) 1))
       (should (equal (appkit-effect-test--harness-messages harness)
-                     '(blocker (success retry (ready)))))
-      (should (= (appkit-loop-pending-count loop) 0)))))
+                     '((success reserved (ready)))))
+      (should (= (appkit-effect-runtime-count runtime) 0))
+      (should (= (appkit-loop-pending-count loop) 1))
+      (should (= (appkit-loop-run-pass loop) 1))
+      (should (equal (appkit-effect-test--harness-messages harness)
+                     '((success reserved (ready)) blocker))))))
+
+(ert-deftest appkit-effect-control-wake-overflow-revokes-before-owner-fault ()
+  (let (runtime count-at-fault)
+    (appkit-effect-test--with-harness
+        (harness
+         :control-capacity 1
+         :on-fault
+         (lambda (_loop _fault)
+           (setq count-at-fault (appkit-effect-runtime-count runtime))))
+      (setq runtime (appkit-effect-test--harness-runtime harness))
+      (let ((loop (appkit-effect-test--harness-loop harness)))
+        (appkit-loop--post-control-addressed
+         loop 'occupied (appkit-loop-incarnation loop))
+        (appkit-effect-runtime-start
+         runtime
+         (appkit-effect-test--spec
+          'overflow
+          (lambda (_context _input _observe resolve _reject)
+            (funcall resolve 'ready)
+            nil)))
+        (should (eq (appkit-loop-status loop) 'faulted))
+        (should (= count-at-fault 0))
+        (should (= (appkit-effect-runtime-count runtime) 0))
+        (should (= (appkit-loop-pending-count loop) 0))
+        (should
+         (string-match-p
+          "control wake admission failed: full"
+          (error-message-string
+           (appkit-loop-fault-condition (appkit-loop-fault loop)))))))))
 
 (ert-deftest appkit-effect-cancel-makes-queued-delivery-stale ()
   (let (resolve cancelled)

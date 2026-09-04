@@ -17,6 +17,34 @@
            (progn ,@body)
          (appkit-loop-stop ,loop)))))
 
+(ert-deftest appkit-loop-lanes-preserve-fifo-and-call-scoped-state ()
+  (appkit-loop-test--with-loop
+      (loop
+       :model nil
+       :update (lambda (model message)
+                 (appkit-loop-accept (cons message model))))
+    (let ((data (appkit-loop--data-lane loop))
+          (control (appkit-loop--control-lane loop)))
+      (dolist (lane (list data control))
+        (should-not (appkit-loop--lane-head lane))
+        (should-not (appkit-loop--lane-tail lane))
+        (should (zerop (appkit-loop--lane-count lane)))
+        (should (> (appkit-loop--lane-capacity lane) 0)))
+      (appkit-loop-post loop 'pass)
+      (should (= (appkit-loop--lane-count data) 1))
+      (should (eq (appkit-loop--lane-head data)
+                  (appkit-loop--lane-tail data)))
+      (should (= (appkit-loop-run-pass loop) 1))
+      (should-not (appkit-loop--lane-head data))
+      (should-not (appkit-loop--lane-tail data))
+      (should (zerop (appkit-loop--lane-count data))))
+    (should-not appkit-loop--active-loop)
+    (should-not appkit-loop--pass-tickets)
+    (let ((ticket (appkit-loop-send loop 'send)))
+      (should (eq (appkit-loop-ticket-state ticket) 'accepted)))
+    (should-not appkit-loop--send-context)
+    (should-not appkit-loop--pass-tickets)))
+
 (ert-deftest appkit-loop-preserves-fifo-and-commits-revisions ()
   (let (seen)
     (appkit-loop-test--with-loop
@@ -52,6 +80,7 @@
           (appkit-loop-post loop 'first)
           (appkit-loop-post loop 'second)
           (should (= (appkit-loop-run-pass loop) 2))
+          (should (timerp (appkit-loop--scheduled-handle loop)))
           (should (equal seen '(first second)))
           (should (= (appkit-loop-pending-count loop) 1))
           (should (= (appkit-loop-run-pass loop) 1))
@@ -89,6 +118,95 @@
     (appkit-loop-run-pass loop)
     (should (= (appkit-loop-revision loop) 2))))
 
+(ert-deftest appkit-loop-bounds-control-admission-independently ()
+  (appkit-loop-test--with-loop
+      (loop
+       :model nil
+       :mailbox-capacity 1
+       :control-capacity 2
+       :update (lambda (model _message) (appkit-loop-accept model)))
+    (let ((incarnation (appkit-loop-incarnation loop)))
+      (should
+       (eq (appkit-loop--post-control-addressed
+            loop 'control-one incarnation)
+           'enqueued))
+      (should
+       (eq (appkit-loop--post-control-addressed
+            loop 'control-two incarnation)
+           'enqueued))
+      (let ((sequence (appkit-loop--next-sequence loop)))
+        (should
+         (eq (appkit-loop--post-control-addressed
+              loop 'control-three incarnation)
+             'full))
+        (should (= (appkit-loop--next-sequence loop) sequence)))
+      (should (eq (appkit-loop-post loop 'data-one) 'enqueued))
+      (should (eq (appkit-loop-post loop 'data-two) 'full))
+      (should (= (appkit-loop-pending-count loop) 3))))
+  (should-error
+   (appkit-loop-create
+    :model nil
+    :control-capacity 0
+    :update (lambda (model _message) (appkit-loop-accept model)))
+   :type 'error))
+
+(ert-deftest appkit-loop-prioritizes-frozen-control-then-data-cutoffs ()
+  (let (loop seen)
+    (setq loop
+          (appkit-loop-create
+           :model nil
+           :control-capacity 4
+           :message-limit 8
+           :update
+           (lambda (model message)
+             (setq seen (append seen (list message)))
+             (when (eq message 'control-one)
+               (should
+                (eq (appkit-loop--post-control-addressed
+                     loop 'control-later (appkit-loop-incarnation loop))
+                    'enqueued))
+               (should (eq (appkit-loop-post loop 'data-later) 'enqueued)))
+             (appkit-loop-accept model))))
+    (unwind-protect
+        (progn
+          (appkit-loop-post loop 'data-one)
+          (appkit-loop--post-control-addressed
+           loop 'control-one (appkit-loop-incarnation loop))
+          (appkit-loop-post loop 'data-two)
+          (appkit-loop--post-control-addressed
+           loop 'control-two (appkit-loop-incarnation loop))
+          (should (= (appkit-loop-run-pass loop) 4))
+          (should
+           (equal seen '(control-one control-two data-one data-two)))
+          (should (= (appkit-loop-pending-count loop) 2))
+          (should (= (appkit-loop-run-pass loop) 2))
+          (should
+           (equal seen
+                  '(control-one control-two data-one data-two
+                    control-later data-later))))
+      (appkit-loop-stop loop))))
+
+(ert-deftest appkit-loop-message-limit-bounds-control-and-data-together ()
+  (let (seen)
+    (appkit-loop-test--with-loop
+        (loop
+         :model nil
+         :message-limit 3
+         :update
+         (lambda (model message)
+           (setq seen (append seen (list message)))
+           (appkit-loop-accept model)))
+      (let ((incarnation (appkit-loop-incarnation loop)))
+        (appkit-loop--post-control-addressed loop 'control-one incarnation)
+        (appkit-loop--post-control-addressed loop 'control-two incarnation))
+      (appkit-loop-post loop 'data-one)
+      (appkit-loop-post loop 'data-two)
+      (should (= (appkit-loop-run-pass loop) 3))
+      (should (equal seen '(control-one control-two data-one)))
+      (should (= (appkit-loop-pending-count loop) 1))
+      (should (= (appkit-loop-run-pass loop) 1))
+      (should (equal seen '(control-one control-two data-one data-two))))))
+
 (ert-deftest appkit-loop-send-uses-reserve-and-waits-behind-backlog ()
   (let (seen)
     (appkit-loop-test--with-loop
@@ -109,6 +227,32 @@
         (should (= (appkit-loop-ticket-revision ticket) 3)))
       (should (equal seen '(one two barrier)))
       (should (= (appkit-loop-pending-count loop) 0)))))
+
+(ert-deftest appkit-loop-send-cutoff-excludes-later-control ()
+  (let (loop seen)
+    (setq loop
+          (appkit-loop-create
+           :model nil
+           :update
+           (lambda (model message)
+             (setq seen (append seen (list message)))
+             (when (eq message 'backlog)
+               (should
+                (eq (appkit-loop--post-control-addressed
+                     loop 'later-control (appkit-loop-incarnation loop))
+                    'enqueued)))
+             (appkit-loop-accept model))))
+    (unwind-protect
+        (progn
+          (appkit-loop-post loop 'backlog)
+          (let ((ticket (appkit-loop-send loop 'barrier)))
+            (should (eq (appkit-loop-ticket-state ticket) 'accepted)))
+          (should (equal seen '(backlog barrier)))
+          (should (= (appkit-loop-pending-count loop) 1))
+          (should (timerp (appkit-loop--scheduled-handle loop)))
+          (should (= (appkit-loop-run-pass loop) 1))
+          (should (equal seen '(backlog barrier later-control))))
+      (appkit-loop-stop loop))))
 
 (ert-deftest appkit-loop-send-rejects-reentrancy ()
   (let (loop nested-result cross-result direct-condition)
@@ -179,6 +323,30 @@
     (should (eq (appkit-loop-post loop 'late) 'faulted))
     (should (eq (appkit-loop-send loop 'late) 'faulted))))
 
+(ert-deftest appkit-loop-fault-completes-all-current-pass-tickets ()
+  (appkit-loop-test--with-loop
+      (loop
+       :model nil
+       :update
+       (lambda (model message)
+         (if (eq message 'fail)
+             (error "pass failed")
+           (appkit-loop-accept (cons message model)))))
+    (let ((accepted-ticket (appkit-loop--ticket-create :state 'pending))
+          (faulting-ticket (appkit-loop--ticket-create :state 'pending)))
+      (should
+       (eq (appkit-loop--enqueue-data loop 'accepted accepted-ticket)
+           'enqueued))
+      (should
+       (eq (appkit-loop--enqueue-data loop 'fail faulting-ticket)
+           'enqueued))
+      (should (= (appkit-loop-run-pass loop) 2))
+      (let ((fault (appkit-loop-fault loop)))
+        (should (eq (appkit-loop-ticket-state accepted-ticket) 'faulted))
+        (should (eq (appkit-loop-ticket-outcome accepted-ticket) fault))
+        (should (eq (appkit-loop-ticket-state faulting-ticket) 'faulted))
+        (should (eq (appkit-loop-ticket-outcome faulting-ticket) fault))))))
+
 (ert-deftest appkit-loop-arbitrary-nonlocal-exit-still-faults ()
   (appkit-loop-test--with-loop
       (loop
@@ -207,18 +375,58 @@
     (should (equal (appkit-loop-model loop) '(scheduled)))
     (should (= (appkit-loop-pending-count loop) 0))))
 
-(ert-deftest appkit-loop-stop-is-idempotent-and-closes-admission ()
-  (let ((loop
-         (appkit-loop-create
-          :model nil
-          :update (lambda (model _message) (appkit-loop-accept model)))))
+(ert-deftest appkit-loop-active-pass-schedules-work-on-another-loop ()
+  (let (source target scheduled)
+    (setq target
+          (appkit-loop-create
+           :model nil
+           :update
+           (lambda (model message)
+             (appkit-loop-accept (cons message model))))
+          source
+          (appkit-loop-create
+           :model nil
+           :update
+           (lambda (model _message)
+             (should (eq (appkit-loop-post target 'cross-loop) 'enqueued))
+             (setq scheduled (appkit-loop--scheduled-handle target))
+             (appkit-loop-accept model))))
+    (unwind-protect
+        (progn
+          (appkit-loop-post source 'start)
+          (should (= (appkit-loop-run-pass source) 1))
+          (should (timerp scheduled))
+          (should (eq scheduled (appkit-loop--scheduled-handle target)))
+          (should (= (appkit-loop-run-pass target) 1))
+          (should (equal (appkit-loop-model target) '(cross-loop))))
+      (appkit-loop-stop source)
+      (appkit-loop-stop target))))
+
+(ert-deftest appkit-loop-stop-phases-close-exact-admission-once ()
+  (let* ((loop
+          (appkit-loop-create
+           :model nil
+           :update (lambda (model _message) (appkit-loop-accept model))))
+         (address (appkit-routing--address loop))
+         (incarnation (appkit-loop-incarnation loop)))
     (appkit-loop-post loop 'pending)
-    (should (appkit-loop-stop loop))
-    (should (eq (appkit-loop-status loop) 'stopped))
-    (should (= (appkit-loop-incarnation loop) 2))
+    (appkit-loop--post-control-addressed loop 'runtime incarnation)
+    (should (eq (appkit-loop--post-addressed loop 'old 0) 'stale))
+    (should (appkit-loop--begin-stop loop))
+    (should (eq (appkit-loop-status loop) 'stopping))
+    (should (= (appkit-loop-incarnation loop) (1+ incarnation)))
     (should (= (appkit-loop-pending-count loop) 0))
-    (should (eq (appkit-loop-post loop 'late) 'stopped))
-    (should (eq (appkit-loop-send loop 'late) 'stopped))
+    (should (eq (appkit-routing--post address 'late) 'stopped))
+    (should
+     (eq (appkit-loop--post-control-addressed
+          loop 'late incarnation)
+         'stopped))
+    (should-not (appkit-loop--begin-stop loop))
+    (should-not (appkit-loop-stop loop))
+    (should (eq (appkit-loop-status loop) 'stopping))
+    (should (appkit-loop--finish-stop loop))
+    (should (eq (appkit-loop-status loop) 'stopped))
+    (should-not (appkit-loop--finish-stop loop))
     (should-not (appkit-loop-stop loop))))
 
 (ert-deftest appkit-loop-rejects-mutation-from-worker-thread ()
@@ -349,6 +557,80 @@
              (should-error (appkit-loop-send loop 'fail) :type 'error)))
         (should (equal (error-message-string condition) "primary"))))))
 
+(ert-deftest appkit-routing-required-report-uses-control-lane-next-pass ()
+  (let (sender target seen routed-p)
+    (setq target
+          (appkit-loop-create
+           :model nil
+           :mailbox-capacity 1
+           :update (lambda (model _message) (appkit-loop-accept model)))
+          sender
+          (appkit-loop-create
+           :model nil
+           :mailbox-capacity 1
+           :control-capacity 1
+           :update
+           (lambda (model message)
+             (setq seen (append seen (list message)))
+             (when (eq message 'trigger)
+               (should (eq (appkit-loop-post sender 'sender-data) 'enqueued)))
+             (appkit-loop-accept model))
+           :after-pass
+           (lambda (current _pass)
+             (unless routed-p
+               (setq routed-p t)
+               (should
+                (eq (appkit-routing--post-command
+                     current (appkit-routing--address target)
+                     'routed 0 'request)
+                    'full))))))
+    (unwind-protect
+        (progn
+          (appkit-loop-post target 'target-data)
+          (appkit-loop-post sender 'trigger)
+          (should (= (appkit-loop-run-pass sender) 1))
+          (should (equal seen '(trigger)))
+          (should (= (appkit-loop-pending-count sender) 2))
+          (should (= (appkit-loop-run-pass sender) 2))
+          (let ((report (cadr seen)))
+            (should (appkit-delivery-report-p report))
+            (should (eq (appkit-delivery-report-outcome report) 'full))
+            (should (eq (appkit-delivery-report-message report) 'routed)))
+          (should (eq (car (last seen)) 'sender-data)))
+      (appkit-loop-stop sender)
+      (appkit-loop-stop target))))
+
+(ert-deftest appkit-routing-required-report-control-overflow-is-terminal ()
+  (let* ((sender
+          (appkit-loop-create
+           :model nil
+           :control-capacity 1
+           :update (lambda (model _message) (appkit-loop-accept model))))
+         (target
+          (appkit-loop-create
+           :model nil
+           :mailbox-capacity 1
+           :update (lambda (model _message) (appkit-loop-accept model))))
+         (incarnation (appkit-loop-incarnation sender)))
+    (unwind-protect
+        (progn
+          (appkit-loop--post-control-addressed
+           sender 'occupied incarnation)
+          (appkit-loop-post target 'occupied)
+          (let ((condition
+                 (should-error
+                  (appkit-routing--post-command
+                   sender (appkit-routing--address target)
+                   'routed 0 nil)
+                  :type 'error)))
+            (should
+             (string-match-p
+              "Required delivery report admission failed: full"
+              (error-message-string condition))))
+          (should (= (appkit-loop-pending-count sender) 1)))
+      (appkit-loop-stop sender)
+      (appkit-loop-stop target))))
+
 (ert-deftest appkit-routing-fences-exact-addresses-and-reply-routes ()
   (let* ((loop
           (appkit-loop-create
@@ -367,8 +649,8 @@
           (should (equal (appkit-loop-model loop) '(direct reply)))
           (appkit-loop-stop loop)
           (let ((sequence (appkit-loop--next-sequence loop)))
-            (should (eq (appkit-routing--post address 'late) 'stale))
-            (should (eq (appkit-routing--post route 'late) 'stale))
+            (should (eq (appkit-routing--post address 'late) 'stopped))
+            (should (eq (appkit-routing--post route 'late) 'stopped))
             (should (= (appkit-loop--next-sequence loop) sequence)))
           (should
            (eq (appkit-routing--post

@@ -109,7 +109,7 @@ pass.  Failure to admit that required report is a runtime fault."
            request-route)))
     (unless (eq outcome 'enqueued)
       (let ((report-outcome
-             (appkit-loop--post-addressed
+             (appkit-loop--post-control-addressed
               sender
               (appkit-delivery-report--create
                :outcome outcome

@@ -57,6 +57,7 @@
   spec
   key
   token
+  incarnation
   state
   starting-p
   cancellation
@@ -68,8 +69,7 @@
   latest-observation
   coalesced-observations
   settlement
-  wake-pending-p
-  retry-timer)
+  wake-pending-p)
 
 (cl-defstruct (appkit-effect-observation
                (:constructor appkit-effect--observation-create)
@@ -207,12 +207,6 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
     (setf (appkit-effect--instance-next-sequence instance) (1+ sequence))
     sequence))
 
-(defun appkit-effect--cancel-retry (instance)
-  "Cancel INSTANCE's pending wake retry."
-  (when-let* ((timer (appkit-effect--instance-retry-timer instance)))
-    (setf (appkit-effect--instance-retry-timer instance) nil)
-    (when (timerp timer)
-      (cancel-timer timer))))
 
 (defun appkit-effect--invoke-cancellation (instance)
   "Invoke and clear INSTANCE's concrete cancellation capability."
@@ -239,7 +233,6 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
     (when (eq instance (gethash key instances))
       (remhash key instances))
     (setf (appkit-effect--instance-state instance) 'revoked)
-    (appkit-effect--cancel-retry instance)
     (appkit-effect--clear-pending instance)
     (if cancel-p
         (appkit-effect--invoke-cancellation instance)
@@ -261,33 +254,34 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
     ((error quit)
      (appkit-effect--warn-cancellation instance condition))))
 
-(defun appkit-effect--retry-wake (instance)
-  "Retry delivery of INSTANCE's staged callback data."
-  (setf (appkit-effect--instance-retry-timer instance) nil)
-  (when (appkit-effect--current-p instance)
-    (appkit-effect--request-wake instance)))
-
 (defun appkit-effect--request-wake (instance)
-  "Ensure INSTANCE has one internal delivery queued or scheduled for retry."
+  "Ensure INSTANCE has one internal control delivery queued."
   (when (and (appkit-effect--current-p instance)
              (not (appkit-effect--instance-starting-p instance))
-             (not (appkit-effect--instance-wake-pending-p instance))
-             (null (appkit-effect--instance-retry-timer instance)))
+             (not (appkit-effect--instance-wake-pending-p instance)))
     (let* ((runtime (appkit-effect--instance-runtime instance))
+           (loop (appkit-effect--runtime-loop runtime))
            (outcome
-            (appkit-loop-post
-             (appkit-effect--runtime-loop runtime)
+            (appkit-loop--post-control-addressed
+             loop
              (appkit-effect--delivery-create
               :runtime runtime
               :key (appkit-effect--instance-key instance)
-              :token (appkit-effect--instance-token instance)))))
+              :token (appkit-effect--instance-token instance))
+             (appkit-effect--instance-incarnation instance))))
       (pcase outcome
         ('enqueued
          (setf (appkit-effect--instance-wake-pending-p instance) t))
         ('full
-         (setf (appkit-effect--instance-retry-timer instance)
-               (run-at-time 0.001 nil #'appkit-effect--retry-wake instance)))
-        ((or 'faulted 'stopped)
+         (unwind-protect
+             (appkit-effect--revoke-from-gate instance)
+           (appkit-loop--enter-fault
+            loop
+            (list 'error
+                  (format "Effect %S control wake admission failed: full"
+                          (appkit-effect--instance-key instance)))
+            nil)))
+        ((or 'faulted 'stale 'stopped)
          (appkit-effect--revoke-from-gate instance))
         (_
          (error "Unexpected Effect wake admission outcome: %S" outcome))))))
@@ -426,6 +420,8 @@ an output gate."
              :spec spec
              :key key
              :token (make-symbol "appkit-effect-token")
+             :incarnation
+             (appkit-loop-incarnation (appkit-effect--runtime-loop runtime))
              :state 'starting
              :starting-p t
              :cancellation nil
@@ -437,11 +433,9 @@ an output gate."
              :latest-observation nil
              :coalesced-observations nil
              :settlement nil
-             :wake-pending-p nil
-             :retry-timer nil))
+             :wake-pending-p nil))
            (context (list 'appkit-effect-context
-                          (appkit-loop-incarnation
-                           (appkit-effect--runtime-loop runtime))
+                          (appkit-effect--instance-incarnation instance)
                           key))
            completed-p
            condition
@@ -597,7 +591,6 @@ names RUNTIME's current keyed instance."
           (setf (appkit-effect--instance-state instance) 'terminal
                 (appkit-effect--instance-settlement instance) nil
                 (appkit-effect--instance-cancellation instance) nil)
-          (appkit-effect--cancel-retry instance)
           (apply (if (eq (appkit-effect-settlement-kind settlement) 'success)
                      (appkit-effect-spec-success spec)
                    (appkit-effect-spec-failure spec))
