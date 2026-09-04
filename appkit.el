@@ -22,6 +22,7 @@
 (require 'appkit-core)
 (require 'appkit-loop)
 (require 'appkit-effect)
+(require 'appkit-surface)
 (require 'appkit-task-queue)
 (require 'appkit-transaction)
 (require 'appkit-position)
