@@ -400,11 +400,14 @@ owned payload, and a function-symbol result mapper.  Outcomes are
 pass.  A ~quiescent-transport~ Source delays replacement until its concrete
 cancellation capability reports physical quiescence.
 
-Projection rows may return bounded ~appkit-resource-demand~ values.  The
-standard projection renderer commits their interests only after successful
-buffer mutation.  Resource completion passes through the App coordinator and
-exact Surface incarnation, then redraws only retained dependency rows without
-calling the projector or advancing a domain revision.
+Projection rows may return ~appkit-resource-demand~ values bounded by the App
+coordinator's entry capacity, not an independent per-render limit.  The standard
+projection renderer commits their interests only after successful buffer
+mutation.  Resource completion passes through the App coordinator and exact
+Surface incarnation, then redraws only retained dependency rows without calling
+the projector or advancing a domain revision.  Each owner coalesces completion
+work behind one control wake; synchronous cache hits do not consume one control
+slot per Resource.  Acquisition still obeys the broker's active and queued bounds.
 
 The host buffer is persistent ownership; windows are temporary viewports.
 Major mode setup precedes attachment.  Killing the exact buffer or changing

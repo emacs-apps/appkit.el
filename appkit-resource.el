@@ -88,7 +88,6 @@
                (:copier nil))
   coordinator surface incarnation keys)
 
-(defconst appkit-resource-default-per-render-limit 32)
 (defconst appkit-resource-default-entry-limit 256)
 (defconst appkit-resource-default-interest-limit 512)
 (defconst appkit-resource-default-broker-active-limit 32)
@@ -132,6 +131,27 @@
            (appkit-resource-demand-cache-policy demand)))
   demand)
 
+(cl-defstruct (appkit-resource--pending
+               (:constructor appkit-resource--pending-create)
+               (:copier nil))
+  completions coordinator-wake-p surfaces)
+
+(defvar appkit-resource--pending-by-coordinator
+  (make-hash-table :test #'eq :weakness 'key)
+  "Transient notification queues keyed by their exact owning coordinator.
+Keeping delivery bookkeeping separate also leaves live coordinator records
+valid across source reloads.")
+
+(defun appkit-resource--pending-state (coordinator &optional create)
+  "Return COORDINATOR's notification queues, creating them when CREATE."
+  (or (gethash coordinator appkit-resource--pending-by-coordinator)
+      (when create
+        (puthash coordinator
+                 (appkit-resource--pending-create
+                  :completions (make-hash-table :test #'equal)
+                  :surfaces (make-hash-table :test #'eq))
+                 appkit-resource--pending-by-coordinator))))
+
 (defun appkit-resource-coordinator-create (app &optional entry-limit interest-limit)
   "Create APP's logical resource coordinator."
   (appkit-resource--coordinator-create-internal
@@ -162,24 +182,26 @@
                       (appkit-resource--coordinator-entries coordinator))))))
 
 (defun appkit-resource--post-coordinator (entry status payload)
-  "Post ENTRY completion STATUS and PAYLOAD to its App coordinator."
+  "Post ENTRY completion STATUS and PAYLOAD to its App coordinator.
+The first completion wakes the App; later completions share that wake."
   (when (appkit-resource--entry-current-p entry)
     (let* ((coordinator (appkit-resource--entry-coordinator entry))
-           (app (appkit-resource--coordinator-app coordinator))
-           (loop (appkit-app-loop app))
-           (outcome
-            (appkit-loop--post-control-addressed
-             loop
-             (appkit-resource--coordinator-delivery-create
-              :coordinator coordinator
-              :entry entry
-              :token (appkit-resource--entry-token entry)
-              :status status
-              :payload payload)
-             (appkit-loop-incarnation loop))))
-      (when (eq outcome 'full)
-        (appkit-loop--enter-fault
-         loop '(error "Resource coordinator completion lane is full") nil)))))
+           (pending (appkit-resource--pending-state coordinator t))
+           (delivery (appkit-resource--coordinator-delivery-create
+                      :coordinator coordinator :entry entry
+                      :token (appkit-resource--entry-token entry)
+                      :status status :payload payload)))
+      (if (appkit-resource--pending-coordinator-wake-p pending)
+          (puthash (appkit-resource--entry-key entry) delivery
+                   (appkit-resource--pending-completions pending))
+        (setf (appkit-resource--pending-coordinator-wake-p pending) t)
+        (let* ((loop (appkit-app-loop
+                      (appkit-resource--coordinator-app coordinator)))
+               (outcome (appkit-loop--post-control-addressed
+                         loop delivery (appkit-loop-incarnation loop))))
+          (when (eq outcome 'full)
+            (appkit-loop--enter-fault
+             loop '(error "Resource coordinator completion lane is full") nil)))))))
 
 (defun appkit-resource--broker-remove-queued (acquisition)
   "Remove queued ACQUISITION from its broker."
@@ -244,6 +266,7 @@
         (appkit-resource--post-coordinator entry status payload))
       (appkit-resource--broker-start-next broker)
       t)))
+
 (defun appkit-resource--broker-fault (acquisition condition)
   "Retire ACQUISITION and route invariant CONDITION through each App gate."
   (let ((entries
@@ -356,6 +379,14 @@
 
 (defun appkit-resource--release-entry (entry)
   "Release logical ENTRY and its physical acquisition lease."
+  (let* ((coordinator (appkit-resource--entry-coordinator entry))
+         (pending (appkit-resource--pending-state coordinator))
+         (key (appkit-resource--entry-key entry))
+         (completion (and pending
+                          (gethash key (appkit-resource--pending-completions pending)))))
+    (when (and completion
+               (eq entry (appkit-resource--coordinator-delivery-entry completion)))
+      (remhash key (appkit-resource--pending-completions pending))))
   (when-let* ((acquisition (appkit-resource--entry-acquisition entry)))
     (setf (appkit-resource--acquisition-leases acquisition)
           (delq entry (appkit-resource--acquisition-leases acquisition))
@@ -379,53 +410,85 @@
     surfaces))
 
 (defun appkit-resource--notify-surface (coordinator surface keys)
-  "Post resource KEYS to interested SURFACE."
+  "Post resource KEYS to interested SURFACE using one pending wake."
   (when (appkit-surface-live-p surface)
-    (let* ((loop (appkit-surface-loop surface))
-           (incarnation (appkit-loop-incarnation loop))
-           (outcome
-            (appkit-loop--post-control-addressed
-             loop
-             (appkit-resource--surface-delivery-create
-              :coordinator coordinator :surface surface
-              :incarnation incarnation :keys keys)
-             incarnation)))
-      (when (eq outcome 'full)
-        (appkit-loop--enter-fault
-         loop '(error "Resource Surface delivery lane is full") nil)))))
+    (let* ((pending (appkit-resource--pending-state coordinator t))
+           (surfaces (appkit-resource--pending-surfaces pending))
+           (extra-keys (gethash surface surfaces)))
+      (if extra-keys
+          (dolist (key keys)
+            (puthash key t extra-keys))
+        (puthash surface (make-hash-table :test #'equal) surfaces)
+        (let* ((loop (appkit-surface-loop surface))
+               (incarnation (appkit-loop-incarnation loop))
+               (outcome
+                (appkit-loop--post-control-addressed
+                 loop
+                 (appkit-resource--surface-delivery-create
+                  :coordinator coordinator :surface surface
+                  :incarnation incarnation :keys keys)
+                 incarnation)))
+          (when (eq outcome 'full)
+            (appkit-loop--enter-fault
+             loop '(error "Resource Surface delivery lane is full") nil)))))))
 
-(defun appkit-resource-consume-coordinator-delivery (app delivery)
+(defun appkit-resource--commit-completion (app delivery)
   "Commit App companion DELIVERY and notify interested Surfaces."
   (let* ((coordinator (appkit-resource--coordinator-delivery-coordinator delivery))
          (entry (appkit-resource--coordinator-delivery-entry delivery)))
-    (unless (and (eq coordinator (appkit-app-resource-coordinator app))
-                 (eq coordinator (appkit-resource--entry-coordinator entry))
-                 (eq (appkit-resource--coordinator-delivery-token delivery)
-                     (appkit-resource--entry-token entry))
-                 (appkit-resource--entry-current-p entry))
-      (cl-return-from appkit-resource-consume-coordinator-delivery nil))
-    (when (eq (appkit-resource--coordinator-delivery-status delivery) 'fault)
-      (let ((condition (appkit-resource--coordinator-delivery-payload delivery)))
-        (if (consp condition)
-            (signal (car condition) (cdr condition))
-          (error "Invalid Resource coordinator fault: %S" condition))))
-    (let ((status (appkit-resource--coordinator-delivery-status delivery))
-          (payload (appkit-resource--coordinator-delivery-payload delivery)))
-      (setf (appkit-resource--entry-state entry)
-            (if (eq status 'ready)
+    (when (and (eq coordinator (appkit-app-resource-coordinator app))
+               (eq coordinator (appkit-resource--entry-coordinator entry))
+               (eq (appkit-resource--coordinator-delivery-token delivery)
+                   (appkit-resource--entry-token entry))
+               (appkit-resource--entry-current-p entry))
+      (when (eq (appkit-resource--coordinator-delivery-status delivery) 'fault)
+        (let ((condition (appkit-resource--coordinator-delivery-payload delivery)))
+          (if (consp condition)
+              (signal (car condition) (cdr condition))
+            (error "Invalid Resource coordinator fault: %S" condition))))
+      (let ((status (appkit-resource--coordinator-delivery-status delivery))
+            (payload (appkit-resource--coordinator-delivery-payload delivery)))
+        (setf (appkit-resource--entry-state entry)
+              (if (eq status 'ready)
+                  (appkit-resource--state-create
+                   :status 'ready :value payload :reason nil)
                 (appkit-resource--state-create
-                 :status 'ready :value payload :reason nil)
-              (appkit-resource--state-create
-               :status 'failed :value nil :reason payload)))
-      (dolist (surface (appkit-resource--interested-surfaces entry))
-        (appkit-resource--notify-surface
-         coordinator surface (list (appkit-resource--entry-key entry))))
+                 :status 'failed :value nil :reason payload)))
+        (dolist (surface (appkit-resource--interested-surfaces entry))
+          (appkit-resource--notify-surface
+           coordinator surface (list (appkit-resource--entry-key entry))))
+        t))))
+
+(defun appkit-resource-consume-coordinator-delivery (app delivery)
+  "Commit DELIVERY and its coalesced completions without domain revisions."
+  (let* ((coordinator (appkit-resource--coordinator-delivery-coordinator delivery))
+         (pending (appkit-resource--pending-state coordinator))
+         (completions (and pending
+                           (appkit-resource--pending-completions pending))))
+    (when (and (eq coordinator (appkit-app-resource-coordinator app))
+               (appkit-resource--coordinator-alive-p coordinator))
+      (when pending
+        (setf (appkit-resource--pending-completions pending)
+              (make-hash-table :test #'equal)
+              (appkit-resource--pending-coordinator-wake-p pending) nil))
+      (unless (and completions
+                   (gethash (appkit-resource--entry-key
+                             (appkit-resource--coordinator-delivery-entry delivery))
+                            completions))
+        (appkit-resource--commit-completion app delivery))
+      (when completions
+        (maphash (lambda (_key completion)
+                   (appkit-resource--commit-completion app completion))
+                 completions))
       t)))
 
 (defun appkit-resource-consume-surface-delivery (surface delivery)
-  "Return resource-only Renderer request for current SURFACE DELIVERY."
+  "Return one resource-only Renderer request for current SURFACE DELIVERY."
   (let* ((coordinator (appkit-resource--surface-delivery-coordinator delivery))
-         (keys (appkit-resource--surface-delivery-keys delivery))
+         (pending (appkit-resource--pending-state coordinator))
+         (surfaces (and pending (appkit-resource--pending-surfaces pending)))
+         (extra-keys (and surfaces (gethash surface surfaces)))
+         (interests (appkit-resource--surface-interests coordinator surface))
          (mapper
           (appkit-generated-renderer-resource-request
            (appkit-surface-renderer surface))))
@@ -434,10 +497,19 @@
                   (appkit-loop-incarnation (appkit-surface-loop surface)))
                (eq coordinator
                    (appkit-app-resource-coordinator
-                    (appkit-surface-app surface)))
-               (appkit-resource--surface-interests coordinator surface)
-               (functionp mapper))
-      (funcall mapper keys))))
+                    (appkit-surface-app surface))))
+      (when surfaces (remhash surface surfaces))
+      (when (and interests (functionp mapper))
+        (let (keys)
+          (dolist (key (appkit-resource--surface-delivery-keys delivery))
+            (when (and (gethash key interests)
+                       (not (and extra-keys (gethash key extra-keys))))
+              (push key keys)))
+          (when extra-keys
+            (maphash (lambda (key _present)
+                       (when (gethash key interests) (push key keys)))
+                     extra-keys))
+          (when keys (funcall mapper (nreverse keys))))))))
 
 (defun appkit-resource-state (surface key)
   "Return presentation resource state for SURFACE and KEY, or nil."
@@ -503,6 +575,11 @@
       (remhash surface (appkit-resource--coordinator-interests coordinator))
     (puthash surface table
              (appkit-resource--coordinator-interests coordinator)))
+  (when-let* ((pending (appkit-resource--pending-state coordinator))
+              (keys (gethash surface (appkit-resource--pending-surfaces pending))))
+    (maphash (lambda (key _present)
+               (unless (gethash key table) (remhash key keys)))
+             keys))
   table)
 
 (defun appkit-resource--key-interested-p (coordinator key)
@@ -543,8 +620,8 @@
 (defun appkit-resource--prepare-demands (coordinator demands interest-table)
   "Validate DEMANDS and INTEREST-TABLE without mutating COORDINATOR."
   (unless (appkit-resource--proper-bounded-list-p
-           demands appkit-resource-default-per-render-limit)
-    (error "Per-render resource demand limit exceeded"))
+           demands (appkit-resource--coordinator-max-entries coordinator))
+    (error "App resource demand limit exceeded"))
   (let ((seen (make-hash-table :test #'equal))
         (entries (appkit-resource--coordinator-entries coordinator))
         (new-count 0))
@@ -658,6 +735,8 @@
   (when-let* ((app (appkit-surface-app surface))
               (coordinator (appkit-app-resource-coordinator app)))
     (remhash surface (appkit-resource--coordinator-interests coordinator))
+    (when-let* ((pending (appkit-resource--pending-state coordinator)))
+      (remhash surface (appkit-resource--pending-surfaces pending)))
     (appkit-resource--release-uninterested coordinator)))
 
 (defun appkit-resource-coordinator-stop (coordinator)
@@ -670,6 +749,7 @@
                (appkit-resource--coordinator-entries coordinator))
       (clrhash (appkit-resource--coordinator-entries coordinator))
       (clrhash (appkit-resource--coordinator-interests coordinator))
+      (remhash coordinator appkit-resource--pending-by-coordinator)
       (appkit-resource--release-entries entries)
       t)))
 
