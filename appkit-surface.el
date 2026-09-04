@@ -18,7 +18,6 @@
 
 (require 'cl-lib)
 (require 'appkit-loop)
-(require 'appkit-routing)
 (require 'appkit-command)
 (require 'appkit-cleanup)
 
@@ -74,12 +73,6 @@
        (buffer-live-p (appkit-surface-buffer surface))
        (with-current-buffer (appkit-surface-buffer surface)
          (eq appkit--current-surface surface))))
-
-(defun appkit-surface-address (surface)
-  "Return an exact runtime address for live SURFACE."
-  (unless (appkit-surface-live-p surface)
-    (error "Cannot address a detached Surface"))
-  (appkit-loop-address (appkit-surface-loop surface)))
 
 (defun appkit-surface-model (surface)
   "Return SURFACE's current committed domain model."

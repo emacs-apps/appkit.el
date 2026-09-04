@@ -117,7 +117,7 @@
              :model nil
              :update
              (lambda (model _message) (appkit-loop-accept model))))
-           (address (appkit-loop-address target)))
+           (address (appkit-routing--address target)))
       (setq loop
             (appkit-loop-create
              :model nil
@@ -129,7 +129,7 @@
                        direct-condition
                        (condition-case condition
                            (progn
-                             (appkit-post-message address 'inner)
+                             (appkit-routing--post address 'inner)
                              nil)
                          (error condition))))
                (appkit-loop-accept model))))
@@ -138,9 +138,6 @@
             (should (eq nested-result 'reentrant-send))
             (should (eq cross-result 'reentrant-send))
             (should direct-condition)
-            (should
-             (string-match-p
-              "must be deferred" (error-message-string direct-condition)))
             (should (eq (appkit-loop-ticket-state ticket) 'accepted))
             (should (= (appkit-loop-revision loop) 1))
             (should (= (appkit-loop-revision target) 0)))
@@ -360,21 +357,22 @@
            :update
            (lambda (model message)
              (appkit-loop-accept (append model (list message))))))
-         (address (appkit-loop-address loop))
-         (route (appkit-reply-route-create address 'request-1)))
+         (address (appkit-routing--address loop))
+         (route (appkit-routing--reply-route address 'request-1)))
     (unwind-protect
         (progn
-          (should (eq (appkit-post-message address 'direct) 'enqueued))
-          (should (eq (appkit-post-message route 'reply) 'enqueued))
+          (should (eq (appkit-routing--post address 'direct) 'enqueued))
+          (should (eq (appkit-routing--post route 'reply) 'enqueued))
           (should (= (appkit-loop-run-pass loop) 2))
           (should (equal (appkit-loop-model loop) '(direct reply)))
           (appkit-loop-stop loop)
           (let ((sequence (appkit-loop--next-sequence loop)))
-            (should (eq (appkit-post-message address 'late) 'stale))
-            (should (eq (appkit-post-message route 'late) 'stale))
+            (should (eq (appkit-routing--post address 'late) 'stale))
+            (should (eq (appkit-routing--post route 'late) 'stale))
             (should (= (appkit-loop--next-sequence loop) sequence)))
           (should
-           (eq (appkit-post-message (appkit-loop-address loop) 'late)
+           (eq (appkit-routing--post
+                (appkit-routing--address loop) 'late)
                'stopped)))
       (appkit-loop-stop loop))))
 

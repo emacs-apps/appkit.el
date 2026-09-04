@@ -9,9 +9,9 @@
 
 ;;; Commentary:
 
-;; Opaque, incarnation-exact targets for asynchronous cross-runtime posts.
-;; Addresses and reply routes never expose a callable runtime entry point;
-;; admission remains bounded by the target loop.
+;; Internal exact-target admission for runtime post phases and callback gates.
+;; Client code only receives opaque addresses and reply routes through a
+;; transition context and can use them only in closed commands.
 
 ;;; Code:
 
@@ -35,31 +35,28 @@
   target
   correlation)
 
-(defun appkit-loop-address (loop)
-  "Return an exact runtime address for LOOP's current incarnation."
+(defun appkit-routing--address (loop)
+  "Return an exact internal runtime address for LOOP's current incarnation."
   (appkit-loop--check loop)
   (appkit-runtime-address--create
    :owner loop
-   :owner-identity (appkit-loop-owner-identity loop)
+   :owner-identity (appkit-loop--owner-identity loop)
    :incarnation (appkit-loop-incarnation loop)))
 
-(defun appkit-reply-route-create (target correlation)
-  "Return an opaque reply route to exact runtime address TARGET.
-
-CORRELATION is retained as opaque routing metadata; it does not grant access to
-TARGET's owner or alter the posted domain message."
+(defun appkit-routing--reply-route (target correlation)
+  "Return an internal reply route to exact runtime address TARGET."
   (unless (appkit-runtime-address-p target)
     (signal 'wrong-type-argument (list 'appkit-runtime-address-p target)))
   (appkit-reply-route--create :target target :correlation correlation))
 
-(defun appkit-post-message (target message)
-  "Try to enqueue MESSAGE at exact TARGET without invoking target code.
+(defun appkit-routing--post (target message)
+  "Try to enqueue MESSAGE at exact internal TARGET.
 
-TARGET is an `appkit-runtime-address' or `appkit-reply-route'.  Return one of
-`enqueued', `full', `stale', `stopped', or `faulted'.  Failed admission does
-not allocate a target sequence number."
+Return `enqueued', `full', `stale', `stopped', or `faulted'.  Failed admission
+does not allocate a target sequence number.  Client transitions must instead
+return a closed post command for execution after commit."
   (when appkit-loop--active-loop
-    (error "Directed posts must be deferred until after the active pass"))
+    (error "Directed posts must use the runtime post-commit phase"))
   (let* ((route (and (appkit-reply-route-p target) target))
          (address (if route (appkit-reply-route--target route) target)))
     (unless (appkit-runtime-address-p address)

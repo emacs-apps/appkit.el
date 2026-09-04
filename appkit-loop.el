@@ -106,10 +106,6 @@
   (unless (eq (current-thread) main-thread)
     (error "Appkit runtime mutation is restricted to the main Emacs thread")))
 
-(defun appkit-loop-owner-identity (loop)
-  "Return LOOP's opaque stable owner identity."
-  (appkit-loop--owner-identity (appkit-loop--check loop)))
-
 (defun appkit-loop-model (loop)
   "Return LOOP's current committed model."
   (appkit-loop--model (appkit-loop--check loop)))
