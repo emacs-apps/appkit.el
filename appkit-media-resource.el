@@ -27,7 +27,8 @@
 (require 'appkit-core)
 (require 'appkit-media-card)
 (require 'appkit-media-image)
-(require 'video)
+(require 'video-view)
+(require 'video-inline)
 
 (defcustom appkit-media-video-cache-directory
   (locate-user-emacs-file "appkit-video-cache/")
