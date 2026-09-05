@@ -223,9 +223,10 @@ delimiter geometry.
 
 Use ~appkit-scroll-observer-install~ when a view pages application-owned
 content near a visible buffer edge.  The observer unifies buffer-local
-~post-command-hook~ and ~window-scroll-functions~ handling, validates the
-owning view and every displayed window, and reports visible start and end
-positions clamped by optional boundary functions.  Edge callbacks own
+~post-command-hook~, ~window-scroll-functions~, and
+~window-size-change-functions~ handling.  Measurements run after redisplay,
+validate the owning view and every displayed window, and report visible start
+and end positions clamped by optional boundary functions.  Edge callbacks own
 thresholds, cursors, loading and exhaustion gates, requests, and retry policy.
 
 ~appkit-scroll-near-start-p~ and ~appkit-scroll-near-end-p~ implement the
@@ -234,6 +235,9 @@ After committing a page and synchronizing its projection, call
 ~appkit-scroll-observer-check~ so a short page can request another eligible
 page.  The request callback must close its loading gate synchronously before
 starting asynchronous work.
+
+Keep viewport observation independent of projection invalidation: a height-only
+resize changes visible edges without requiring width-dependent rows to reflow.
 
 ** Media
 
@@ -260,6 +264,12 @@ of natural-ratio containment, and add the shared translucent circle-and-triangle
 video marker with ~:play-icon~.  The optional pixel offset moves the SVG
 ~viewBox~ while keeping display width fixed; hot spots are clipped and
 translated into visible coordinates.
+
+Treat the returned descriptor as immutable.  Unchanged scenes reuse descriptors
+within the current buffer while live media tracks retain them; weak cache values
+do not extend those tracks' lifetimes.  File replacement, scene geometry, and
+presentation settings invalidate reuse.  Construction does not decode the SVG:
+display code chooses the final slice height before rasterization is needed.
 
 Use ~appkit-media-video-session-create~ when an application may present one
 video in more than one place.  The Appkit wrapper owns the canonical resource,

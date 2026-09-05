@@ -405,6 +405,9 @@ The returned plist contains `:width', `:height', `:gap', `:offset', and
             :offset offset
             :items geometry))))
 
+(defvar-local appkit-media--horizontal-strip-images nil
+  "Weak scene cache; the buffer's live media tracks own the descriptors.")
+
 (defun appkit-media-horizontal-strip-image
     (items pixel-height pixel-gap &optional pixel-offset)
   "Return ITEMS rendered at PIXEL-HEIGHT with PIXEL-GAP scene spacing.
@@ -412,7 +415,11 @@ The returned plist contains `:width', `:height', `:gap', `:offset', and
 Each item may contain `:file', `:width', `:height', `:id', `:display-width',
 `:fit', and `:play-icon'.  Optional PIXEL-OFFSET moves that scene x coordinate
 to the left edge without changing the display width.  Item IDs become image
-map hot spots in visible coordinates.  Return nil when SVG is unavailable."
+map hot spots in visible coordinates.  Return nil when SVG is unavailable.
+
+Reuse live descriptors for unchanged scenes in the current buffer.  File
+replacement, geometry and presentation settings participate in cache identity.
+Do not mutate the returned descriptor.  Rasterization is deferred to display."
   (when (and (image-type-available-p 'svg)
              (fboundp 'svg-create)
              (fboundp 'svg-embed)
@@ -425,62 +432,83 @@ map hot spots in visible coordinates.  Return nil when SVG is unavailable."
                  (strip-width (plist-get plan :width))
                  (offset (plist-get plan :offset))
                  (geometry (plist-get plan :items))
-                 (svg
-                  (svg-create
-                   strip-width height
-                   :viewBox
-                   (format "%d 0 %d %d"
-                           offset strip-width height)))
-                 image-map)
-            (dolist (cell geometry)
-              (let* ((item (plist-get cell :item))
-                     (file (plist-get item :file))
-                     (x (plist-get cell :x))
-                     (width (plist-get cell :width))
-                     (id (plist-get cell :id))
-                     (map-left (max 0 (- x offset)))
-                     (map-right
-                      (min strip-width (- (+ x width) offset)))
-                     (mime-type
-                      (and (stringp file)
-                           (file-readable-p file)
-                           (appkit-media-image-mime-type file))))
-                (when mime-type
-                  (svg-embed
-                   svg file mime-type nil
-                   :x x :y 0 :width width :height height
-                   :preserveAspectRatio
-                   (if (eq (plist-get item :fit) 'cover)
-                       "xMidYMid slice"
-                     "xMidYMid meet"))
-                  (when (plist-get item :play-icon)
-                    (appkit-media-append-video-play-icon
-                     svg width height x 0)))
-                (when (< map-left map-right)
-                  (push
-                   (list
-                    `(rect
-                      . ((,map-left . 0) . (,map-right . ,height)))
-                    id
-                    '(:pointer hand :help-echo "Open media"))
-                   image-map))))
-            (let ((image
-                   (svg-image
-                    svg :ascent 'center :height height :scale 1.0
-                    :map (nreverse image-map))))
-              (when (appkit-media-image-object-valid-p image)
-                (plist-put
-                 (cdr image) :appkit-media-nslices
-                 (max 1
-                      (ceiling
-                       (/ (float height)
-                          (float (appkit-media--base-char-pixel-height))))))
-                (plist-put
-                 (cdr image) :appkit-media-strip-widths
-                 (mapcar (lambda (cell) (plist-get cell :width)) geometry))
-                (plist-put
-                 (cdr image) :appkit-media-strip-offset offset)
-                image))))
+                 (nslices
+                  (max 1
+                       (ceiling
+                        (/ (float height)
+                           (float (appkit-media--base-char-pixel-height))))))
+                 (key
+                  (list
+                   plan nslices image-transform-smoothing
+                   (and (cl-some (lambda (item) (plist-get item :play-icon)) items)
+                        (list appkit-media-video-play-icon-radius-divisor
+                              appkit-media-video-play-icon-circle-opacity
+                              appkit-media-video-play-icon-triangle-opacity))
+                   (mapcar
+                    (lambda (item)
+                      (when-let* ((file (plist-get item :file))
+                                  ((stringp file))
+                                  (attributes (file-attributes file)))
+                        (list (file-attribute-modification-time attributes)
+                              (file-attribute-status-change-time attributes)
+                              (file-attribute-size attributes)
+                              (file-attribute-inode-number attributes)
+                              (file-attribute-device-number attributes))))
+                    items)))
+                 (cache
+                  (or appkit-media--horizontal-strip-images
+                      (setq appkit-media--horizontal-strip-images
+                            (make-hash-table :test #'equal :weakness 'value)))))
+            (or (gethash key cache)
+                (let ((svg
+                       (svg-create
+                        strip-width height
+                        :viewBox
+                        (format "%d 0 %d %d" offset strip-width height)))
+                      image-map)
+                  (dolist (cell geometry)
+                    (let* ((item (plist-get cell :item))
+                           (file (plist-get item :file))
+                           (x (plist-get cell :x))
+                           (width (plist-get cell :width))
+                           (id (plist-get cell :id))
+                           (map-left (max 0 (- x offset)))
+                           (map-right (min strip-width (- (+ x width) offset)))
+                           (mime-type
+                            (and (stringp file)
+                                 (file-readable-p file)
+                                 (appkit-media-image-mime-type file))))
+                      (when mime-type
+                        (svg-embed
+                         svg file mime-type nil
+                         :x x :y 0 :width width :height height
+                         :preserveAspectRatio
+                         (if (eq (plist-get item :fit) 'cover)
+                             "xMidYMid slice"
+                           "xMidYMid meet"))
+                        (when (plist-get item :play-icon)
+                          (appkit-media-append-video-play-icon
+                           svg width height x 0)))
+                      (when (< map-left map-right)
+                        (push
+                         (list
+                          `(rect . ((,map-left . 0) . (,map-right . ,height)))
+                          id
+                          '(:pointer hand :help-echo "Open media"))
+                         image-map))))
+                  ;; Both maps use intrinsic pixels.  Supplying both avoids
+                  ;; decoding just to rediscover the known, unscaled geometry.
+                  (setq image-map (nreverse image-map))
+                  (when-let* ((image
+                               (svg-image
+                                svg :ascent 'center :height height :scale 1.0
+                                :map image-map :original-map (copy-tree image-map t)
+                                :appkit-media-nslices nslices
+                                :appkit-media-strip-widths
+                                (mapcar (lambda (cell) (plist-get cell :width)) geometry)
+                                :appkit-media-strip-offset offset)))
+                    ;; Snapshot caller-owned plists only on a cache miss.
+                    (puthash (copy-tree key) image cache))))))
       (error nil))))
 
 (defun appkit-media--file-size (file)

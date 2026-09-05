@@ -221,7 +221,8 @@ return numeric application-content boundaries.  Their defaults are
 
 START-FUNCTION and END-FUNCTION receive (WINDOW POSITION BOUNDARY).  POSITION
 is the actual visible edge, including mouse-wheel, scroll-bar, keyboard, and
-indirect-window scrolling.  Callbacks own proximity thresholds and all
+indirect-window scrolling and window resizing.  Callbacks own proximity
+thresholds and all
 application request gates.  At least one callback must be non-nil."
   (unless (appkit-surface-live-p surface)
     (error "Cannot observe scrolling for a dead Generated Surface"))
@@ -245,7 +246,7 @@ application request gates.  At least one callback must be non-nil."
           (lambda ()
             (appkit-scroll-observer--defer-check observer)))
          (window-scroll-function
-          (lambda (_window _display-start)
+          (lambda (_window &optional _display-start)
             (appkit-scroll-observer--defer-check observer))))
     (setf (appkit-scroll-observer-post-command-function observer)
           post-command-function
@@ -253,7 +254,8 @@ application request gates.  At least one callback must be non-nil."
           window-scroll-function)
     (with-current-buffer buffer
       (add-hook 'post-command-hook post-command-function nil t)
-      (add-hook 'window-scroll-functions window-scroll-function nil t))
+      (add-hook 'window-scroll-functions window-scroll-function nil t)
+      (add-hook 'window-size-change-functions window-scroll-function nil t))
     (setf (appkit-scroll-observer-handles observer)
           (list
            (appkit-register-handle
@@ -262,6 +264,9 @@ application request gates.  At least one callback must be non-nil."
            (appkit-register-handle
             surface 'hook
             (list 'window-scroll-functions window-scroll-function t buffer))
+           (appkit-register-handle
+            surface 'hook
+            (list 'window-size-change-functions window-scroll-function t buffer))
            (appkit-register-handle
             surface 'function
             (lambda ()

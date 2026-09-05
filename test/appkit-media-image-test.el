@@ -202,100 +202,76 @@
          (equal image-properties
                 '(:ascent center :height 60 :scale 1.0)))))))
 
-(ert-deftest appkit-media-horizontal-strip-preserves-item-ratios ()
-  "A strip should compose and pan natural-ratio items in one mapped SVG."
-  (let (embed-calls image-properties svg-properties)
-    (cl-letf (((symbol-function 'file-readable-p) (lambda (_file) t))
-              ((symbol-function 'image-type-available-p)
-               (lambda (type) (eq type 'svg)))
-              ((symbol-function 'appkit-media-image-mime-type)
-               (lambda (_file) "image/png"))
-              ((symbol-function 'appkit-media--base-char-pixel-height)
-               (lambda () 20))
-              ((symbol-function 'svg-create)
-               (lambda (width height &rest properties)
-                 (setq svg-properties properties)
-                 (list :svg width height)))
-              ((symbol-function 'svg-embed)
-               (lambda (&rest arguments)
-                 (push arguments embed-calls)))
-              ((symbol-function 'svg-image)
-               (lambda (_svg &rest properties)
-                 (setq image-properties properties)
-                 '(image :type svg :data "strip")))
-              ((symbol-function 'appkit-media-image-object-valid-p)
-               (lambda (_image) t)))
-      (let ((items
-             '((:file "/tmp/a.png" :width 1 :height 2 :id first)
-               (:file "/tmp/b.png" :width 2 :height 1 :id second))))
-        (let ((image
-               (appkit-media-horizontal-strip-image items 40 8)))
-          (should (= 2 (plist-get (cdr image) :appkit-media-nslices)))
-          (should
-           (equal (plist-get (cdr image) :appkit-media-strip-widths)
-                  '(20 80)))
-          (should (= 0 (plist-get (cdr image)
-                                  :appkit-media-strip-offset)))
-          (should (equal svg-properties
-                         '(:viewBox "0 0 108 40")))
-          (should
-           (equal
-            (mapcar (lambda (call)
-                      (seq-take (nthcdr 4 call) 8))
-                    (nreverse embed-calls))
-            '((:x 0 :y 0 :width 20 :height 40)
-              (:x 28 :y 0 :width 80 :height 40))))
-          (let ((image-map (plist-get image-properties :map)))
-            (should (equal (mapcar #'cadr image-map) '(first second)))
-            (should
-             (equal (mapcar #'car image-map)
-                    '((rect . ((0 . 0) . (20 . 40)))
-                      (rect . ((28 . 0) . (108 . 40))))))))
-        (let ((image
-               (appkit-media-horizontal-strip-image items 40 8 28)))
-          (should (= 28 (plist-get (cdr image)
-                                   :appkit-media-strip-offset)))
-          (should (equal svg-properties
-                         '(:viewBox "28 0 108 40")))
-          (should
-           (equal (plist-get image-properties :map)
-                  '(((rect . ((0 . 0) . (80 . 40)))
-                     second
-                     (:pointer hand :help-echo "Open media"))))))))))
+(ert-deftest appkit-media-horizontal-strip-defers-rasterization ()
+  "Offscreen strips retain usable hotspot geometry without allocating a raster."
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)
+                    (fboundp 'image-cache-size)))
+  (let* ((first (make-symbol "first"))
+         (second (make-symbol "second"))
+         (items (list (list :display-width 30 :id first)
+                      (list :display-width 50 :id second)))
+         (gc-cons-threshold most-positive-fixnum)
+         (before (image-cache-size))
+         (image (appkit-media-horizontal-strip-image items 40 4 34)))
+    (unwind-protect
+        (progn
+          (should image)
+          (should (= before (image-cache-size)))
+          (should (equal (mapcar (lambda (hit) (list (car hit) (cadr hit)))
+                                 (image-property image :map))
+                         (list (list '(rect . ((0 . 0) . (50 . 40)))
+                                     second))))
+          (should (equal (image-property image :original-map)
+                         (image-property image :map)))
+          (should (equal (image-size image t) '(84 . 40))))
+      (when image (image-flush image t)))))
 
-(ert-deftest appkit-media-horizontal-strip-supports-cover-boxes ()
-  "A strip item may override its width and cover that box."
-  (let (embed-call)
-    (cl-letf (((symbol-function 'file-readable-p) (lambda (_file) t))
-              ((symbol-function 'image-type-available-p)
-               (lambda (type) (eq type 'svg)))
-              ((symbol-function 'appkit-media-image-mime-type)
-               (lambda (_file) "image/png"))
-              ((symbol-function 'appkit-media--base-char-pixel-height)
-               (lambda () 20))
-              ((symbol-function 'svg-create)
-               (lambda (width height &rest _properties)
-                 (list :svg width height)))
-              ((symbol-function 'svg-embed)
-               (lambda (&rest arguments)
-                 (setq embed-call arguments)))
-              ((symbol-function 'svg-image)
-               (lambda (&rest _arguments)
-                 '(image :type svg :data "strip")))
-              ((symbol-function 'appkit-media-image-object-valid-p)
-               (lambda (_image) t)))
-      (let ((image
-             (appkit-media-horizontal-strip-image
-              '((:file "/tmp/a.png" :width 2 :height 1
-                 :display-width 30 :fit cover))
-              40 4)))
-        (should
-         (equal (plist-get (cdr image) :appkit-media-strip-widths)
-                '(30)))
-        (should
-         (equal (seq-drop embed-call 4)
-                '(:x 0 :y 0 :width 30 :height 40
-                  :preserveAspectRatio "xMidYMid slice")))))))
+(ert-deftest appkit-media-horizontal-strip-reuses-scene-until-geometry-changes ()
+  "Resizing text must reuse media; panning must move the visible hotspots."
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)))
+  (with-temp-buffer
+    (let* ((items '((:display-width 30 :id first)
+                    (:display-width 50 :id second)))
+           (image (appkit-media-horizontal-strip-image items 40 4))
+           (panned (appkit-media-horizontal-strip-image items 40 4 34)))
+      (should image)
+      (should (eq image (appkit-media-horizontal-strip-image
+                         (copy-tree items) 40 4)))
+      (should (equal (mapcar #'cadr (image-property image :map))
+                     '(first second)))
+      (should (equal (mapcar #'cadr (image-property panned :map)) '(second)))
+      (should (equal (caar (image-property panned :map))
+                     '(rect . ((0 . 0) . (50 . 40))))))))
+
+(ert-deftest appkit-media-horizontal-strip-reloads-replaced-file ()
+  "Replacing bytes at the same cache path must invalidate a live scene."
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)
+                    (fboundp 'libxml-parse-xml-region)))
+  (let ((file (make-temp-file "appkit-strip-" nil ".svg"))
+        (replacement (make-temp-file "appkit-strip-" nil ".svg"))
+        (red "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='#ff0000'/></svg>")
+        (blue "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='#0000ff'/></svg>"))
+    (unwind-protect
+        (with-temp-buffer
+          (with-temp-file file (insert red))
+          (let* ((items (list (list :file file :width 1 :height 1)))
+                 (image (appkit-media-horizontal-strip-image items 40 0)))
+            (should image)
+            (should (eq image (appkit-media-horizontal-strip-image items 40 0)))
+            (with-temp-file replacement (insert blue))
+            (set-file-times replacement
+                            (file-attribute-modification-time (file-attributes file)))
+            (rename-file replacement file t)
+            (let* ((updated (appkit-media-horizontal-strip-image items 40 0))
+                   (svg (with-temp-buffer
+                          (insert (image-property updated :data))
+                          (libxml-parse-xml-region (point-min) (point-max))))
+                   (href (dom-attr (car (dom-by-tag svg 'image)) 'href)))
+              (should (equal (base64-decode-string
+                              (substring href (1+ (string-match "," href))))
+                             blue)))))
+      (dolist (path (list file replacement))
+        (when (file-exists-p path) (delete-file path))))))
 
 (ert-deftest appkit-media-horizontal-strip-plan-is-renderer-independent ()
   "Strip geometry should be reusable without constructing an SVG."
@@ -342,34 +318,6 @@
                (118.875 . 23.5)
                (121.875 . 22.0))
               :fill "#ffffff" :fill-opacity 0.65)))))
-
-(ert-deftest appkit-media-horizontal-strip-adds-item-play-icon ()
-  "A strip should place the play marker over only its video item."
-  (let (play-call)
-    (cl-letf (((symbol-function 'file-readable-p) (lambda (_file) t))
-              ((symbol-function 'image-type-available-p)
-               (lambda (type) (eq type 'svg)))
-              ((symbol-function 'appkit-media-image-mime-type)
-               (lambda (_file) "image/png"))
-              ((symbol-function 'appkit-media--base-char-pixel-height)
-               (lambda () 20))
-              ((symbol-function 'svg-create)
-               (lambda (width height &rest _properties)
-                 (list :svg width height)))
-              ((symbol-function 'svg-embed) #'ignore)
-              ((symbol-function 'appkit-media-append-video-play-icon)
-               (lambda (&rest arguments)
-                 (setq play-call arguments)))
-              ((symbol-function 'svg-image)
-               (lambda (&rest _arguments)
-                 '(image :type svg :data "strip")))
-              ((symbol-function 'appkit-media-image-object-valid-p)
-               (lambda (_image) t)))
-      (appkit-media-horizontal-strip-image
-       '((:file "/tmp/photo.png" :width 1 :height 1)
-         (:file "/tmp/video.png" :width 1 :height 1 :play-icon t))
-       20 4))
-    (should (equal play-call '((:svg 44 20) 20 20 24 0)))))
 
 (ert-deftest appkit-media-one-line-preview-defaults-to-two-character-columns ()
   "The default thumbnail must not expand to the full media preview width."

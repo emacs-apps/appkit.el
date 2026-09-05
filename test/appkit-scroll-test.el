@@ -126,6 +126,18 @@
                    (setq callback function
                          callback-arguments arguments)
                    'hook-timer)))
+        ;; Height-only resize must report the new edge after redisplay,
+        ;; without relying on a command or a changed window-start.
+        (with-current-buffer buffer
+          (let ((window-size-change-functions
+                 (remq t window-size-change-functions)))
+            (run-hook-with-args 'window-size-change-functions window)))
+        (should-not calls)
+        (setq measurement-allowed-p t)
+        (apply callback callback-arguments)
+        (should (equal calls (list (cons (point-max) (point-max)))))
+        (setq calls nil callback nil scheduled 0 measurements 0
+              measurement-allowed-p nil)
         (funcall
          (appkit-scroll-observer-window-scroll-function observer)
          window 1)
