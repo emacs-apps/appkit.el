@@ -439,6 +439,13 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
   (video-inline-toggle-muted (appkit-media-video-inline-inline surface))
   surface)
 
+(defun appkit-media-video-inline-toggle-loop (surface)
+  "Toggle looping for Appkit video inline SURFACE without changing playback."
+  (when (appkit-media-video-inline-closed-p surface)
+    (error "Appkit inline video surface is closed"))
+  (video-inline-toggle-loop (appkit-media-video-inline-inline surface))
+  surface)
+
 (defun appkit-media-video-inline-set-muted (surface muted)
   "Set Appkit video inline SURFACE audio MUTED state."
   (when (appkit-media-video-inline-closed-p surface)
@@ -541,15 +548,30 @@ state.  DISPLAY-FUNCTION is forwarded to video.el."
     (surface &optional client-label
              &key owner buffer display-function)
   "Present inline SURFACE in a dedicated buffer without changing playback.
-
+Reuse its last presentation while that buffer still shows the same player,
+unless BUFFER is supplied.  Prepare the inline target without starting it so
+both presentations can display subsequent playback.
 CLIENT-LABEL, OWNER, BUFFER, and DISPLAY-FUNCTION have the same meanings as in
 `appkit-media-present-video-session'."
   (when (appkit-media-video-inline-closed-p surface)
     (error "Cannot present a closed Appkit inline video surface"))
-  (appkit-media-present-video-session
-   (appkit-media-video-inline-session surface) client-label
-   :owner owner :buffer buffer :start nil
-   :display-function display-function))
+  (let* ((inline (appkit-media-video-inline-inline surface))
+         (session (appkit-media-video-inline-session surface))
+         (previous (video-inline-presentation-buffer inline)))
+    (video-inline-prepare inline)
+    (setq buffer
+          (appkit-media-present-video-session
+           session client-label :owner owner
+           :buffer (or buffer
+                       (and (buffer-live-p previous)
+                            (eq (buffer-local-value 'video--buffer-player previous)
+                                (appkit-media-video-session-player session))
+                            (eq (buffer-local-value 'video--buffer-session previous)
+                                (appkit-media-video-session-video-session session))
+                            previous))
+           :start nil :display-function display-function))
+    (setf (video-inline-presentation-buffer inline) buffer)
+    buffer))
 
 (cl-defun appkit-media-video-session-create
     (resource &optional client-label
