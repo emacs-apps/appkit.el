@@ -194,7 +194,7 @@
         ;; Companion rendering still consumes one pass-scoped App read view.
         (appkit-surface--app-read-view surface)
         (if-let* ((request
-                   (appkit-resource-consume-surface-delivery surface message)))
+                    (appkit-resource-consume-surface-delivery surface message)))
             (progn
               (appkit-surface--merge-render surface request)
               (appkit-loop-companion-accept))

@@ -490,6 +490,7 @@
        (equal (mapcar #'cadr
                       (appkit-effect-test--harness-messages harness))
               (number-sequence 0 31))))))
+
 (provide 'appkit-effect-test)
 
 ;;; appkit-effect-test.el ends here

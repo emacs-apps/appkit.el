@@ -386,10 +386,10 @@
             (should
              (member '(outbound third stale)
                      (plist-get (appkit-app-model app) :events))))
-            (appkit-app-send app '(send live invalid))
-            (should (funcall resolve 'invalid-outcome))
-            (should (= 1 (appkit-loop-run-pass (appkit-app-loop app))))
-            (should (eq (appkit-app-status app) 'faulted))
+        (appkit-app-send app '(send live invalid))
+        (should (funcall resolve 'invalid-outcome))
+        (should (= 1 (appkit-loop-run-pass (appkit-app-loop app))))
+        (should (eq (appkit-app-status app) 'faulted))
         (when (and app (not (eq (appkit-app-status app) 'stopped)))
           (appkit-app-close app))))))
 

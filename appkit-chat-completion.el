@@ -45,7 +45,6 @@ SEARCH-TERMS contains alternate strings matched by the shared table.  VALUE
 carries the opaque application object used by an insertion callback."
   label insert prefix annotation search-terms value group)
 
-
 (defvar-local appkit-chat-completion-functions nil
   "Ordered functions tried by `appkit-chat-completion-complete'.
 
@@ -242,26 +241,26 @@ the table metadata and exact label lookup."
                (appkit-chat-completion--candidate-label (car matches)))
               (t string))))))
     ('lambda
-     (and (stringp string)
-          (let* ((plain (substring-no-properties string))
-                 (folded-plain
-                  (and appkit-chat-completion-ignore-case
-                       (downcase plain)))
-                 (candidate
-                  (if appkit-chat-completion-ignore-case
-                      (seq-find
-                       (lambda (item)
-                         (string-equal
-                          folded-plain
-                          (downcase
-                           (appkit-chat-completion--candidate-label item))))
-                       candidates)
-                    (gethash plain candidate-map))))
-            (and candidate
-                 (or (null pred)
-                     (funcall pred
-                              (appkit-chat-completion--candidate-label candidate)))
-                 t))))
+      (and (stringp string)
+           (let* ((plain (substring-no-properties string))
+                  (folded-plain
+                   (and appkit-chat-completion-ignore-case
+                        (downcase plain)))
+                  (candidate
+                   (if appkit-chat-completion-ignore-case
+                       (seq-find
+                        (lambda (item)
+                          (string-equal
+                           folded-plain
+                           (downcase
+                            (appkit-chat-completion--candidate-label item))))
+                        candidates)
+                     (gethash plain candidate-map))))
+             (and candidate
+                  (or (null pred)
+                      (funcall pred
+                               (appkit-chat-completion--candidate-label candidate)))
+                  t))))
     (`(boundaries . ,_) nil)
     (_
      (let ((completion-ignore-case appkit-chat-completion-ignore-case))

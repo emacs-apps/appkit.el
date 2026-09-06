@@ -366,8 +366,8 @@
           (and setext-p
                (appkit-markup-markdown-ts--child node "paragraph")))
          (inline
-          (appkit-markup-markdown-ts--child
-           (or paragraph node) "inline"))
+           (appkit-markup-markdown-ts--child
+            (or paragraph node) "inline"))
          (level
           (and marker
                (string-to-number

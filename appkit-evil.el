@@ -83,7 +83,6 @@ When nil, leave Evil's initial-state selection untouched."
   (unless appkit-evil--deferred-bindings
     (remove-hook 'after-load-functions #'appkit-evil--after-load)))
 
-
 (defun appkit-evil--normalize-bindings (bindings)
   "Return BINDINGS with string key descriptions parsed by `kbd'."
   (let (normalized)
@@ -160,15 +159,15 @@ For example:
             bindings)
         (cl-labels
             ((flush
-              ()
-              (when bindings
-                (unless (and keymap states)
-                  (error "Appkit Evil bindings require :map and a state keyword"))
-                (push
-                 `(appkit-evil-define-keys
-                      ',states ',keymap ,@(nreverse bindings))
-                 forms)
-                (setq bindings nil))))
+               ()
+               (when bindings
+                 (unless (and keymap states)
+                   (error "Appkit Evil bindings require :map and a state keyword"))
+                 (push
+                  `(appkit-evil-define-keys
+                       ',states ',keymap ,@(nreverse bindings))
+                  forms)
+                 (setq bindings nil))))
           (while cursor
             (let ((item (pop cursor)))
               (cond
@@ -187,7 +186,6 @@ For example:
                 (push (pop cursor) bindings)))))
           (flush))))
     `(progn ,@(nreverse forms))))
-
 
 (defun appkit-evil-normalize-keymaps ()
   "Refresh Evil's active keymaps in the current buffer when Evil is active."

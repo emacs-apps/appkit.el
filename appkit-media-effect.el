@@ -147,18 +147,18 @@ settlement."
   (let (session viewer finished-p)
     (cl-labels
         ((close-presentation
-          ()
-          (unless finished-p
-            (setq finished-p t)
-            (when (buffer-live-p viewer)
-              (kill-buffer viewer))
-            (when (appkit-media-video-session-live-p session)
-              (appkit-media-video-session-close session))))
+           ()
+           (unless finished-p
+             (setq finished-p t)
+             (when (buffer-live-p viewer)
+               (kill-buffer viewer))
+             (when (appkit-media-video-session-live-p session)
+               (appkit-media-video-session-close session))))
          (viewer-closed
-          ()
-          (unless finished-p
-            (setq finished-p t)
-            (funcall resolve 'closed))))
+           ()
+           (unless finished-p
+             (setq finished-p t)
+             (funcall resolve 'closed))))
       (condition-case condition
           (progn
             (setq session

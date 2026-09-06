@@ -229,20 +229,20 @@ When LINK-LABEL-P is non-nil, accept styled text nodes only."
              (when (and link-label-p
                         (not (appkit-markup-text-p normalized)))
                (appkit-markup--invalid 'invalid-link-label path))
-            (if (and previous
-                     (appkit-markup-text-p previous)
-                     (appkit-markup-text-p normalized)
-                     (equal (appkit-markup-text-styles previous)
-                            (appkit-markup-text-styles normalized)))
-                (let ((merged
-                       (appkit-markup--text-create
-                        :text (concat (appkit-markup-text-text previous)
-                                      (appkit-markup-text-text normalized))
-                        :styles (appkit-markup-text-styles previous))))
-                  (setcar result merged)
-                  (setq previous merged))
-              (push normalized result)
-              (setq previous normalized)))
+             (if (and previous
+                      (appkit-markup-text-p previous)
+                      (appkit-markup-text-p normalized)
+                      (equal (appkit-markup-text-styles previous)
+                             (appkit-markup-text-styles normalized)))
+                 (let ((merged
+                        (appkit-markup--text-create
+                         :text (concat (appkit-markup-text-text previous)
+                                       (appkit-markup-text-text normalized))
+                         :styles (appkit-markup-text-styles previous))))
+                   (setcar result merged)
+                   (setq previous merged))
+               (push normalized result)
+               (setq previous normalized)))
     (nreverse result)))
 
 (defun appkit-markup--normalize-inline (node active path)

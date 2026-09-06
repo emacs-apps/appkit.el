@@ -51,7 +51,6 @@
     (signal 'wrong-type-argument (list 'appkit-task-queue-p queue)))
   queue)
 
-
 (defun appkit-task-queue-live-p (queue)
   "Return non-nil when QUEUE and its lifecycle owner are live."
   (and (appkit-task-queue-p queue)

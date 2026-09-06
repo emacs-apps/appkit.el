@@ -345,7 +345,7 @@
                         :input nil
                         :start
                         (lambda (_context _input _observe
-                                 resolve-gate _reject)
+                                          resolve-gate _reject)
                           (setq resolve resolve-gate)
                           (appkit-cancellation-create :kind 'logical))
                         :success (lambda (&rest _) 'late)

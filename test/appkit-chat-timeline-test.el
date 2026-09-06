@@ -296,9 +296,9 @@
        (list (appkit-chat-timeline-test--row 'a "A")))
       (let* ((visible-p t)
              (binder
-             (lambda ()
-               (appkit-chatbuf-bind-input-region
-                :visible-p visible-p :prompt ">>> " :input-text "draft"))))
+              (lambda ()
+                (appkit-chatbuf-bind-input-region
+                 :visible-p visible-p :prompt ">>> " :input-text "draft"))))
         (appkit-chat-timeline-set-frame
          "" "" :bind-input-function binder :composer-visible-p t)
         (setq visible-p nil)

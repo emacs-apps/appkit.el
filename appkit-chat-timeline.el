@@ -318,11 +318,11 @@ old semantic row keys to new keys."
   ;; and editable input after the footer, so refreshing the sentinels
   ;; separately is the only operation with the right ownership boundary.
   (ewoc--set-buffer-bind-dll-let* ewoc
-      ((node (ewoc--header ewoc))
-       (printer (ewoc--hf-pp ewoc)))
-    (unless (equal (ewoc--node-data node) header)
-      (setf (ewoc--node-data node) header)
-      (ewoc--refresh-node printer node dll))))
+                                  ((node (ewoc--header ewoc))
+                                   (printer (ewoc--hf-pp ewoc)))
+                                  (unless (equal (ewoc--node-data node) header)
+                                    (setf (ewoc--node-data node) header)
+                                    (ewoc--refresh-node printer node dll))))
 
 (defun appkit-chat-timeline--set-footer (ewoc footer)
   "Set EWOC FOOTER without touching its trailing composer."
@@ -340,11 +340,11 @@ old semantic row keys to new keys."
           (when prompt-live-p
             (set-marker-insertion-type prompt-marker t))
           (ewoc--set-buffer-bind-dll-let* ewoc
-              ((node (ewoc--footer ewoc))
-               (printer (ewoc--hf-pp ewoc)))
-            (unless (equal (ewoc--node-data node) footer)
-              (setf (ewoc--node-data node) footer)
-              (ewoc--refresh-node printer node dll))))
+                                          ((node (ewoc--footer ewoc))
+                                           (printer (ewoc--hf-pp ewoc)))
+                                          (unless (equal (ewoc--node-data node) footer)
+                                            (setf (ewoc--node-data node) footer)
+                                            (ewoc--refresh-node printer node dll))))
       (when prompt-live-p
         (set-marker-insertion-type prompt-marker old-insertion-type)))))
 
@@ -385,7 +385,6 @@ COMPOSER-VISIBLE-P gives stable input visibility semantics."
        (appkit-chat-timeline--set-footer ewoc footer)
        (when bind-composer-p
          (funcall bind-input-function))))))
-
 
 (cl-defun appkit-chat-timeline-sync
     (rows &key force-keys changed-resources rekeys)

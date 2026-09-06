@@ -294,7 +294,6 @@ RING-SIZE overrides `appkit-chatbuf-input-ring-size' when non-nil."
   (setq-local appkit-chatbuf--input-options-plist nil)
   (setq-local appkit-chatbuf--rendering nil))
 
-
 (defun appkit-chatbuf-set-soft-wrap (enabled)
   "Set renderer-compatible soft wrapping according to ENABLED.
 

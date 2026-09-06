@@ -62,17 +62,17 @@ right-aligned line."
                (propertize
                 " " 'display
                 `(space :align-to
-                        (- right
-                           (,(+ tail-width
-                                (max 0 right-edge-margin))
-                            . width)))))
+                  (- right
+                     (,(+ tail-width
+                          (max 0 right-edge-margin))
+                      . width)))))
             (appkit-geometry-insert-alignment-space target-column)))
       (insert " "))
     (insert rendered)
     (cons start (point))))
 
 (defun appkit-chat-ins-insert-full-width-divider (label face target-width
-                                                  &optional properties)
+                                                        &optional properties)
   "Insert a centered divider for LABEL spanning TARGET-WIDTH columns.
 
 FACE is applied to the entire inserted span.  PROPERTIES is an optional plist
@@ -107,7 +107,6 @@ Return the inserted span as (START . END)."
            '(read-only t
              front-sticky (read-only)
              rear-nonsticky (read-only)))))
-
 
 (cl-defun appkit-chat-ins-insert-reaction-line
     (reactions &key prefix selected-face unselected-face line-face
@@ -156,8 +155,6 @@ empty."
         (add-face-text-property line-start (point) line-face nil))
       (cons line-start (point)))))
 
-
-
 (defun appkit-chat-ins-media-prefix-state (prefix border-face)
   "Return effective attachment prefix state from PREFIX and BORDER-FACE."
   (cond
@@ -166,7 +163,7 @@ empty."
    (t (appkit-ui-card-prefix-state :face border-face))))
 
 (cl-defun appkit-chat-ins-insert-prefixed-line (text &key prefix face properties
-                                                action help-echo)
+                                                     action help-echo)
   "Insert TEXT as one prefixed line and return its span.
 
 PREFIX controls the display prefix.  FACE and PROPERTIES style the line.

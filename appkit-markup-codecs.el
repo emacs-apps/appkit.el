@@ -123,58 +123,58 @@
         result)
     (cl-labels
         ((emit
-          (text)
-          (unless (string-empty-p text)
-            (push text result)))
+           (text)
+           (unless (string-empty-p text)
+             (push text result)))
          (desired-styles
-          (node)
-          (let ((text (appkit-markup-text-text node))
-                desired)
-            (dolist (style (appkit-markup-text-styles node))
-              (if-let* ((delimiter
-                         (appkit-markup-codecs--style-delimiter kind style)))
-                  (if (and (eq style 'code)
-                           (string-match-p (regexp-quote delimiter) text))
-                      (push (appkit-markup-loss style path) (car losses))
-                    (push style desired))
-                (push (appkit-markup-loss style path) (car losses))))
-            (nreverse desired)))
+           (node)
+           (let ((text (appkit-markup-text-text node))
+                 desired)
+             (dolist (style (appkit-markup-text-styles node))
+               (if-let* ((delimiter
+                          (appkit-markup-codecs--style-delimiter kind style)))
+                   (if (and (eq style 'code)
+                            (string-match-p (regexp-quote delimiter) text))
+                       (push (appkit-markup-loss style path) (car losses))
+                     (push style desired))
+                 (push (appkit-markup-loss style path) (car losses))))
+             (nreverse desired)))
          (transition
-          (desired)
-          (let ((common 0)
-                (left active)
-                (right desired))
-            (while (and left right (eq (car left) (car right)))
-              (cl-incf common)
-              (setq left (cdr left)
-                    right (cdr right)))
-            (dolist (style (reverse (nthcdr common active)))
-              (emit (appkit-markup-codecs--style-delimiter kind style)))
-            (dolist (style (nthcdr common desired))
-              (emit (appkit-markup-codecs--style-delimiter kind style)))
-            (setq active desired)))
+           (desired)
+           (let ((common 0)
+                 (left active)
+                 (right desired))
+             (while (and left right (eq (car left) (car right)))
+               (cl-incf common)
+               (setq left (cdr left)
+                     right (cdr right)))
+             (dolist (style (reverse (nthcdr common active)))
+               (emit (appkit-markup-codecs--style-delimiter kind style)))
+             (dolist (style (nthcdr common desired))
+               (emit (appkit-markup-codecs--style-delimiter kind style)))
+             (setq active desired)))
          (encode-special
-          (node)
-          (cond
-           ((appkit-markup-link-p node)
-            (let ((label
-                   (appkit-markup-codecs--print-inlines
-                    (appkit-markup-link-children node) kind
-                    (append path '(label)) losses))
-                  (url (appkit-markup-link-url node)))
-              (if (eq kind 'org)
-                  (format "[[%s][%s]]"
-                          (appkit-markup-codecs--escape-matches url "[]\\]")
-                          label)
-                (format "[%s](%s)" label
-                        (appkit-markup-codecs--markdown-escape-url url)))))
-           ((appkit-markup-object-p node)
-            (push (appkit-markup-loss 'object path) (car losses))
-            (appkit-markup-codecs--print-inlines
-             (appkit-markup-object-fallback node) kind
-             (append path '(fallback)) losses))
-           ((appkit-markup-line-break-p node) "\n")
-           (t ""))))
+           (node)
+           (cond
+            ((appkit-markup-link-p node)
+             (let ((label
+                    (appkit-markup-codecs--print-inlines
+                     (appkit-markup-link-children node) kind
+                     (append path '(label)) losses))
+                   (url (appkit-markup-link-url node)))
+               (if (eq kind 'org)
+                   (format "[[%s][%s]]"
+                           (appkit-markup-codecs--escape-matches url "[]\\]")
+                           label)
+                 (format "[%s](%s)" label
+                         (appkit-markup-codecs--markdown-escape-url url)))))
+            ((appkit-markup-object-p node)
+             (push (appkit-markup-loss 'object path) (car losses))
+             (appkit-markup-codecs--print-inlines
+              (appkit-markup-object-fallback node) kind
+              (append path '(fallback)) losses))
+            ((appkit-markup-line-break-p node) "\n")
+            (t ""))))
       (dolist (node children)
         (if (appkit-markup-text-p node)
             (let* ((desired (desired-styles node))
@@ -301,46 +301,46 @@
   (let (losses)
     (cl-labels
         ((inlines
-          (nodes path)
-          (cl-loop for node in nodes for index from 0
-                   for here = (append path (list index)) do
-                   (cond
-                    ((appkit-markup-text-p node)
-                     (dolist (style (appkit-markup-text-styles node))
-                       (push (appkit-markup-loss style here) losses)))
-                    ((appkit-markup-link-p node)
-                     (push (appkit-markup-loss 'link here) losses)
-                     (inlines (appkit-markup-link-children node)
-                              (append here '(label))))
-                    ((appkit-markup-object-p node)
-                     (push (appkit-markup-loss 'object here) losses)
-                     (inlines (appkit-markup-object-fallback node)
-                              (append here '(fallback)))))))
+           (nodes path)
+           (cl-loop for node in nodes for index from 0
+                    for here = (append path (list index)) do
+                    (cond
+                     ((appkit-markup-text-p node)
+                      (dolist (style (appkit-markup-text-styles node))
+                        (push (appkit-markup-loss style here) losses)))
+                     ((appkit-markup-link-p node)
+                      (push (appkit-markup-loss 'link here) losses)
+                      (inlines (appkit-markup-link-children node)
+                               (append here '(label))))
+                     ((appkit-markup-object-p node)
+                      (push (appkit-markup-loss 'object here) losses)
+                      (inlines (appkit-markup-object-fallback node)
+                               (append here '(fallback)))))))
          (blocks
-          (nodes path)
-          (when (cdr nodes)
-            (push (appkit-markup-loss 'block-boundary path) losses))
-          (cl-loop for node in nodes for index from 0
-                   for here = (append path (list index)) do
-                   (cond
-                    ((appkit-markup-paragraph-p node)
-                     (inlines (appkit-markup-paragraph-children node)
-                              (append here '(children))))
-                    ((appkit-markup-heading-p node)
-                     (push (appkit-markup-loss 'heading here) losses)
-                     (inlines (appkit-markup-heading-children node)
-                              (append here '(children))))
-                    ((appkit-markup-quote-p node)
-                     (push (appkit-markup-loss 'quote here) losses)
-                     (blocks (appkit-markup-quote-blocks node)
-                             (append here '(blocks))))
-                    ((appkit-markup-list-p node)
+           (nodes path)
+           (when (cdr nodes)
+             (push (appkit-markup-loss 'block-boundary path) losses))
+           (cl-loop for node in nodes for index from 0
+                    for here = (append path (list index)) do
+                    (cond
+                     ((appkit-markup-paragraph-p node)
+                      (inlines (appkit-markup-paragraph-children node)
+                               (append here '(children))))
+                     ((appkit-markup-heading-p node)
+                      (push (appkit-markup-loss 'heading here) losses)
+                      (inlines (appkit-markup-heading-children node)
+                               (append here '(children))))
+                     ((appkit-markup-quote-p node)
+                      (push (appkit-markup-loss 'quote here) losses)
+                      (blocks (appkit-markup-quote-blocks node)
+                              (append here '(blocks))))
+                     ((appkit-markup-list-p node)
 
-                     (push (appkit-markup-loss 'list here) losses))
-                    ((appkit-markup-preformatted-p node)
-                     (push (appkit-markup-loss 'preformatted here) losses))
-                    ((appkit-markup-object-block-p node)
-                     (push (appkit-markup-loss 'object-block here) losses))))))
+                      (push (appkit-markup-loss 'list here) losses))
+                     ((appkit-markup-preformatted-p node)
+                      (push (appkit-markup-loss 'preformatted here) losses))
+                     ((appkit-markup-object-block-p node)
+                      (push (appkit-markup-loss 'object-block here) losses))))))
       (blocks (appkit-markup-document-blocks document) '(blocks)))
     (nreverse losses)))
 
@@ -399,10 +399,10 @@
                        (other other))))
           (dolist
               (inline
-               (appkit-markup-codecs--add-style
-                (appkit-markup-codecs--org-inlines
-                 (org-element-contents node))
-                style))
+                (appkit-markup-codecs--add-style
+                 (appkit-markup-codecs--org-inlines
+                  (org-element-contents node))
+                 style))
             (push inline result))))
        ((memq (org-element-type node) '(code verbatim))
         (push (appkit-markup-text
@@ -437,6 +437,7 @@
         (push (appkit-markup-text
                (make-string (org-element-property :post-blank node) ?\s))
               result)))))
+
 (defun appkit-markup-codecs--org-paragraph (node)
   "Convert Org paragraph NODE."
   (let ((children
@@ -546,6 +547,7 @@
            document
            :diagnostics
            (nreverse appkit-markup-codecs--org-diagnostics)))))))
+
 (defun appkit-markup-codecs--org-parse (source _context)
   "Parse Org SOURCE with hook-free built-in Org Element semantics."
   (appkit-markup-codecs--org-element-parse source))

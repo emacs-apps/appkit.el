@@ -30,9 +30,12 @@
   "Replace lifecycle HANDLES registered under OWNER.")
 
 (cl-defmethod appkit-owner-live-p ((_owner t)) nil)
+
 (cl-defmethod appkit-owner-app ((_owner t)) nil)
+
 (cl-defmethod appkit-owner-handles ((owner t))
   (error "Invalid Appkit lifecycle owner: %S" owner))
+
 (cl-defmethod appkit-owner-set-handles ((owner t) _handles)
   (error "Invalid Appkit lifecycle owner: %S" owner))
 

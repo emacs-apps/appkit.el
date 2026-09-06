@@ -225,7 +225,7 @@
         (should (= 1
                    (save-excursion
                      (goto-char (window-start))
-                       (current-column))))))))
+                     (current-column))))))))
 
 (ert-deftest appkit-position-restores-point-and-window-point-after-final-row ()
   (save-window-excursion

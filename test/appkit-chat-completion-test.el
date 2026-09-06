@@ -108,12 +108,12 @@
 
 (ert-deftest appkit-chat-completion-decorations-are-lazy ()
   (let* ((calls 0)
-        (candidate
-         (appkit-chat-completion-candidate-create
-          :label "@user"
-          :annotation (lambda (_candidate)
-                        (cl-incf calls)
-                        " details"))))
+         (candidate
+          (appkit-chat-completion-candidate-create
+           :label "@user"
+           :annotation (lambda (_candidate)
+                         (cl-incf calls)
+                         " details"))))
     (let ((map (appkit-chat-completion--candidate-map (list candidate))))
       (should (= calls 0))
       (should (equal '(("@user" "" " details"))
@@ -234,7 +234,7 @@
          seen-prefix)
     (cl-letf (((symbol-function 'completing-read)
                (lambda (_prompt table _predicate _require _initial _history
-                        default)
+                                default)
                  (setq seen-default default)
                  (let* ((metadata (completion-metadata "" table nil))
                         (group-function

@@ -321,7 +321,7 @@ context delimiters, defaulting to two columns."
           (max 8
                (min max-context-inner
                     (appkit-presentation-canonicalize-number context-width-spec
-                                                     content-width))))
+                                                             content-width))))
          (preview-width
           (max 0 (- content-width context-inner-width fixed-width))))
     (list :context-inner-width context-inner-width

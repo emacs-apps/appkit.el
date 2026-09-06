@@ -66,7 +66,6 @@
         (should (= 9 (appkit-compose-generation)))
         (should-not (appkit-compose-operation-current-p owner))))))
 
-
 (provide 'appkit-compose-test)
 
 ;;; appkit-compose-test.el ends here

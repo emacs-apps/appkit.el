@@ -107,7 +107,6 @@
       (should-not (appkit-chat-history-loading-p))
       (should-not (appkit-chat-history-request-owner)))))
 
-
 (ert-deftest appkit-chat-history-operation-owns-replacement-transport ()
   (appkit-test-with-surface
     (let ((surface (appkit-current-surface))

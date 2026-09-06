@@ -163,18 +163,18 @@
                 :process :process
                 :target-file target)
                appkit-media--video-preview-processes)
-    (cl-letf (((symbol-function 'processp)
-               (lambda (process) (eq process :process)))
-              ((symbol-function 'process-live-p)
-               (lambda (_process) t))
-              ((symbol-function 'delete-process)
-               (lambda (process)
-                 (setq deleted process)
-                 (should-not
-                  (gethash '(qq . "preview")
-                           appkit-media--video-preview-processes))))
-              ((symbol-function 'process-buffer)
-               (lambda (_process) buffer)))
+      (cl-letf (((symbol-function 'processp)
+                 (lambda (process) (eq process :process)))
+                ((symbol-function 'process-live-p)
+                 (lambda (_process) t))
+                ((symbol-function 'delete-process)
+                 (lambda (process)
+                   (setq deleted process)
+                   (should-not
+                    (gethash '(qq . "preview")
+                             appkit-media--video-preview-processes))))
+                ((symbol-function 'process-buffer)
+                 (lambda (_process) buffer)))
         (should
          (appkit-media-cancel-video-preview '(qq . "preview")))
         (should (eq :process deleted))
@@ -277,8 +277,8 @@
 
 (ert-deftest appkit-media-animated-video-preview-display-is-passthrough ()
   (let ((image '(image :type gif
-                       :appkit-media-inline-animation t
-                       :appkit-media-inline-animation-duration 2.5)))
+                 :appkit-media-inline-animation t
+                 :appkit-media-inline-animation-duration 2.5)))
     (cl-letf (((symbol-function 'appkit-media-image-object-valid-p)
                (lambda (&rest _)
                  (ert-fail
@@ -289,7 +289,6 @@
                   "animated previews must not probe SVG support"))))
       (should (eq image
                   (appkit-media-video-preview-display-image image))))))
-
 
 (ert-deftest appkit-media-video-preview-rejects-unsafe-input-protocols ()
   (let ((appkit-media--video-preview-processes
@@ -323,6 +322,7 @@
         (should-not
          (gethash '(test . unsafe)
                   appkit-media--video-preview-processes))))))
+
 (provide 'appkit-media-video-test)
 
 ;;; appkit-media-video-test.el ends here

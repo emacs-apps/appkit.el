@@ -248,7 +248,6 @@ automatic retry at that same edge; moving the window edge clears it."
             (appkit-chat-history--state-owner state) operation)
       operation)))
 
-
 (defun appkit-chat-history-request-bind-handle (owner handle)
   "Bind transport HANDLE to current history OWNER."
   (when (appkit-handle-p handle)

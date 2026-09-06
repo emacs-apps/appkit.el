@@ -587,41 +587,41 @@
 
 (ert-deftest appkit-media-video-streams-and-reuses-complete-playback-cache ()
   (ert-with-temp-directory directory
-    (let (sessions opened-sources cache-files cache-callbacks closed-players updated)
-      (cl-letf (((symbol-function 'video-session-create)
-                 (lambda (source &rest arguments)
-                   (push source opened-sources)
-                   (push (plist-get arguments :cache-file) cache-files)
-                   (push (plist-get arguments :cache-complete-function) cache-callbacks)
-                   (list 'session source)))
-                ((symbol-function 'video-session-live-p)
-                 (lambda (session) (and session (not (memq session closed-players)))))
-                ((symbol-function 'video-session-close)
-                 (lambda (session) (push session closed-players)))
-                ((symbol-function 'appkit-media-copy-or-download-resource-async)
-                 (lambda (&rest _) (ert-fail "Playback must not start an explicit download"))))
-        (unwind-protect
-            (progn
-              (push (appkit-media-video-session-create
-                     (appkit-media-resource-create :url "https://example.invalid/movie.mp4")
-                     "test-client" :cache-key "stable-movie" :cache-directory directory
-                     :cache-update-function (lambda (resource) (setq updated resource)))
-                    sessions)
-              (let ((target (car cache-files)) (complete (car cache-callbacks)))
-                (should (equal (car opened-sources) "https://example.invalid/movie.mp4"))
-                (make-directory (file-name-directory target) t)
-                (with-temp-file target (insert "complete video"))
-                (funcall complete 'player target)
-                (should (equal target (alist-get 'file updated)))
-                (appkit-media-video-session-close (car sessions))
-                (push (appkit-media-video-session-create
-                       (appkit-media-resource-create :url "https://example.invalid/rotated.mp4")
-                       "test-client" :cache-key "stable-movie" :cache-directory directory)
-                      sessions)
-                (should (equal (car opened-sources) target))
-                (should-not (car cache-files))
-                (should-not (car cache-callbacks))))
-          (mapc #'appkit-media-video-session-close sessions))))))
+                           (let (sessions opened-sources cache-files cache-callbacks closed-players updated)
+                             (cl-letf (((symbol-function 'video-session-create)
+                                        (lambda (source &rest arguments)
+                                          (push source opened-sources)
+                                          (push (plist-get arguments :cache-file) cache-files)
+                                          (push (plist-get arguments :cache-complete-function) cache-callbacks)
+                                          (list 'session source)))
+                                       ((symbol-function 'video-session-live-p)
+                                        (lambda (session) (and session (not (memq session closed-players)))))
+                                       ((symbol-function 'video-session-close)
+                                        (lambda (session) (push session closed-players)))
+                                       ((symbol-function 'appkit-media-copy-or-download-resource-async)
+                                        (lambda (&rest _) (ert-fail "Playback must not start an explicit download"))))
+                               (unwind-protect
+                                   (progn
+                                     (push (appkit-media-video-session-create
+                                            (appkit-media-resource-create :url "https://example.invalid/movie.mp4")
+                                            "test-client" :cache-key "stable-movie" :cache-directory directory
+                                            :cache-update-function (lambda (resource) (setq updated resource)))
+                                           sessions)
+                                     (let ((target (car cache-files)) (complete (car cache-callbacks)))
+                                       (should (equal (car opened-sources) "https://example.invalid/movie.mp4"))
+                                       (make-directory (file-name-directory target) t)
+                                       (with-temp-file target (insert "complete video"))
+                                       (funcall complete 'player target)
+                                       (should (equal target (alist-get 'file updated)))
+                                       (appkit-media-video-session-close (car sessions))
+                                       (push (appkit-media-video-session-create
+                                              (appkit-media-resource-create :url "https://example.invalid/rotated.mp4")
+                                              "test-client" :cache-key "stable-movie" :cache-directory directory)
+                                             sessions)
+                                       (should (equal (car opened-sources) target))
+                                       (should-not (car cache-files))
+                                       (should-not (car cache-callbacks))))
+                                 (mapc #'appkit-media-video-session-close sessions))))))
 
 (ert-deftest appkit-media-video-cache-policy-none-streams-without-destination ()
   (let (opened-source cache-file cache-complete closed)
@@ -755,9 +755,7 @@
                               (should (buffer-live-p viewer))
 
                               (appkit-app-close app)
-                              (should-not (buffer-live-p viewer))
-
-                              )
+                              (should-not (buffer-live-p viewer)))
                           (when (appkit-app-live-p app)
                             (appkit-app-close app))
                           (when (buffer-live-p viewer)
@@ -868,8 +866,7 @@
                                  (equal (error-message-string condition)
                                         "video constructor failed")))
                               (should closed)
-                              (should-not (buffer-live-p viewer))
-                              )
+                              (should-not (buffer-live-p viewer)))
                           (when (appkit-app-live-p app)
                             (appkit-app-close app))))))
 
@@ -900,8 +897,7 @@
                                       source "test" :owner app)
                                      :returned)))
                               (should closed)
-                              (should-not (buffer-live-p viewer))
-                              )
+                              (should-not (buffer-live-p viewer)))
                           (when (appkit-app-live-p app)
                             (appkit-app-close app))))))
 
@@ -929,8 +925,7 @@
                            (appkit-media-play-video-file
                             source "test" :owner app))
                           (should closed)
-                          (should-not (buffer-live-p viewer))
-                          ))))
+                          (should-not (buffer-live-p viewer))))))
 
 (ert-deftest appkit-media-video-dead-owner-never-opens ()
   (ert-with-temp-file source :suffix ".mp4"

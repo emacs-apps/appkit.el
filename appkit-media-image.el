@@ -872,7 +872,6 @@ return the source image height instead of a character height."
        (ceiling (/ (float (max 1 pixels))
                    (float (appkit-media--char-pixel-height))))))
 
-
 (defun appkit-media-ch-height-spec (characters)
   "Return the `(HEIGHT . ch)' spec for CHARACTERS text lines."
   (cons (max 1 characters) 'ch))

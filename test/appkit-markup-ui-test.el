@@ -57,12 +57,12 @@
         (search-forward "quote")
         (should (string-match-p
                  "│" (format "%s" (get-text-property
-                                     (1- (point)) 'line-prefix))))
+                                   (1- (point)) 'line-prefix))))
         (goto-char (point-min))
         (search-forward "item")
         (should (string-match-p
                  "•" (format "%s" (get-text-property
-                                     (1- (point)) 'line-prefix))))))))
+                                   (1- (point)) 'line-prefix))))))))
 
 (ert-deftest appkit-markup-ui-preview-never-calls-client-callbacks ()
   (with-temp-buffer

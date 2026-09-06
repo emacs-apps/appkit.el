@@ -48,7 +48,6 @@
 (defvar appkit-compose--tracking-inhibited nil
   "Dynamically non-nil while generated edits must not advance a generation.")
 
-
 (defmacro appkit-compose-without-tracking (&rest body)
   "Run BODY without treating its buffer edits as semantic source changes."
   (declare (indent 0) (debug t))
@@ -364,8 +363,8 @@ or duplicate callbacks are inert."
             (appkit-compose--operation-cancellation appkit-compose--session) nil
             (appkit-compose--operation-cancel-requested-p
              appkit-compose--session) nil
-            (appkit-compose--label appkit-compose--session) nil
-            (appkit-compose--progress appkit-compose--session) nil)
+             (appkit-compose--label appkit-compose--session) nil
+             (appkit-compose--progress appkit-compose--session) nil)
       (appkit-compose--cancel-object cancellation))))
 
 (cl-defun appkit-compose-reset (&key (generation 0))

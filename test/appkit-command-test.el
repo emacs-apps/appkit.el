@@ -63,7 +63,6 @@
     :result-mapper (lambda (&rest _arguments)))
    :type 'error))
 
-
 (ert-deftest appkit-command-enforces-folded-key-boundary ()
   (let ((batch (appkit-command--batch-create 1)))
     (appkit-command--batch-add
@@ -84,7 +83,6 @@
          (batch (appkit-command--batch-create 1)))
     (setcdr commands commands)
     (should-error (appkit-command--batch-add batch commands 1) :type 'error)))
-
 
 (ert-deftest appkit-command-default-capacities-have-hard-boundaries ()
   (let* ((command (appkit-command-cancel-effect 'same))

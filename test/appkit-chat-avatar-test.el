@@ -98,7 +98,6 @@
                (appkit-chat-avatar-image-char-width
                 '(image :type png :data "avatar"))))))
 
-
 (ert-deftest appkit-chat-avatar-resize-normalizes-both-axes ()
   (cl-letf (((symbol-function 'appkit-media-image-object-valid-p)
              (lambda (_image) t)))

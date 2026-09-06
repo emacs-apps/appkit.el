@@ -455,7 +455,6 @@
                               (error-message-string condition)))
       (should (= (appkit-loop-pending-count loop) 0)))))
 
-
 (ert-deftest appkit-loop-after-pass-sees-final-committed-state-once ()
   (let (passes models)
     (appkit-loop-test--with-loop
@@ -695,7 +694,6 @@
       (should (= 0 (appkit-loop-pass-accepted (car passes))))
       (should (= 1 (appkit-loop-pass-companions (car passes)))))))
 
-
 (ert-deftest appkit-loop-rejects-companion-result-from-client-lane ()
   (appkit-loop-test--with-loop
       (loop
@@ -708,6 +706,7 @@
     (should (eq 'faulted (appkit-loop-status loop)))
     (should (eq 'domain (appkit-loop-model loop)))
     (should (= 0 (appkit-loop-revision loop)))))
+
 (provide 'appkit-loop-test)
 
 ;;; appkit-loop-test.el ends here

@@ -50,8 +50,6 @@
   footer
   no-separator-p)
 
-
-
 (cl-defstruct (appkit-projection-change
                (:constructor appkit-projection-change-create)
                (:copier nil))
@@ -63,7 +61,6 @@
   geometry-p
   rekeys
   position)
-
 
 (defun appkit-projection--print-row (projection row)
   "Render projected ROW through PROJECTION's client printer."
@@ -100,7 +97,6 @@ its Generated Renderer mutation boundary."
            (apply-partially #'appkit-projection--print-row projection)
            header footer no-separator-p))
     projection))
-
 
 (cl-defun appkit-projection-project
     (entries key-function &key context-function dependencies-function
@@ -354,8 +350,6 @@ and position without inspecting ROWS."
       (appkit-projection--restore-position projection position snapshot))
     (appkit-projection--keys projection)))
 
-
-
 (defun appkit-projection--merge-position (left right)
   "Merge projection position intents LEFT and RIGHT."
   (if (or (null right) (eq right 'preserve)) left right))
@@ -478,75 +472,75 @@ pass-scoped App read view, and one row.  GEOMETRY-MODE is `redraw' or
   (let (projection render-surface render-app-read-view)
     (cl-labels
         ((create-cache
-          ()
-          (setq projection
-                (appkit-projection-create
-                 (lambda (row)
-                   (unless (and (appkit-surface--owns-host-p render-surface)
-                                render-app-read-view)
-                     (error "Projection printer escaped its render pass"))
-                   (funcall printer render-surface render-app-read-view row))
-                 anchor-property
-                 :no-separator-p no-separator-p)))
+           ()
+           (setq projection
+                 (appkit-projection-create
+                  (lambda (row)
+                    (unless (and (appkit-surface--owns-host-p render-surface)
+                                 render-app-read-view)
+                      (error "Projection printer escaped its render pass"))
+                    (funcall printer render-surface render-app-read-view row))
+                  anchor-property
+                  :no-separator-p no-separator-p)))
          (render-change
-          (surface app-read-view model change force-full-p)
-          (unless (appkit-projection-change-p change)
-            (error "Projection Renderer received invalid request: %S" change))
-          (setq render-surface surface
-                render-app-read-view app-read-view)
-          (unwind-protect
-              (let* ((effective
-                      (if force-full-p
-                          (appkit-projection-change-create
-                           :full-p t
-                           :resources
-                           (appkit-projection-change-resources change)
-                           :frame-p t
-                           :position
-                           (appkit-projection-change-position change))
-                        change))
-                     (plan
-                      (appkit-projection--render-plan
-                       projection effective geometry-mode))
-                     (reconcile-p (nth 0 plan))
-                     (force-keys (nth 1 plan))
-                     (changed-dependencies (nth 2 plan))
-                     (position (nth 3 plan))
-                     (frame
-                      (if (or force-full-p
-                              (appkit-projection-change-frame-p effective))
-                          (appkit-projection--frame-value
-                           project-frame surface app-read-view model)
-                        (cons (appkit-projection--engine-header projection)
-                              (appkit-projection--engine-footer projection))))
-                     (rows
-                      (and reconcile-p
-                           (funcall project-all surface app-read-view model))))
-                (appkit-projection-sync
-                 surface projection rows
-                 :header (car frame)
-                 :footer (cdr frame)
-                 :force-keys (and reconcile-p force-keys)
-                 :changed-dependencies changed-dependencies
-                 :rekeys
-                 (and reconcile-p
-                      (appkit-projection-change-rekeys effective))
-                 :position position
-                 :reconcile-p reconcile-p)
-                (unless reconcile-p
-                  (appkit-with-content-update surface
-                    (appkit-projection--invalidate
-                     projection
-                     (delete-dups
-                      (append
-                       force-keys
-                       (appkit-projection-dependent-keys
-                        projection changed-dependencies))))))
-                (if reconcile-p
-                    (appkit-projection--resource-result rows)
-                  nil))
-            (setq render-surface nil
-                  render-app-read-view nil))))
+           (surface app-read-view model change force-full-p)
+           (unless (appkit-projection-change-p change)
+             (error "Projection Renderer received invalid request: %S" change))
+           (setq render-surface surface
+                 render-app-read-view app-read-view)
+           (unwind-protect
+               (let* ((effective
+                       (if force-full-p
+                           (appkit-projection-change-create
+                            :full-p t
+                            :resources
+                            (appkit-projection-change-resources change)
+                            :frame-p t
+                            :position
+                            (appkit-projection-change-position change))
+                         change))
+                      (plan
+                       (appkit-projection--render-plan
+                        projection effective geometry-mode))
+                      (reconcile-p (nth 0 plan))
+                      (force-keys (nth 1 plan))
+                      (changed-dependencies (nth 2 plan))
+                      (position (nth 3 plan))
+                      (frame
+                       (if (or force-full-p
+                               (appkit-projection-change-frame-p effective))
+                           (appkit-projection--frame-value
+                            project-frame surface app-read-view model)
+                         (cons (appkit-projection--engine-header projection)
+                               (appkit-projection--engine-footer projection))))
+                      (rows
+                       (and reconcile-p
+                            (funcall project-all surface app-read-view model))))
+                 (appkit-projection-sync
+                  surface projection rows
+                  :header (car frame)
+                  :footer (cdr frame)
+                  :force-keys (and reconcile-p force-keys)
+                  :changed-dependencies changed-dependencies
+                  :rekeys
+                  (and reconcile-p
+                       (appkit-projection-change-rekeys effective))
+                  :position position
+                  :reconcile-p reconcile-p)
+                 (unless reconcile-p
+                   (appkit-with-content-update surface
+                     (appkit-projection--invalidate
+                      projection
+                      (delete-dups
+                       (append
+                        force-keys
+                        (appkit-projection-dependent-keys
+                         projection changed-dependencies))))))
+                 (if reconcile-p
+                     (appkit-projection--resource-result rows)
+                   nil))
+             (setq render-surface nil
+                   render-app-read-view nil))))
       (appkit-generated-renderer-create
        :mount
        (lambda (_surface _app-read-view _model)

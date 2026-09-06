@@ -313,7 +313,6 @@
               'unsupported-org-block))
         (appkit-markup-parse-result-diagnostics result))))))
 
-
 (ert-deftest appkit-markup-compose-active-codec-is-semantic-state ()
   (with-temp-buffer
     (appkit-compose-setup)
