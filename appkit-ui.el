@@ -757,6 +757,26 @@ newline."
     (dolist (line footer-lines)
       (insert line "\n"))))
 
+(defun appkit-ui-set-soft-wrap (enabled &optional visual-fill)
+  "Set renderer-compatible soft wrapping according to ENABLED.
+
+Use native `visual-line-mode' without generating continuation prefixes, so
+rendered `line-prefix' and `wrap-prefix' properties retain their geometry.
+When ENABLED is nil, truncate long lines.  Optional VISUAL-FILL enables
+`visual-fill-column-mode' only while wrapping is enabled."
+  (if enabled
+      (visual-line-mode 1)
+    (visual-line-mode -1)
+    (setq-local truncate-lines t)
+    (setq-local word-wrap nil))
+  (let ((use-visual-fill (and enabled visual-fill)))
+    (when (or (fboundp 'visual-fill-column-mode)
+              (and use-visual-fill
+                   (require 'visual-fill-column nil t)
+                   (fboundp 'visual-fill-column-mode)))
+      (visual-fill-column-mode (if use-visual-fill 1 -1))))
+  (not (null enabled)))
+
 (provide 'appkit-ui)
 
 ;;; appkit-ui.el ends here

@@ -198,6 +198,16 @@ acquisition, labels, identity faces, and resource invalidation.
 
 ** Discussion
 
+Derive read-only note, topic, and reply-tree modes from
+~appkit-discussion-mode~.  It owns default native soft wrapping; clients must
+not repeat ~visual-line-mode~, ~word-wrap~, or ~truncate-lines~ setup.
+Editable timelines retain ~appkit-chatbuf-mode~ and its
+~appkit-chatbuf-wrap-long-lines~ and ~appkit-chatbuf-use-visual-fill-column~
+options.  Both base modes use ~appkit-ui-set-soft-wrap~, which preserves
+rendered prefixes without enabling an automatic continuation-prefix producer.
+Chat clients change wrapping through ~appkit-chatbuf-set-soft-wrap~ so the
+buffer-local preference remains synchronized.
+
 /Discussion depth/ is visual reply nesting under a parent.  A /discussion
 connector/ continues or ends a linear ancestor chain without changing that
 depth.  Discussion rows accept both plus optional pre-heading context.  Clients

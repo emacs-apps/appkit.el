@@ -304,18 +304,7 @@ When ENABLED is nil, truncate long lines.  Optional visual filling follows
 `appkit-chatbuf-use-visual-fill-column'.  This function never enables an
 automatic continuation-prefix producer."
   (setq-local appkit-chatbuf-wrap-long-lines (not (null enabled)))
-  (if enabled
-      (visual-line-mode 1)
-    (visual-line-mode -1)
-    (setq-local truncate-lines t)
-    (setq-local word-wrap nil))
-  (let ((use-visual-fill
-         (and enabled appkit-chatbuf-use-visual-fill-column)))
-    (when (or (fboundp 'visual-fill-column-mode)
-              (and use-visual-fill
-                   (require 'visual-fill-column nil t)
-                   (fboundp 'visual-fill-column-mode)))
-      (visual-fill-column-mode (if use-visual-fill 1 -1))))
+  (appkit-ui-set-soft-wrap enabled appkit-chatbuf-use-visual-fill-column)
   appkit-chatbuf-wrap-long-lines)
 
 (defun appkit-chatbuf-mode-setup ()
