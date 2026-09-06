@@ -1133,6 +1133,44 @@
         (should-not (buffer-live-p viewer))
         (should-not resolved)))))
 
+(ert-deftest appkit-media-video-setup-is-cancelled-with-its-viewer ()
+  ;; In particular, setup may close its viewer before returning its capability.
+  (dolist (ending '(close cancel synchronous-close))
+    (let (viewer capability resolved rejected (cancel-count 0))
+      (cl-letf (((symbol-function 'appkit-media-video-session-create)
+                 (lambda (&rest _) 'session))
+                ((symbol-function 'appkit-media-present-video-session)
+                 (lambda (&rest _)
+                   (setq viewer (generate-new-buffer " *video-setup-test*"))))
+                ((symbol-function 'appkit-media-video-session-live-p)
+                 (lambda (_) nil)))
+        (unwind-protect
+            (progn
+              (setq capability
+                    (appkit-media-video-presentation-start
+                     nil
+                     (appkit-media-video-presentation-create
+                      '((url . "https://example.invalid/video.mp4"))
+                      :setup-function
+                      (lambda (_session buffer)
+                        (when (eq ending 'synchronous-close) (kill-buffer buffer))
+                        (appkit-cancellation-create
+                         :kind 'logical
+                         :cancel (lambda () (cl-incf cancel-count)))))
+                     #'ignore
+                     (lambda (value) (setq resolved value))
+                     (lambda (error) (setq rejected error))))
+              (pcase ending
+                ('close (kill-buffer viewer))
+                ('cancel (funcall (appkit-cancellation-cancel capability))))
+              (should-not rejected)
+              (should (= cancel-count 1))
+              (should-not (buffer-live-p viewer))
+              (should (eq resolved (unless (eq ending 'cancel) 'closed)))
+              (funcall (appkit-cancellation-cancel capability))
+              (should (= cancel-count 1)))
+          (when (buffer-live-p viewer) (kill-buffer viewer)))))))
+
 (provide 'appkit-media-resource-test)
 
 ;;; appkit-media-resource-test.el ends here

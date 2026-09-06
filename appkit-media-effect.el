@@ -121,13 +121,20 @@ settlement."
   request-headers
   buffer
   display-function
-  autoplay-p)
+  autoplay-p
+  setup-function)
 
 (cl-defun appkit-media-video-presentation-create
     (resource &key label cache-key cache-directory
               (cache-policy appkit-media-video-cache-policy)
-              muted live request-headers buffer display-function (start t))
-  "Create owned input for a managed video RESOURCE presentation."
+              muted live request-headers buffer display-function (start t)
+              setup-function)
+  "Create owned input for a managed video RESOURCE presentation.
+SETUP-FUNCTION, when non-nil, is called with the ready session and viewer
+buffer.  It returns nil or an `appkit-cancellation' for auxiliary work,
+which is cancelled when the viewer closes or the presentation is cancelled."
+  (unless (or (null setup-function) (functionp setup-function))
+    (error "Video presentation setup must be callable"))
   (appkit-media--video-presentation-create
    :resource (copy-tree (appkit-media-resource-normalize resource))
    :label (or label "media")
@@ -139,54 +146,61 @@ settlement."
    :request-headers (copy-tree request-headers)
    :buffer buffer
    :display-function display-function
-   :autoplay-p start))
+   :autoplay-p start
+   :setup-function setup-function))
 
 (defun appkit-media-video-presentation-start
     (_context input _observe resolve reject)
   "Present video INPUT until its viewer closes or the Effect is cancelled."
-  (let (session viewer finished-p)
+  (let (session viewer setup-cancellation finished-p)
     (cl-labels
-        ((close-presentation
-           ()
+        ((cancel-setup ()
+           (let ((capability setup-cancellation))
+             (setq setup-cancellation nil)
+             (when-let* ((capability)
+                         (cancel (appkit-cancellation-cancel capability)))
+               (funcall cancel))))
+         (close-presentation ()
            (unless finished-p
              (setq finished-p t)
-             (when (buffer-live-p viewer)
-               (kill-buffer viewer))
-             (when (appkit-media-video-session-live-p session)
-               (appkit-media-video-session-close session))))
-         (viewer-closed
-           ()
+             (unwind-protect
+                 (cancel-setup)
+               (when (buffer-live-p viewer) (kill-buffer viewer))
+               (when (appkit-media-video-session-live-p session)
+                 (appkit-media-video-session-close session)))))
+         (viewer-closed ()
            (unless finished-p
              (setq finished-p t)
-             (funcall resolve 'closed))))
+             (unwind-protect (cancel-setup)
+               (funcall resolve 'closed)))))
       (condition-case condition
           (progn
             (setq session
                   (appkit-media-video-session-create
                    (appkit-media-video-presentation-resource input)
                    (appkit-media-video-presentation-label input)
-                   :cache-key
-                   (appkit-media-video-presentation-cache-key input)
-                   :cache-directory
-                   (appkit-media-video-presentation-cache-directory input)
-                   :cache-policy
-                   (appkit-media-video-presentation-cache-policy input)
+                   :cache-key (appkit-media-video-presentation-cache-key input)
+                   :cache-directory (appkit-media-video-presentation-cache-directory input)
+                   :cache-policy (appkit-media-video-presentation-cache-policy input)
                    :muted (appkit-media-video-presentation-muted input)
                    :live (appkit-media-video-presentation-live input)
-                   :request-headers
-                   (appkit-media-video-presentation-request-headers input))
+                   :request-headers (appkit-media-video-presentation-request-headers input))
                   viewer
                   (appkit-media-present-video-session
-                   session
-                   (appkit-media-video-presentation-label input)
+                   session (appkit-media-video-presentation-label input)
                    :buffer (appkit-media-video-presentation-buffer input)
-                   :display-function
-                   (appkit-media-video-presentation-display-function input)
+                   :display-function (appkit-media-video-presentation-display-function input)
                    :start (appkit-media-video-presentation-autoplay-p input)))
             (with-current-buffer viewer
               (add-hook 'kill-buffer-hook #'viewer-closed nil t))
-            (appkit-cancellation-create
-             :kind 'logical :cancel #'close-presentation))
+            (when-let* ((setup (appkit-media-video-presentation-setup-function input)))
+              (let ((capability (funcall setup session viewer)))
+                (unless (or (null capability) (appkit-cancellation-p capability))
+                  (error "Video setup returned an invalid cancellation capability"))
+                (setq setup-cancellation capability)
+                ;; Setup can synchronously close the viewer before it returns.
+                (when finished-p (cancel-setup))))
+            (appkit-cancellation-create :kind 'logical :cancel #'close-presentation))
         ((error quit)
          (close-presentation)
          (funcall reject (error-message-string condition))
