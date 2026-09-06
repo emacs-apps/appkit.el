@@ -422,7 +422,8 @@ automatic separators between header, footer, and prompt."
    :merge (lambda (_old new) new)
    :render #'appkit-chat-compose--render
    :recover nil
-   :unmount #'ignore))
+   :unmount (lambda (_surface)
+              (appkit-compose--shutdown))))
 
 (defun appkit-chat-compose--ensure-surface (app)
   "Mount the current compose buffer under APP, or as a standalone Surface."
@@ -457,7 +458,7 @@ automatic separators between header, footer, and prompt."
   nil)
 
 (defun appkit-chat-compose-refresh ()
-  "Commit a compose refresh without rewriting live input or reviving a stopped host."
+  "Refresh compose presentation without rewriting input or reviving its host."
   (if appkit-chat-compose--surface
       (appkit-surface-send appkit-chat-compose--surface 'refresh)
     (appkit-chat-compose--ensure-surface nil))
