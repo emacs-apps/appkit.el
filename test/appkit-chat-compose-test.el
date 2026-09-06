@@ -48,8 +48,8 @@
      :attachments-function
      (lambda ()
        '(:title "Media"
-         :items nil
-         :empty-label "  No media attached.")))
+                :items nil
+                :empty-label "  No media attached.")))
     (goto-char (appkit-chat-compose-body-start-position))
     (insert "draft")
     (appkit-chat-compose-add-item)
@@ -185,23 +185,116 @@
                    '((:path "only.png"))))))
 
 (ert-deftest appkit-chat-compose-structural-edits-have-exact-revisions ()
-  "Navigation is observational; each structural draft edit advances once."
+  "Unfrozen async work allows edits; each structural edit advances once."
   (with-temp-buffer
     (appkit-chat-compose-mode)
     (appkit-chat-compose-setup)
     (appkit-chat-compose-set-items
      '((:text "first" :attachments nil)
        (:text "second" :attachments nil)))
-    (should (= 0 (appkit-compose-generation)))
+    (let ((generation (appkit-compose-generation))
+          (capture (appkit-compose-capture))
+          (owner (appkit-compose-operation-begin 'preview)))
+      (unwind-protect
+          (progn
+            (appkit-chat-compose-goto-part 0)
+            (should (equal (appkit-compose-capture) capture))
+            (appkit-chat-compose-add-item)
+            (should (= (1+ generation) (appkit-compose-generation)))
+            (appkit-chat-compose-update-current-item
+             '(:attachments ((:path "photo.png"))))
+            (should (= (+ generation 2) (appkit-compose-generation)))
+            (appkit-chat-compose-drop-item)
+            (should (= (+ generation 3) (appkit-compose-generation)))
+            (should (equal (appkit-chat-compose-bodies) '("first" "second")))
+            (should (appkit-compose-operation-current-p owner)))
+        (appkit-compose-operation-finish owner)))))
+
+(ert-deftest appkit-chat-compose-navigation-preserves-uncommitted-tail ()
+  "Leaving live input retains both text and attachment-only tail parts."
+  (dolist (tail '("last" ""))
+    (with-temp-buffer
+      (appkit-chat-compose-mode)
+      (appkit-chat-compose-setup)
+      (appkit-chat-compose-set-items
+       (list (list :text "first")
+             (list :text tail :attachments '((:path "tail.png")))))
+      (let ((capture (appkit-compose-capture)))
+        (appkit-chat-compose-goto-part 0)
+        (should (equal (appkit-compose-capture) capture))
+        (appkit-chat-compose-goto-part 1)
+        (should (equal (appkit-chat-compose-body) tail))
+        (should (equal (appkit-compose-capture) capture))
+        (appkit-chat-compose-goto-part 0)
+        (should (equal (appkit-compose-capture) capture))))))
+
+(ert-deftest appkit-chat-compose-revisiting-current-part-preserves-edits ()
+  "Refocusing an edited part must not reload its stale generated row."
+  (with-temp-buffer
+    (appkit-chat-compose-mode)
+    (appkit-chat-compose-setup)
+    (appkit-chat-compose-set-items '((:text "first") (:text "last")))
     (appkit-chat-compose-goto-part 0)
-    (should (= 0 (appkit-compose-generation)))
-    (appkit-chat-compose-add-item)
-    (should (= 1 (appkit-compose-generation)))
-    (appkit-chat-compose-update-current-item
-     '(:text "inserted" :attachments ((:path "photo.png"))))
-    (should (= 2 (appkit-compose-generation)))
-    (appkit-chat-compose-drop-item)
-    (should (= 3 (appkit-compose-generation)))))
+    (goto-char (appkit-chat-compose-body-end-position))
+    (insert " edited")
+    (let ((capture (appkit-compose-capture)))
+      (appkit-chat-compose-goto-part 0)
+      (should (equal (appkit-chat-compose-body) "first edited"))
+      (should (equal (appkit-compose-capture) capture))
+      (should (= (point) (appkit-chat-compose-body-start-position))))))
+
+(ert-deftest appkit-chat-compose-new-tail-does-not-duplicate-edited-part ()
+  "Fresh input neither repeats the last editor text nor inherits metadata."
+  (with-temp-buffer
+    (appkit-chat-compose-mode)
+    (appkit-chat-compose-setup)
+    (appkit-chat-compose-set-items
+     '((:text "first" :attachments ((:path "first.png")))
+       (:text "last" :attachments ((:path "last.png")))))
+    (appkit-chat-compose-goto-part 0)
+    (goto-char (appkit-chat-compose-body-end-position))
+    (insert " edited")
+    (let ((capture (appkit-compose-capture)))
+      (appkit-chat-compose-goto-part nil)
+      (should (equal (appkit-chat-compose-body) ""))
+      (should-not (plist-get (appkit-chat-compose-current-item) :attachments))
+      (should (equal (appkit-compose-capture) capture))
+      (appkit-chat-compose-goto-part nil)
+      (should (equal (appkit-compose-capture) capture)))
+    (insert "fresh")
+    (should (equal (appkit-chat-compose-bodies)
+                   '("first edited" "last" "fresh")))
+    (should-not (plist-get (car (last (appkit-chat-compose-items)))
+                           :attachments))))
+
+(ert-deftest appkit-chat-compose-frozen-entrypoints-preserve-draft ()
+  "Rejected navigation and structural edits leave the frozen draft intact."
+  (with-temp-buffer
+    (appkit-chat-compose-mode)
+    (appkit-chat-compose-setup)
+    (appkit-chat-compose-set-items
+     '((:text "first" :attachments ((:path "first.png")))
+       (:text "last" :attachments ((:path "last.png")))))
+    (appkit-chat-compose-goto-part 0)
+    (goto-char (appkit-chat-compose-body-end-position))
+    (insert " edited")
+    (let ((capture (appkit-compose-capture))
+          (text (buffer-string))
+          (buffer-read-only t))
+      (dolist (edit (list (lambda () (appkit-chat-compose-goto-part 1))
+                          (lambda () (appkit-chat-compose-goto-part nil))
+                          #'appkit-chat-compose-edit-at-point
+                          #'appkit-chat-compose-add-item
+                          (lambda () (appkit-chat-compose-drop-item 0))
+                          (lambda () (appkit-chat-compose-drop-item 1))
+                          (lambda ()
+                            (appkit-chat-compose-update-current-item
+                             '(:attachments ((:path "replacement.png")))))
+                          (lambda ()
+                            (appkit-chat-compose-set-items '((:text "replacement"))))))
+        (should-error (funcall edit) :type 'buffer-read-only)
+        (should (equal (appkit-compose-capture) capture))
+        (should (equal (buffer-string) text))))))
 
 (defvar-local appkit-chat-compose-test--account nil)
 
@@ -232,22 +325,22 @@
       (when (appkit-app-live-p app) (appkit-app-close app)))))
 
 (ert-deftest appkit-chat-compose-replacement-preserves-active-publication ()
-  "Persisting publication progress must not cancel the owning operation."
+  "Authorized settlement of a frozen draft preserves its owning operation."
   (with-temp-buffer
     (appkit-chat-compose-mode)
     (appkit-chat-compose-setup)
     (appkit-compose-touch)
     (let* ((canceled 0)
+           (generation (appkit-compose-generation))
            (owner (appkit-compose-operation-begin
-                   'publish :cancel-function (lambda () (cl-incf canceled)))))
-      (appkit-chat-compose-set-items
-       '((:text "remaining" :attachments ((:id "uploaded")))))
+                   'publish :cancel-function (lambda () (cl-incf canceled))))
+           (buffer-read-only t))
+      (let ((inhibit-read-only t))
+        (appkit-chat-compose-set-items
+         '((:text "remaining" :attachments ((:id "uploaded"))))))
       (should (appkit-compose-operation-current-p owner))
-      (should (= 1 (appkit-compose-generation)))
+      (should (= generation (appkit-compose-generation)))
       (should (= 0 canceled))
-      (let ((item (car (appkit-chat-compose-items))))
-        (should (equal "remaining" (plist-get item :text)))
-        (should (equal '((:id "uploaded")) (plist-get item :attachments))))
       (should (appkit-compose-operation-finish owner))
       (should-not (appkit-compose-operation-active-p))
       (should (= 0 canceled)))))

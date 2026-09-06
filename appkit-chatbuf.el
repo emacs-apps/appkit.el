@@ -306,11 +306,18 @@ automatic continuation-prefix producer."
   (appkit-ui-set-soft-wrap enabled appkit-chatbuf-use-visual-fill-column)
   appkit-chatbuf-wrap-long-lines)
 
+(defun appkit-chatbuf--buffer-substring-filter (beg end delete)
+  "Copy BEG..END, removing presentation only before the editable input."
+  (appkit-ui-buffer-substring-filter
+   beg end delete (appkit-chatbuf-input-start-position)))
+
 (defun appkit-chatbuf-mode-setup ()
   "Apply telega-like chat buffer defaults in the current buffer."
   (setq-local switch-to-buffer-preserve-window-point nil)
   (setq-local window-point-insertion-type t)
   (setq-local next-line-add-newlines nil)
+  (setq-local filter-buffer-substring-function
+              #'appkit-chatbuf--buffer-substring-filter)
   (setq-local next-screen-context-lines 0)
   (setq-local appkit-chatbuf-owns-wrap-prefix-p t)
   (appkit-chatbuf-set-soft-wrap appkit-chatbuf-wrap-long-lines)
@@ -576,27 +583,30 @@ properties, are preserved."
     (buffer-substring (car bounds) (cdr bounds))))
 
 (defun appkit-chatbuf-input-delete ()
-  "Delete all current input contents."
+  "Delete all current input contents, respecting the buffer's edit policy."
   (interactive)
+  (barf-if-buffer-read-only)
   (when-let* ((input-start (appkit-chatbuf-input-start-position)))
-    (let ((inhibit-read-only t))
-      (delete-region input-start (point-max))))
+    (delete-region input-start (point-max)))
   (unless (or appkit-chatbuf--mutating-input
               (appkit-chatbuf-rendering-p))
     (appkit-chatbuf-input-state-sync)))
 
 (cl-defun appkit-chatbuf-input-set-text (text &key preserve-history-navigation-p)
-  "Replace current input with TEXT.
+  "Replace current input with TEXT, respecting the buffer's edit policy.
 
 When PRESERVE-HISTORY-NAVIGATION-P is non-nil, retain the current history
-cursor and remembered pending input."
+cursor and remembered pending input.  A failed replacement leaves the input
+text intact.  Authorized generated updates may bind `inhibit-read-only'."
+  (barf-if-buffer-read-only)
   (appkit-chatbuf-init-state)
   (let ((appkit-chatbuf--mutating-input t))
-    (appkit-chatbuf-input-delete)
-    (when-let* ((input-start (appkit-chatbuf-input-start-position)))
-      (save-excursion
-        (goto-char input-start)
-        (insert (or text ""))))
+    (atomic-change-group
+      (appkit-chatbuf-input-delete)
+      (when-let* ((input-start (appkit-chatbuf-input-start-position)))
+        (save-excursion
+          (goto-char input-start)
+          (insert (or text "")))))
     (goto-char (point-max)))
   (unless (appkit-chatbuf-rendering-p)
     (appkit-chatbuf-input-state-sync
@@ -620,7 +630,7 @@ offset from the input start when possible."
       (add-text-properties
        (point-min) end
        '(read-only t front-sticky (read-only)
-         rear-nonsticky (read-only))))))
+                   rear-nonsticky (read-only))))))
 
 (cl-defun appkit-chatbuf-bind-input-region (&key visible-p prompt input-text post-bind-function)
   "Ensure the tail input region matches VISIBLE-P, PROMPT and INPUT-TEXT.

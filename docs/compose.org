@@ -218,9 +218,10 @@ Each item is a plist with:
 - arbitrary client-owned metadata such as ~:attachments~.
 
 ~appkit-chat-compose-set-items~ replaces the complete sequence.  The last item
-becomes live input and earlier items become committed rows.  The operation is a
-document load: generated changes are untracked and the generic compose
-generation resets to zero.
+becomes live input and earlier items become committed rows.  Replacement is
+untracked and preserves the current generation and operation, allowing the
+client to persist confirmed upload or publication results.  Use
+~appkit-compose-reset~ explicitly when discarding a compose session.
 
 ~appkit-chat-compose-items~ is the authoritative ordered snapshot.  Clients do
 not mirror the sequence in another variable.  Committed metadata is retained
@@ -229,7 +230,15 @@ and the live body is merged into the corresponding item.
 ~appkit-chat-compose-update-current-item~ updates client metadata and advances
 the semantic generation once.  ~appkit-chat-compose-add-item~ and
 ~appkit-chat-compose-drop-item~ each perform one structural generation change.
-Navigation between parts is observational.
+Navigation between parts preserves the complete draft and its generation,
+including uncommitted tail metadata.  Returning to the same part only focuses
+its current input; opening fresh tail input does not duplicate the edited part.
+
+Clients freeze editing with ~buffer-read-only~.  Shared navigation, structural
+commands and input replacement check that policy before mutating state.
+An active operation alone does not freeze editing.  Authorized programmatic
+settlements must explicitly bind ~inhibit-read-only~ when updating a frozen
+draft; merely suppressing generation tracking does not grant edit permission.
 
 An empty text body remains an item when client metadata is present.  This allows
 attachment-only parts without assigning attachment meaning to Appkit.

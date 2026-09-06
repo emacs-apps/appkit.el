@@ -186,7 +186,9 @@ occupies no frame text."
 Each item is a plist with optional `:text' and client-owned metadata.  The last
 item becomes the live composer input; earlier items become generated rows.
 Programmatic replacement preserves the current source generation and operation;
-use `appkit-compose-reset' explicitly to discard the compose session."
+use `appkit-compose-reset' explicitly to discard the compose session.
+Bind `inhibit-read-only' for authorized replacement of a frozen draft."
+  (barf-if-buffer-read-only)
   (unless (listp items)
     (error "Appkit chat compose items must be a list: %S" items))
   (let* ((copies
@@ -263,7 +265,9 @@ merged into the edited item, or appended as a new item."
       (appkit-chat-compose--merge-input appkit-chat-compose--input-item)))))
 
 (defun appkit-chat-compose-update-current-item (item)
-  "Replace the current compose item with ITEM."
+  "Replace the current compose item with ITEM.
+Bind `inhibit-read-only' for authorized updates to a frozen draft."
+  (barf-if-buffer-read-only)
   (let ((index (or (appkit-chat-compose-current-part-index) 0))
         (updated (appkit-chat-compose--copy-item item)))
     (cond
@@ -472,37 +476,34 @@ automatic separators between header, footer, and prompt."
           (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun appkit-chat-compose-goto-part (index)
-  "Load compose part INDEX into the composer, or focus new input."
-  (appkit-compose-without-tracking
-    (when (and (integerp appkit-chat-compose--editing)
-               (not (eq appkit-chat-compose--editing index)))
-      (appkit-chat-compose--write-back-edit))
-    (cond
-     ((and (integerp index)
-           (< index (length appkit-chat-compose--items)))
-      (let ((item (nth index appkit-chat-compose--items)))
-        (setq-local appkit-chat-compose--editing index
-                    appkit-chat-compose--input-item
-                    (appkit-chat-compose--copy-item item))
-        (appkit-chatbuf-input-set-text (or (plist-get item :text) ""))
-        (appkit-chat-compose-refresh)
-        (goto-char (appkit-chatbuf-input-start-position))))
-     (t
-      (setq-local appkit-chat-compose--editing nil
-                  appkit-chat-compose--input-item
-                  (or appkit-chat-compose--input-item
-                      (list :attachments nil)))
-      (appkit-chat-compose-refresh)
-      (goto-char (or (appkit-chatbuf-input-start-position) (point-max)))))))
+  "Load compose part INDEX into the composer, or focus new input.
+Navigation preserves the complete draft and its semantic generation."
+  (barf-if-buffer-read-only)
+  (let ((committed (and (integerp index)
+                        (<= 0 index)
+                        (< index (length appkit-chat-compose--items)))))
+    (unless (or (eq index appkit-chat-compose--editing)
+                (and (null appkit-chat-compose--editing) (not committed)))
+      (appkit-compose-without-tracking
+        (appkit-chat-compose--flush-input)
+        (when committed
+          (let ((item (nth index appkit-chat-compose--items)))
+            (setq-local appkit-chat-compose--editing index
+                        appkit-chat-compose--input-item
+                        (appkit-chat-compose--copy-item item))
+            (appkit-chatbuf-input-set-text (or (plist-get item :text) ""))))
+        (appkit-chat-compose-refresh)))
+    (goto-char (or (appkit-chatbuf-input-start-position) (point-max)))))
 
 (defun appkit-chat-compose--write-back-edit ()
-  "Store the current composer input back into the edited item."
+  "Store the current edit and leave a fresh empty composer input."
   (when (integerp appkit-chat-compose--editing)
     (setf (nth appkit-chat-compose--editing appkit-chat-compose--items)
           (appkit-chat-compose--merge-input
            (nth appkit-chat-compose--editing appkit-chat-compose--items)))
     (setq-local appkit-chat-compose--editing nil
-                appkit-chat-compose--input-item (list :attachments nil))))
+                appkit-chat-compose--input-item (list :attachments nil))
+    (appkit-chatbuf-input-set-text "")))
 
 (defun appkit-chat-compose--flush-input ()
   "Write back an edit or commit composer input with content or metadata."
@@ -522,6 +523,7 @@ automatic separators between header, footer, and prompt."
 (defun appkit-chat-compose-add-item ()
   "Insert an empty draft item after the current part and edit it."
   (interactive)
+  (barf-if-buffer-read-only)
   (let ((index (1+ (or (appkit-chat-compose-current-part-index) 0))))
     (appkit-compose-without-tracking
       (appkit-chat-compose--flush-input)
@@ -539,8 +541,10 @@ automatic separators between header, footer, and prompt."
 (defun appkit-chat-compose-drop-item (&optional index)
   "Remove compose item INDEX, or the current part when INDEX is nil."
   (interactive)
+  (barf-if-buffer-read-only)
   (let ((target (or index (appkit-chat-compose-current-part-index))))
     (unless (and (integerp target)
+                 (<= 0 target)
                  (< target (length appkit-chat-compose--items)))
       (user-error "No committed compose item to remove"))
     (appkit-compose-without-tracking
@@ -565,6 +569,7 @@ automatic separators between header, footer, and prompt."
 (defun appkit-chat-compose-edit-at-point ()
   "Load the committed compose item at point into the composer."
   (interactive)
+  (barf-if-buffer-read-only)
   (if-let* ((index (appkit-chat-compose-item-index-at-point)))
       (appkit-chat-compose-goto-part index)
     (user-error "No compose item at point")))

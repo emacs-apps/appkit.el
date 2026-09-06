@@ -49,6 +49,9 @@ An action span is one buffer region carrying a client-supplied zero-argument
 action.  ~appkit-ui-add-action~ makes it activatable by ~RET~ or primary click.
 Help text describes the action itself; Appkit does not infer a protocol target
 or install a client keymap.
+Hover defaults to ~highlight~; pass ~:mouse-face nil~ to disable it without
+disabling activation.  A terminating newline retains its action and face but
+is excluded from hover, so adjacent multi-line action blocks remain separate.
 
 ** Compose primitives
 
@@ -179,6 +182,12 @@ properties.  Structured input objects carry opaque payload, unique occurrence
 identity, original visible text, and boundary sentinels.  Atomic deletion and
 repair operate on complete occurrences.  Shared input history currently skips
 object-bearing entries.
+
+Copying strips display-only properties from generated content before the input
+boundary, while retaining editable structured-object properties even when one
+selection spans both regions.  Clients should not replace this shared filter
+with a whole-buffer property stripper.  Input deletion and replacement respect
+~buffer-read-only~; failed replacement preserves the original input text.
 
 Construct compact content with
 ~appkit-ui-one-line-preview-create~.  Its optional propertized prefix
@@ -456,12 +465,16 @@ them visually.  Use ~appkit-ui-apply-source-line-prefix~ with one presentation
 character for every literal source character.  The one-to-one projection keeps
 real visual columns for cursor motion while the original prefix remains
 copyable; soft wraps receive the supplied continuation prefix without changing
-an outer ~line-prefix~.  Install ~appkit-ui-buffer-substring-filter~ as the
-buffer-local ~filter-buffer-substring-function~.  The copied text then keeps the
-original source while dropping ~display~, ~line-prefix~, and ~wrap-prefix~
-properties.  ~appkit-ui-vbar-string~ supplies a GUI/terminal vertical marker;
-~appkit-ui-tinted-background-face~ derives a subtle background from an existing
-accent face without changing the text foreground.
+an outer ~line-prefix~.  ~appkit-discussion-mode~ installs
+~appkit-ui-buffer-substring-filter~ for the whole generated reader;
+~appkit-chatbuf-mode~ limits cleanup to generated content before its input.
+Standalone generated readers install the filter as their buffer-local
+~filter-buffer-substring-function~.  Copied text keeps source characters while
+dropping ~display~, ~line-prefix~, and ~wrap-prefix~ presentation properties.
+The filter's optional ~PRESENTATION-END~ boundary supports mixed generated and
+editable selections.  ~appkit-ui-vbar-string~ supplies a GUI/terminal vertical
+marker; ~appkit-ui-tinted-background-face~ derives a subtle background from an
+existing accent face without changing the text foreground.
 
 * Task queues
 

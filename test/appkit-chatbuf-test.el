@@ -206,6 +206,52 @@
     (should (equal "goodbye" (appkit-chatbuf-input-string)))
     (should (= 5 (- (point) (appkit-chatbuf-input-start-position))))))
 
+(ert-deftest appkit-chatbuf-frozen-input-mutations-preserve-draft ()
+  (with-temp-buffer
+    (appkit-chatbuf-mode)
+    (appkit-chatbuf-install-prompt ">>> ")
+    (appkit-chatbuf-input-set-text "unsent draft")
+    (setq buffer-read-only t)
+    (should-error (appkit-chatbuf-input-delete) :type 'buffer-read-only)
+    (should-error (appkit-chatbuf-input-set-text "replacement")
+                  :type 'buffer-read-only)
+    (should (equal "unsent draft" (appkit-chatbuf-input-string)))
+    (should (equal "unsent draft" (appkit-chatbuf-input-state)))
+    (let ((inhibit-read-only t))
+      (appkit-chatbuf-input-set-text "authorized settlement"))
+    (should (equal "authorized settlement" (appkit-chatbuf-input-string)))))
+
+(ert-deftest appkit-chatbuf-failed-input-replacement-restores-draft ()
+  (with-temp-buffer
+    (appkit-chatbuf-mode)
+    (appkit-chatbuf-install-prompt ">>> ")
+    (appkit-chatbuf-input-set-text "unsent draft")
+    (should-error (appkit-chatbuf-input-set-text 'invalid-text)
+                  :type 'wrong-type-argument)
+    (should (equal "unsent draft" (appkit-chatbuf-input-string)))
+    (should (equal "unsent draft" (appkit-chatbuf-input-state)))))
+
+(ert-deftest appkit-chatbuf-copy-cleans-timeline-but-preserves-input-objects ()
+  (with-temp-buffer
+    (appkit-chatbuf-mode)
+    (appkit-ui-insert-prefixed-lines "    " "Message")
+    (appkit-chatbuf-install-prompt ">>> ")
+    (appkit-chatbuf-input-insert
+     "@alice" :object '(:kind mention :id "alice")
+     :properties '(display "Alice"))
+    (let ((input-offset (- (appkit-chatbuf-input-start-position) (point-min)))
+          (copied (filter-buffer-substring (point-min) (point-max))))
+      (with-temp-buffer
+        (insert-for-yank copied)
+        (should (equal "Message\n>>> @alice " (buffer-substring-no-properties
+                                               (point-min) (point-max))))
+        (should-not (get-text-property (point-min) 'line-prefix))
+        (should-not (get-text-property (point-min) 'wrap-prefix))
+        (should (equal "Alice" (get-text-property (+ (point-min) input-offset) 'display)))
+        (should (equal '(:kind mention :id "alice")
+                       (get-text-property (+ (point-min) input-offset)
+                                          appkit-chatbuf-input-object-property)))))))
+
 (ert-deftest appkit-chatbuf-prompt-update-preserves-input-and-point-offset ()
   (with-temp-buffer
     (insert "timeline\n")
