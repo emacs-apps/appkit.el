@@ -564,7 +564,10 @@ Appkit prefix helpers instead of inserting it into buffer text."
   "Base mode for read-only discussion views with renderer-owned prefixes.
 
 Enable native soft wrapping by default, preserving avatar and reply
-indentation on continuation lines."
+indentation on continuation lines.  Copies retain source text without its
+display-only presentation."
+  (setq-local filter-buffer-substring-function
+              #'appkit-ui-buffer-substring-filter)
   (appkit-ui-set-soft-wrap t))
 
 (provide 'appkit-discussion)

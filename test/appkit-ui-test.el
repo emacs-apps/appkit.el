@@ -164,6 +164,133 @@
       (should-not (button-at (line-beginning-position 0)))
       (should-not called))))
 
+(ert-deftest appkit-ui-add-action-explicit-nil-disables-hover-not-activation ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          (called 0))
+      (insert "open")
+      (appkit-ui-add-action
+       (point-min) (point-max) (lambda () (setq called (1+ called)))
+       :mouse-face nil)
+      (should-not (text-property-not-all
+                   (point-min) (point-max) 'mouse-face nil))
+      (save-window-excursion
+        (switch-to-buffer buffer)
+        (goto-char (point-min))
+        (execute-kbd-macro (kbd "RET")))
+      (should (= called 1)))))
+
+(ert-deftest appkit-ui-adjacent-action-blocks-have-independent-hover ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          calls)
+      (insert "first\nbody\n")
+      (let ((second-start (point)))
+        (insert "second\nbody\n")
+        (appkit-ui-add-action
+         (point-min) second-start (lambda () (push 'first calls)) :face 'bold)
+        (appkit-ui-add-action
+         second-start (point-max) (lambda () (push 'second calls)) :face 'italic)
+        ;; Hover uses the contiguous mouse-face run, not the action's bounds.
+        (should (eq 'highlight (get-text-property (point-min) 'mouse-face)))
+        (should (= (1- second-start)
+                   (next-single-property-change (point-min) 'mouse-face)))
+        (should-not (get-text-property (1- second-start) 'mouse-face))
+        (should (eq 'highlight (get-text-property second-start 'mouse-face)))
+        (should (= second-start
+                   (previous-single-property-change (1+ second-start) 'mouse-face)))
+        (should (= (1- (point-max))
+                   (next-single-property-change second-start 'mouse-face)))
+        (should (eq 'bold (get-text-property (1- second-start) 'face)))
+        (should (eq 'italic (get-text-property (1- (point-max)) 'face)))
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          ;; The unhighlighted final newline still belongs to its action.
+          (goto-char (1- second-start))
+          (execute-kbd-macro (kbd "RET"))
+          (execute-kbd-macro
+           (appkit-ui-test--primary-click (selected-window) second-start)))
+        (should (equal '(second first) calls))))))
+
+(ert-deftest appkit-ui-clipboard-respects-partial-presentation-boundary ()
+  (let ((last-command nil)
+        (kill-ring nil)
+        (kill-ring-yank-pointer nil)
+        (interprogram-cut-function nil)
+        (interprogram-paste-function nil)
+        (yank-excluded-properties nil))
+    (with-temp-buffer
+      (insert (propertize ">> quoted\n" 'display "generated" 'face 'bold
+                          'line-prefix "outer " 'wrap-prefix "outer "
+                          'appkit-ui-source-line-marker t
+                          'rear-nonsticky '(display)))
+      (let ((boundary (point)))
+        (insert (propertize "DRAFT" 'display "editable" 'face 'italic
+                            'line-prefix "draft " 'wrap-prefix "draft "
+                            'rear-nonsticky '(display)))
+        (setq-local filter-buffer-substring-function
+                    (lambda (beg end delete)
+                      (appkit-ui-buffer-substring-filter beg end delete boundary)))
+        ;; A partial copy straddles generated and editable text.  Reversed
+        ;; bounds are valid for filter-buffer-substring and must stay so.
+        (kill-new (filter-buffer-substring (1- (point-max)) (1+ (point-min))))
+        (with-temp-buffer
+          (yank)
+          (should (equal "> quoted\nDRAF" (buffer-substring-no-properties
+                                           (point-min) (point-max))))
+          (let ((editable (+ (point-min) 9)))
+            (dolist (property '(display line-prefix wrap-prefix
+                                        appkit-ui-source-line-marker rear-nonsticky))
+              (should-not (text-property-not-all (point-min) editable property nil)))
+            (should (eq 'bold (get-text-property (point-min) 'face)))
+            (should (equal "editable" (get-text-property editable 'display)))
+            (should (equal "draft " (get-text-property editable 'line-prefix)))
+            (should (equal "draft " (get-text-property editable 'wrap-prefix)))
+            (should (equal '(display) (get-text-property editable 'rear-nonsticky)))
+            (should (eq 'italic (get-text-property editable 'face)))))
+        ;; A copy entirely after the boundary must not clean editable text.
+        (kill-ring-save (1+ boundary) (point-max))
+        (with-temp-buffer
+          (yank)
+          (should (equal "RAFT" (buffer-substring-no-properties
+                                 (point-min) (point-max))))
+          (should (equal "editable" (get-text-property (point-min) 'display))))
+        ;; A copy ending before the boundary is cleaned completely.
+        (kill-ring-save (point-min) (- boundary 2))
+        (with-temp-buffer
+          (yank)
+          (should (equal ">> quote" (buffer-substring-no-properties
+                                     (point-min) (point-max))))
+          (should-not (text-property-not-all
+                       (point-min) (point-max) 'display nil)))))))
+
+(ert-deftest appkit-ui-cut-captures-presentation-boundary-before-marker-moves ()
+  (let ((last-command nil)
+        (kill-ring nil)
+        (kill-ring-yank-pointer nil)
+        (interprogram-cut-function nil)
+        (interprogram-paste-function nil)
+        (yank-excluded-properties nil))
+    (with-temp-buffer
+      (insert (propertize "> " 'display "bar"))
+      (let ((boundary (copy-marker (point))))
+        (unwind-protect
+            (progn
+              (insert (propertize "draft" 'display "editable"))
+              (setq-local filter-buffer-substring-function
+                          (lambda (beg end delete)
+                            (appkit-ui-buffer-substring-filter beg end delete boundary)))
+              (kill-region (point-min) (point-max))
+              (should (equal "" (buffer-string)))
+              (with-temp-buffer
+                (yank)
+                (should (equal "> draft" (buffer-substring-no-properties
+                                          (point-min) (point-max))))
+                (should-not (get-text-property (point-min) 'display))
+                (should (equal "editable"
+                               (get-text-property (+ (point-min) 2) 'display)))))
+          (set-marker boundary nil))))))
+
 (ert-deftest appkit-ui-source-line-prefix-preserves-source-and-columns ()
   (with-temp-buffer
     (setq-local filter-buffer-substring-function

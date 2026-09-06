@@ -4,6 +4,30 @@
 (require 'cl-lib)
 (require 'appkit-discussion)
 
+(ert-deftest appkit-discussion-mode-copies-source-without-presentation ()
+  (let ((last-command nil)
+        (kill-ring nil)
+        (kill-ring-yank-pointer nil)
+        (interprogram-cut-function nil)
+        (interprogram-paste-function nil)
+        (yank-excluded-properties nil))
+    (with-temp-buffer
+      (appkit-discussion-mode)
+      (let ((inhibit-read-only t))
+        (insert "> quoted\n")
+        (put-text-property (point-min) (point-max) 'line-prefix "avatar ")
+        (appkit-ui-apply-source-line-prefix
+         (point-min) (point-max) (point-min) (+ (point-min) 2) "│ "))
+      (kill-ring-save (point-min) (point-max))
+      (with-temp-buffer
+        (yank)
+        (should (equal "> quoted\n" (buffer-substring-no-properties
+                                     (point-min) (point-max))))
+        (dolist (property '(display line-prefix wrap-prefix
+                                    appkit-ui-source-line-marker rear-nonsticky))
+          (should-not (text-property-not-all
+                       (point-min) (point-max) property nil)))))))
+
 (ert-deftest appkit-discussion-entry-owns-thread-layout-and-properties ()
   (with-temp-buffer
     (cl-letf (((symbol-function 'appkit-chat-avatar-prefixes)
@@ -22,7 +46,7 @@
            prefix "first\nsecond" :properties properties))
         :footer "3/5 replies"
         :properties '(client-entry "reply-2"
-                      rear-nonsticky (client-entry)))
+                                   rear-nonsticky (client-entry)))
        :width 50
        :indent-width 3))
     (should (string-match-p "Author replies" (buffer-string)))

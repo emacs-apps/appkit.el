@@ -135,24 +135,33 @@ either colour cannot be resolved."
                 (+ (* alpha foreground) (* (- 1 alpha) base)))
               accent background)))
         `(:background ,(apply #'color-rgb-to-hex (append blended '(2)))
-          :extend t)))))
+                      :extend t)))))
 
-(defun appkit-ui-buffer-substring-filter (beg end delete)
+(defun appkit-ui-buffer-substring-filter (beg end delete &optional presentation-end)
   "Copy BEG..END while removing display-only Appkit presentation.
 
 Underlying source characters remain intact.  Thus a source marker such as `>'
 may be visually replaced by a vertical bar while copied and yanked text still
 contains the original marker.  When DELETE is non-nil, delete the source region
-after taking the copy."
-  (let ((text (buffer-substring beg end)))
+after taking the copy.
+
+PRESENTATION-END, when non-nil, is the buffer position where generated
+presentation ends.  Only copied characters before that boundary lose their
+display-only properties; editable text at or after it retains its properties.
+Omitting the boundary cleans the entire copied region."
+  (let* ((text (buffer-substring beg end))
+         (presentation-length
+          (if presentation-end
+              (max 0 (min (length text) (- presentation-end (min beg end))))
+            (length text))))
     (when delete
       (save-excursion
         (goto-char beg)
         (delete-region beg end)))
     (remove-list-of-text-properties
-     0 (length text)
+     0 presentation-length
      '(display line-prefix wrap-prefix appkit-ui-source-line-marker
-       rear-nonsticky)
+               rear-nonsticky)
      text)
     text))
 
@@ -211,11 +220,14 @@ sees the same entry the user clicked."
     (unless (appkit-ui-activate-at position)
       (user-error "No action at point"))))
 
-(cl-defun appkit-ui-add-action (start end action &key help-echo face mouse-face)
+(cl-defun appkit-ui-add-action
+    (start end action &key help-echo face (mouse-face 'highlight))
   "Make START..END an Appkit action span that calls ACTION.
 
 ACTION is a zero-argument function.  HELP-ECHO describes that action.
-FACE is appended when non-nil.  MOUSE-FACE defaults to `highlight'.
+FACE is appended when non-nil.  MOUSE-FACE defaults to `highlight'; an
+explicit nil disables hover highlighting.  A terminating newline keeps its
+action and face but is excluded from hover, separating adjacent blocks.
 Do nothing when ACTION is not callable or the region is empty."
   (when (and (functionp action)
              (integer-or-marker-p start)
@@ -225,9 +237,12 @@ Do nothing when ACTION is not callable or the region is empty."
      start end
      (list appkit-ui-action-property action
            'keymap appkit-ui-action-map
-           'mouse-face (or mouse-face 'highlight)
+           'mouse-face mouse-face
            'pointer 'hand
            'help-echo (or help-echo "Activate")))
+    ;; Emacs highlights the whole contiguous run of equal mouse-face values.
+    (when (eq (char-before end) ?\n)
+      (remove-list-of-text-properties (1- end) end '(mouse-face)))
     (when face
       (add-face-text-property start end face 'append))
     action))
