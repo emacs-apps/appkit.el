@@ -47,6 +47,7 @@
 (require 'appkit-media)
 (require 'appkit-name-color)
 (require 'appkit-ui)
+(require 'appkit-fontify)
 (require 'appkit-markup)
 (require 'appkit-markup-ui)
 (require 'appkit-markup-codec)

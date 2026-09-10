@@ -512,10 +512,13 @@ Markup operations are local deterministic transformations:
 - parsing, printing, normalization, preview, and export do not mutate their
   inputs.
 
-Code Font Lock is presentation, not parsing.  Slackit retains its hook-free
-isolated fontifier during the first cutover.  Disco removes its current
-first-use major-mode hook behavior.  A shared safe fontifier is a separate
-presentation decision after markup parsing is stable.
+Code Font Lock is presentation, not parsing.  ~appkit-fontify-string~ accepts
+source text and a trusted client-selected major mode, returning unchanged text
+with only faces, or nil on failure.  It uses native ~font-lock-ensure~ in a
+disposable buffer marked ~untrusted-content~, suppresses standard mode hooks
+there, and disables automatic grammar installation.  It is not a sandbox for
+arbitrary mode code.  Clients retain language selection, base faces, fallback,
+and bounded result caches; markup parsing never invokes this fontifier.
 
 * Integration sequence
 
