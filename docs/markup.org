@@ -194,9 +194,11 @@ The insertion contract is:
   code-language presentation, and media acquisition.
 
 Quote and list geometry is display-only.  Semantic copy/export traverses the
-Document and does not depend on rendered buffer prefixes.  Clients may opt into
-~:block-spacing t~ for a blank line between blocks while retaining compact list
-items.  ~:quote-style~ receives the nesting depth and returns optional ~:prefix~
+Document and does not depend on rendered buffer prefixes.  Blocks are separated
+by a blank line by default, regardless of the source format.  List items remain
+compact; inline line breaks and preformatted text retain their spacing.  Clients
+needing compact blocks may pass ~:block-spacing nil~ explicitly.
+~:quote-style~ receives the nesting depth and returns optional ~:prefix~
 and ~:face~ entries; like link-action factories, it cannot edit the buffer and
 is not called during non-interactive insertion.
 

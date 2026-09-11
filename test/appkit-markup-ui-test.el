@@ -39,7 +39,7 @@
         (should (= start (point-min)))
         (should (= end (point-max)))
         (should (equal (buffer-string)
-                       "Heading\nBold and link\nquote\nitem\ncode\n"))
+                       "Heading\n\nBold and link\n\nquote\n\nitem\n\ncode\n"))
         (should (equal (get-text-property start 'row-id) 7))
         (should (equal (get-text-property start 'line-prefix) "    "))
         (goto-char (point-min))
@@ -109,7 +109,7 @@
              (appkit-markup-paragraph
               (list (appkit-markup-text "after")))))))
       (appkit-markup-ui-insert-document document)
-      (should (equal (buffer-string) "fallback\nafter\n")))))
+      (should (equal (buffer-string) "fallback\n\nafter\n")))))
 
 (ert-deftest appkit-markup-ui-final-newline-and-row-properties-are-explicit ()
   (with-temp-buffer
@@ -230,7 +230,7 @@
          depths)
     (with-temp-buffer
       (appkit-markup-ui-insert-document
-       document :interactive-p t :block-spacing t
+       document :interactive-p t
        :quote-style (lambda (depth)
                       (push depth depths)
                       (list :prefix (format "%d> " depth)
@@ -257,6 +257,23 @@
               (list (appkit-markup-paragraph (list (appkit-markup-text "quote")))))))
       :interactive-p t :quote-style (lambda (_) (insert "bad") nil)))
     (should (equal (buffer-string) "existing"))))
+
+(ert-deftest appkit-markup-ui-spacing-distinguishes-line-breaks-and-code ()
+  (let ((document
+         (appkit-markup-document
+          (list (appkit-markup-paragraph
+                 (list (appkit-markup-text "one")
+                       (appkit-markup-line-break)
+                       (appkit-markup-text "continued")))
+                (appkit-markup-preformatted "  code\n\nlast\n")
+                (appkit-markup-paragraph (list (appkit-markup-text "end")))))))
+    (pcase-dolist (`(,options ,expected)
+                  '((nil "one\ncontinued\n\n  code\n\nlast\n\nend\n")
+                    ((:block-spacing nil) "one\ncontinued\n  code\n\nlast\n\nend\n")))
+      (with-temp-buffer
+        (apply #'appkit-markup-ui-insert-document document options)
+        (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                       expected))))))
 
 (provide 'appkit-markup-ui-test)
 

@@ -257,17 +257,18 @@
 (cl-defun appkit-markup-ui-insert-document
     (document &key prefix properties (final-newline-p t) interactive-p
               link-action object-inserter preformatted-inserter
-              quote-style block-spacing)
+              quote-style (block-spacing t))
   "Insert semantic DOCUMENT at point and return its exact buffer bounds.
 
 PREFIX is applied through `appkit-ui-apply-line-prefix'.  PROPERTIES are outer
 row metadata and may not contain renderer-owned presentation/action properties.
 When FINAL-NEWLINE-P is nil, remove only the renderer's final block terminator.
 
-BLOCK-SPACING adds a blank line between blocks, keeping list items compact.
+BLOCK-SPACING defaults to t: separate blocks with a blank line, keeping list
+items compact.  Inline line breaks and preformatted text retain their spacing.
+Pass nil explicitly for compact block presentation.
 QUOTE-STYLE receives a quote depth starting at one and returns a plist with
 optional :prefix string and :face.  It must not mutate the rendering buffer.
-Omitting these options preserves the default compact presentation.
 
 INTERACTIVE-P permits LINK-ACTION, OBJECT-INSERTER, PREFORMATTED-INSERTER, and
 QUOTE-STYLE.  With nil INTERACTIVE-P no client callback runs: links
