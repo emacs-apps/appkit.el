@@ -80,14 +80,17 @@
               'block-secret
               (list (appkit-markup-paragraph
                      (list (appkit-markup-text "block fallback")))))
-             (appkit-markup-preformatted "code" "elisp")))))
+             (appkit-markup-preformatted "code" "elisp")
+             (appkit-markup-quote
+              (list (appkit-markup-paragraph (list (appkit-markup-text "quote")))))))))
       (appkit-markup-ui-insert-document
        document
        :interactive-p nil
        :link-action (lambda (&rest _) (ert-fail "Link callback ran"))
        :object-inserter (lambda (&rest _) (ert-fail "Object callback ran"))
        :preformatted-inserter
-       (lambda (&rest _) (ert-fail "Preformatted callback ran")))
+       (lambda (&rest _) (ert-fail "Preformatted callback ran"))
+       :quote-style (lambda (&rest _) (ert-fail "Quote style callback ran")))
       (should (string-match-p "link object fallback" (buffer-string)))
       (should (string-match-p "block fallback" (buffer-string)))
       (should (string-match-p "code" (buffer-string)))
@@ -210,6 +213,50 @@
           (put-text-property (point-min) (point-max) 'probe t)
           #'ignore)))
       (should (string-empty-p (buffer-string))))))
+
+(ert-deftest appkit-markup-ui-spaced-blocks-and-depth-aware-quotes ()
+  (let* ((paragraph (lambda (text) (appkit-markup-paragraph (list (appkit-markup-text text)))))
+         (document
+          (appkit-markup-document
+           (list (funcall paragraph "intro")
+                 (appkit-markup-quote
+                  (list (funcall paragraph "outer")
+                        (appkit-markup-quote (list (funcall paragraph "inner")))))
+                 (funcall paragraph "reply")
+                 (appkit-markup-list
+                  'unordered
+                  (list (appkit-markup-list-item (list (funcall paragraph "one")))
+                        (appkit-markup-list-item (list (funcall paragraph "two"))))))))
+         depths)
+    (with-temp-buffer
+      (appkit-markup-ui-insert-document
+       document :interactive-p t :block-spacing t
+       :quote-style (lambda (depth)
+                      (push depth depths)
+                      (list :prefix (format "%d> " depth)
+                            :face (list :background (if (= depth 1) "gray20" "gray30")))))
+      (should (equal (nreverse depths) '(1 2)))
+      (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                     "intro\n\nouter\n\ninner\n\nreply\n\none\ntwo\n"))
+      (goto-char (point-min))
+      (search-forward "inner")
+      (let ((start (match-beginning 0)))
+        (should (equal (get-text-property start 'face)
+                       '((:background "gray30") (:background "gray20"))))
+        (should (string-match-p "1> 2> " (get-text-property start 'line-prefix))))
+      (search-forward "reply")
+      (should-not (get-text-property (match-beginning 0) 'face)))))
+
+(ert-deftest appkit-markup-ui-quote-style-cannot-mutate-render-buffer ()
+  (with-temp-buffer
+    (insert "existing")
+    (should-error
+     (appkit-markup-ui-insert-document
+      (appkit-markup-document
+       (list (appkit-markup-quote
+              (list (appkit-markup-paragraph (list (appkit-markup-text "quote")))))))
+      :interactive-p t :quote-style (lambda (_) (insert "bad") nil)))
+    (should (equal (buffer-string) "existing"))))
 
 (provide 'appkit-markup-ui-test)
 

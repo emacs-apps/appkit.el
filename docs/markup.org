@@ -194,7 +194,11 @@ The insertion contract is:
   code-language presentation, and media acquisition.
 
 Quote and list geometry is display-only.  Semantic copy/export traverses the
-Document and does not depend on rendered buffer prefixes.
+Document and does not depend on rendered buffer prefixes.  Clients may opt into
+~:block-spacing t~ for a blank line between blocks while retaining compact list
+items.  ~:quote-style~ receives the nesting depth and returns optional ~:prefix~
+and ~:face~ entries; like link-action factories, it cannot edit the buffer and
+is not called during non-interactive insertion.
 
 * Codec contract
 

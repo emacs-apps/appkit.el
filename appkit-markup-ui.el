@@ -100,21 +100,21 @@
       (unless (= (point) (point-max))
         (error "Appkit markup inserter did not finish after its insertion")))))
 
-(defun appkit-markup-ui--call-link-action (function url)
-  "Call link action factory FUNCTION for URL without permitting buffer edits."
+(defun appkit-markup-ui--call-factory (function value)
+  "Call presentation factory FUNCTION with VALUE without permitting edits."
   (let ((buffer (current-buffer))
         (position (point))
         (minimum (point-min))
         (maximum (point-max))
         (tick (buffer-modified-tick))
         action)
-    (setq action (funcall function url))
+    (setq action (funcall function value))
     (unless (and (eq (current-buffer) buffer)
                  (= (point) position)
                  (= (point-min) minimum)
                  (= (point-max) maximum)
                  (= (buffer-modified-tick) tick))
-      (error "Appkit markup link action factory mutated renderer state"))
+      (error "Appkit markup presentation factory mutated renderer state"))
     action))
 
 (cl-defun appkit-markup-ui--insert-inlines
@@ -138,7 +138,7 @@
           (add-face-text-property start (point) 'appkit-markup-link-face 'append)
           (when (and interactive-p (functionp link-action))
             (when-let* ((action
-                         (appkit-markup-ui--call-link-action
+                         (appkit-markup-ui--call-factory
                           link-action (appkit-markup-link-url node))))
               (appkit-ui-add-action
                start (point) action
@@ -161,9 +161,13 @@
 
 (cl-defun appkit-markup-ui--insert-blocks
     (blocks &key interactive-p link-action object-inserter
-            preformatted-inserter)
+            preformatted-inserter quote-style block-spacing (quote-depth 0))
   "Insert normalized BLOCKS under the current rendering policy."
-  (dolist (block blocks)
+  (cl-loop for block in blocks for first = t then nil do
+    (when (and block-spacing (not first))
+      (unless (and (eq (char-before) ?\n)
+                   (eq (char-before (1- (point))) ?\n))
+        (insert "\n")))
     (cond
      ((appkit-markup-paragraph-p block)
       (appkit-markup-ui--insert-inlines
@@ -187,15 +191,24 @@
          'append)
         (appkit-markup-ui--ensure-terminator)))
      ((appkit-markup-quote-p block)
-      (let ((start (point)))
+      (let* ((start (point))
+             (depth (1+ quote-depth))
+             (style (and interactive-p quote-style
+                         (appkit-markup-ui--call-factory quote-style depth))))
         (appkit-markup-ui--insert-blocks
          (appkit-markup-quote-blocks block)
          :interactive-p interactive-p
          :link-action link-action
          :object-inserter object-inserter
-         :preformatted-inserter preformatted-inserter)
+         :preformatted-inserter preformatted-inserter
+         :quote-style quote-style :quote-depth depth :block-spacing block-spacing)
+        (when-let* ((face (plist-get style :face)))
+          ;; Inner quote styles retain precedence over enclosing backgrounds.
+          (add-face-text-property start (point) face 'append))
         (appkit-ui-apply-line-prefix
-         start (point) (propertize "│ " 'face 'appkit-markup-quote-face))))
+         start (point)
+         (or (plist-get style :prefix)
+             (propertize "│ " 'face 'appkit-markup-quote-face)))))
      ((appkit-markup-list-p block)
       (let ((number (or (appkit-markup-list-start block) 1)))
         (dolist (item (appkit-markup-list-items block))
@@ -210,7 +223,9 @@
              :interactive-p interactive-p
              :link-action link-action
              :object-inserter object-inserter
-             :preformatted-inserter preformatted-inserter)
+             :preformatted-inserter preformatted-inserter
+             :quote-style quote-style :quote-depth quote-depth)
+            ;; List items stay compact, independently of outer block spacing.
             ;; Empty list items retain one visible, selectable row.
             (when (= start (point))
               (appkit-markup-ui--ensure-terminator))
@@ -232,7 +247,7 @@
             (appkit-markup-ui--call-inserter object-inserter block)
           (appkit-markup-ui--insert-blocks
            (appkit-markup-object-block-fallback block)
-           :interactive-p nil)
+           :interactive-p nil :quote-depth quote-depth :block-spacing block-spacing)
           (add-face-text-property
            start (point) 'appkit-markup-object-fallback-face 'append))
         (when (or (= start (point)) (not (bolp)))
@@ -241,15 +256,21 @@
 
 (cl-defun appkit-markup-ui-insert-document
     (document &key prefix properties (final-newline-p t) interactive-p
-              link-action object-inserter preformatted-inserter)
+              link-action object-inserter preformatted-inserter
+              quote-style block-spacing)
   "Insert semantic DOCUMENT at point and return its exact buffer bounds.
 
 PREFIX is applied through `appkit-ui-apply-line-prefix'.  PROPERTIES are outer
 row metadata and may not contain renderer-owned presentation/action properties.
 When FINAL-NEWLINE-P is nil, remove only the renderer's final block terminator.
 
-INTERACTIVE-P permits LINK-ACTION, OBJECT-INSERTER, and
-PREFORMATTED-INSERTER.  With nil INTERACTIVE-P no client callback runs: links
+BLOCK-SPACING adds a blank line between blocks, keeping list items compact.
+QUOTE-STYLE receives a quote depth starting at one and returns a plist with
+optional :prefix string and :face.  It must not mutate the rendering buffer.
+Omitting these options preserves the default compact presentation.
+
+INTERACTIVE-P permits LINK-ACTION, OBJECT-INSERTER, PREFORMATTED-INSERTER, and
+QUOTE-STYLE.  With nil INTERACTIVE-P no client callback runs: links
 are inert, objects traverse their stored fallback, and code remains fixed-pitch.
 LINK-ACTION receives a URL and returns a zero-argument action or nil.  The two
 inserters receive their complete semantic node.  Their callback runs in an
@@ -270,7 +291,8 @@ Insertion is atomic.  Errors leave no partial document behind."
          :interactive-p interactive-p
          :link-action link-action
          :object-inserter object-inserter
-         :preformatted-inserter preformatted-inserter)
+         :preformatted-inserter preformatted-inserter
+         :quote-style quote-style :block-spacing block-spacing)
         (unless (eq (current-buffer) buffer)
           (error "Appkit markup renderer changed the current buffer"))
         (when (and (not final-newline-p)
