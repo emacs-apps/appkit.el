@@ -80,3 +80,21 @@
 (provide 'appkit-evil-test)
 
 ;;; appkit-evil-test.el ends here
+
+(ert-deftest
+    appkit-evil-normalizes-live-descendants-after-parent-bindings nil
+  (let*
+      ((parent (make-symbol "appkit-test-parent"))
+       (child (make-symbol "appkit-test-child"))
+       (parent-map (make-sparse-keymap))
+       (child-map (make-sparse-keymap)))
+    (put child 'derived-mode-parent parent)
+    (set-keymap-parent child-map parent-map)
+    (with-temp-buffer
+      (setq major-mode child) (use-local-map child-map)
+      (evil-local-mode 1) (evil-normal-state)
+      (should-not (eq (key-binding (kbd "z Z")) #'ignore))
+      (evil-define-key* 'normal parent-map (kbd "z Z") #'ignore)
+      (should-not (eq (key-binding (kbd "z Z")) #'ignore))
+      (appkit-evil-normalize-buffers (list parent))
+      (should (eq (key-binding (kbd "z Z")) #'ignore)))))

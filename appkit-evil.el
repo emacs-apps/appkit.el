@@ -205,12 +205,13 @@ Do nothing until Evil is loaded or when STATE is nil."
       (evil-set-initial-state mode state))))
 
 (defun appkit-evil-normalize-buffers (modes)
-  "Refresh Evil keymap projections in live buffers using major MODES."
+  "Refresh Evil projections in buffers using MODES or their descendants."
   (dolist (buffer (buffer-list))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (when (memq major-mode modes)
+        (when (apply #'derived-mode-p modes)
           (appkit-evil-normalize-keymaps))))))
+
 
 (defun appkit-evil-chatbuf-enter-input ()
   "Focus the current Appkit chat composer and enter Evil insert state."
