@@ -17,6 +17,9 @@
 
 ;;; Code:
 
+(declare-function turn-off-evil-snipe-mode "evil-snipe" ())
+(declare-function turn-off-evil-snipe-override-mode "evil-snipe" ())
+
 (require 'cl-lib)
 (require 'appkit-directory)
 (require 'appkit-chatbuf)
@@ -250,6 +253,10 @@ Safe to call multiple times."
     (appkit-evil--define-directory-keys)))
 
 (appkit-evil-setup)
+
+(with-eval-after-load 'evil-snipe
+  (add-hook 'appkit-directory-mode-hook #'turn-off-evil-snipe-mode)
+  (add-hook 'appkit-directory-mode-hook #'turn-off-evil-snipe-override-mode))
 
 (provide 'appkit-evil)
 
