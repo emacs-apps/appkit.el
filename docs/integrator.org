@@ -497,12 +497,18 @@ combined state shorthands group string key descriptions under an explicit
 ~:map~ without adding a Doom or General dependency.  The underlying installer
 defers until both Evil and the target map exist.
 
-Read-only surfaces may add ~appkit-evil-define-readonly-keys~.  Chat timelines
-can bind ~i~ to ~appkit-evil-chatbuf-enter-input~; it moves to the Appkit-owned
-composer and enters insert state in one command.  Timeline-only bindings must
-remain on the point-sensitive timeline minor map so they disappear in editable
-input.  Use ~appkit-evil-set-initial-states~ and
+Read-only surfaces may add ~appkit-evil-define-readonly-keys~.  Keep
+timeline-only bindings on the point-sensitive timeline minor map so they
+disappear in editable input.  Use ~appkit-evil-set-initial-states~ and
 ~appkit-evil-normalize-buffers~ for client lifecycle setup.
+
+Message actions follow Telega where supported.  Keep application commands
+(~ga~), chat navigation (~gA~), and point-local activation separate.
+Reuse an existing native navigation prefix rather than duplicating it.
+Exact inline actions take precedence over the containing row.
+
+Disable both Snipe modes through application major-mode hooks registered
+with ~with-eval-after-load 'evil-snipe~.
 
 * Namespaces
 
