@@ -136,58 +136,63 @@ are available."
            (error "Invalid Appkit Evil state shorthand: %c" letter)))
      (string-to-list (substring (symbol-name keyword) 1)))))
 
-(defmacro appkit-evil-map (&rest clauses)
+(defmacro appkit-evil-map (&rest args)
   "Define grouped Evil bindings using Doom-style state shorthands.
 
-Each clause is a list containing `:map' KEYMAP-SYMBOL, a state keyword such as
-`:n', `:m', or `:nm', and string key/definition pairs.  Changing the state
-keyword starts another binding group for the same map.  Keymaps and Evil may be
-loaded later because every group delegates to `appkit-evil-define-keys'.
+ARGS is a flat stream of `:map' KEYMAP-SYMBOL, state keywords such as `:n',
+`:m', or `:nm', and string key/definition pairs.  A state keyword applies to
+subsequent pairs until another state keyword or `:map'.  Each `:map' requires
+a new state keyword.  Keymaps and Evil may be loaded later because every
+group delegates to `appkit-evil-define-keys'.
 
 For example:
 
   (appkit-evil-map
-    (:map example-mode-map
-     :nm \"RET\" (function example-open)
-         \"g r\" (function example-refresh)
-     :n  \"D\"   (function example-delete)))"
+    :map example-mode-map
+    :nm \"RET\" (function example-open)
+        \"g r\" (function example-refresh)
+    :n  \"D\"   (function example-delete)
+    :map example-other-mode-map
+    :m  \"RET\" (function example-open))"
   (declare (indent 0) (debug t))
-  (let (forms)
-    (dolist (clause clauses)
-      (unless (listp clause)
-        (error "Appkit Evil map clause is not a list: %S" clause))
-      (let ((cursor clause)
-            keymap
-            states
-            bindings)
-        (cl-labels
-            ((flush
-               ()
-               (when bindings
-                 (unless (and keymap states)
-                   (error "Appkit Evil bindings require :map and a state keyword"))
-                 (push
-                  `(appkit-evil-define-keys
-                       ',states ',keymap ,@(nreverse bindings))
-                  forms)
-                 (setq bindings nil))))
-          (while cursor
-            (let ((item (pop cursor)))
-              (cond
-               ((eq item :map)
-                (flush)
-                (unless cursor
-                  (error "Appkit Evil :map has no keymap"))
-                (setq keymap (pop cursor)))
-               ((keywordp item)
-                (flush)
-                (setq states (appkit-evil--states-from-keyword item)))
-               (t
-                (unless cursor
-                  (error "Appkit Evil key has no definition: %S" item))
-                (push item bindings)
-                (push (pop cursor) bindings)))))
-          (flush))))
+  (let (forms keymap states bindings)
+    (cl-labels
+        ((flush
+           ()
+           (when bindings
+             (push
+              `(appkit-evil-define-keys
+                   ',states ',keymap ,@(nreverse bindings))
+              forms)
+             (setq bindings nil))))
+      (while args
+        (let ((item (pop args)))
+          (cond
+           ((eq item :map)
+            (flush)
+            (unless (and args (symbolp (car args))
+                         (not (keywordp (car args)))
+                         (not (memq (car args) '(nil t))))
+              (error "Appkit Evil :map requires a keymap symbol"))
+            (setq keymap (pop args)
+                  states nil))
+           ((keywordp item)
+            (flush)
+            (unless keymap
+              (error "Appkit Evil state keyword requires :map"))
+            (setq states (appkit-evil--states-from-keyword item))
+            (unless states
+              (error "Appkit Evil state keyword has no states")))
+           (t
+            (unless (stringp item)
+              (error "Appkit Evil key must be a string: %S" item))
+            (unless (and keymap states)
+              (error "Appkit Evil bindings require :map and a state keyword"))
+            (unless (and args (not (keywordp (car args))))
+              (error "Appkit Evil key has no definition: %S" item))
+            (push item bindings)
+            (push (pop args) bindings)))))
+      (flush))
     `(progn ,@(nreverse forms))))
 
 (defun appkit-evil-normalize-keymaps ()
@@ -235,12 +240,12 @@ Call this before adding surface-specific bindings."
   "Install modal bindings for `appkit-directory-mode-map'."
   (appkit-evil-define-readonly-keys 'appkit-directory-mode-map)
   (appkit-evil-map
-    (:map appkit-directory-mode-map
-     :nm
-     "RET" #'appkit-directory-activate
-     "<return>" #'appkit-directory-activate
-     "TAB" #'appkit-directory-tab-dwim
-     "<backtab>" #'appkit-directory-previous-item)))
+    :map appkit-directory-mode-map
+    :nm
+    "RET" #'appkit-directory-activate
+    "<return>" #'appkit-directory-activate
+    "TAB" #'appkit-directory-tab-dwim
+    "<backtab>" #'appkit-directory-previous-item))
 
 ;;;###autoload
 (defun appkit-evil-setup ()

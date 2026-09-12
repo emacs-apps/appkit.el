@@ -494,8 +494,22 @@ starter returns its handle.
 Keep ordinary mode maps as the Emacs-state contract.  Use
 ~appkit-evil-map~ for client modal bindings: its Doom-style ~:n~, ~:m~, and
 combined state shorthands group string key descriptions under an explicit
-~:map~ without adding a Doom or General dependency.  The underlying installer
-defers until both Evil and the target map exist.
+~:map~ without adding a Doom or General dependency.  Arguments form one flat
+stream, not a list of clauses.  State shorthands persist across key/definition
+pairs until another state shorthand or ~:map~.  Each ~:map~ resets the state,
+so every map needs an explicit state shorthand.  For example:
+
+#+begin_src emacs-lisp
+(appkit-evil-map
+  :map example-mode-map
+  :nm "RET" #'example-open
+      "g r" #'example-refresh
+  :n "D" #'example-delete
+  :map example-other-mode-map
+  :m "RET" #'example-open)
+#+end_src
+
+The underlying installer defers until both Evil and the target map exist.
 
 Read-only surfaces may add ~appkit-evil-define-readonly-keys~.  Keep
 timeline-only bindings on the point-sensitive timeline minor map so they

@@ -45,27 +45,64 @@
     (should-not (eq (key-binding (kbd "RET")) #'ignore))))
 
 (ert-deftest appkit-evil-map-groups-maps-and-state-shorthands ()
-  (let ((map (make-sparse-keymap)))
+  (let ((map (make-sparse-keymap))
+        (other-map (make-sparse-keymap)))
     (set 'appkit-evil-test-string-mode-map map)
+    (set 'appkit-evil-test-other-mode-map other-map)
     (unwind-protect
         (progn
           (appkit-evil-map
-            (:map appkit-evil-test-string-mode-map
-             :nm
-             "g r" #'ignore
-             :n
-             "D" #'ignore))
+            :map appkit-evil-test-string-mode-map
+            :nm
+            "g r" #'ignore
+            "g o" #'beginning-of-buffer
+            :n
+            "D" #'ignore
+            :map appkit-evil-test-other-mode-map
+            :i
+            "g r" #'forward-char)
           (with-temp-buffer
             (use-local-map map)
             (evil-normal-state)
             (should (eq (key-binding (kbd "g r")) #'ignore))
+            (should (eq (key-binding (kbd "g o")) #'beginning-of-buffer))
             (should (eq (key-binding (kbd "D")) #'ignore))
             (should (eq (key-binding (kbd "g g"))
                         #'evil-goto-first-line))
             (evil-motion-state)
             (should (eq (key-binding (kbd "g r")) #'ignore))
-            (should-not (eq (key-binding (kbd "D")) #'ignore))))
-      (makunbound 'appkit-evil-test-string-mode-map))))
+            (should (eq (key-binding (kbd "g o")) #'beginning-of-buffer))
+            (should-not (eq (key-binding (kbd "D")) #'ignore)))
+          (with-temp-buffer
+            (use-local-map other-map)
+            (evil-normal-state)
+            (should-not (eq (key-binding (kbd "D")) #'ignore))
+            (should-not (eq (key-binding (kbd "g r")) #'forward-char))
+            (evil-motion-state)
+            (should-not (eq (key-binding (kbd "g r")) #'ignore))
+            (evil-insert-state)
+            (should (eq (key-binding (kbd "g r")) #'forward-char))))
+      (makunbound 'appkit-evil-test-string-mode-map)
+      (makunbound 'appkit-evil-test-other-mode-map))))
+
+(ert-deftest appkit-evil-map-requires-state-after-each-map ()
+  (should-error
+   (macroexpand
+    '(appkit-evil-map
+       :map appkit-evil-test-string-mode-map
+       :nm "g r" #'ignore
+       :map appkit-evil-test-other-mode-map
+       "D" #'ignore))))
+
+(ert-deftest appkit-evil-map-rejects-malformed-bindings ()
+  (dolist (args '((:map)
+                  (:map (make-sparse-keymap) :n "D" ignore)
+                  (:n "D" ignore)
+                  (:map example-mode-map "D" ignore)
+                  (:map example-mode-map :n "D")
+                  (:map example-mode-map :n "D" :m "x" ignore)
+                  ((:map example-mode-map :n "D" ignore))))
+    (should-error (macroexpand (cons 'appkit-evil-map args)))))
 
 (ert-deftest appkit-evil-chatbuf-enters-input-in-one-command ()
   (let (focused inserted)
