@@ -60,8 +60,10 @@
 (require 'appkit-chat-ins)
 (require 'appkit-discussion)
 (require 'appkit-directory)
-(require 'appkit-evil)
 
 (provide 'appkit)
+
+(with-eval-after-load 'evil
+  (require 'appkit-evil nil t))
 
 ;;; appkit.el ends here

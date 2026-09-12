@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'appkit)
 (require 'evil)
+(require 'appkit-evil)
 
 (ert-deftest appkit-evil-defers-state-bindings-until-keymap-exists ()
   (let ((symbol 'appkit-evil-test-deferred-mode-map))
