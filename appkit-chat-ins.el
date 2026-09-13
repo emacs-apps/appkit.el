@@ -160,7 +160,8 @@ empty."
   (cond
    ((appkit-ui-prefix-state-p prefix) prefix)
    ((stringp prefix) (appkit-ui-make-prefix-state prefix prefix))
-   (t (appkit-ui-card-prefix-state :face border-face))))
+   (t (appkit-ui-card-prefix-state
+       :face border-face))))
 
 (cl-defun appkit-chat-ins-insert-prefixed-line (text &key prefix face properties
                                                      action help-echo)

@@ -330,7 +330,8 @@ When LINK-LABEL-P is non-nil, accept styled text nodes only."
                      (appkit-markup--normalize-inlines
                       (appkit-markup-paragraph-children node) active
                       (append path '(children)))))
-          (appkit-markup--paragraph-create :children children)))
+          (appkit-markup--paragraph-create
+           :children children)))
        ((appkit-markup-heading-p node)
         (let ((level (appkit-markup-heading-level node)))
           (unless (and (integerp level) (<= 1 level 6))
@@ -347,7 +348,8 @@ When LINK-LABEL-P is non-nil, accept styled text nodes only."
                      (appkit-markup--normalize-blocks
                       (appkit-markup-quote-blocks node) active
                       (append path '(blocks)))))
-          (appkit-markup--quote-create :blocks blocks)))
+          (appkit-markup--quote-create
+           :blocks blocks)))
        ((appkit-markup-list-p node)
         (let ((style (appkit-markup-list-style node))
               (start (appkit-markup-list-start node))

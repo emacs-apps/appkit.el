@@ -386,7 +386,8 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
     (error "Cannot create an inline surface for a closed video session"))
   (when (and close-function (not (functionp close-function)))
     (error "Appkit inline video close function is not callable"))
-  (let* ((surface (appkit-media--video-inline-create :session session))
+  (let* ((surface (appkit-media--video-inline-create
+                   :session session))
          (video-session
           (appkit-media-video-session-video-session session)))
     (condition-case error-data
@@ -661,7 +662,9 @@ surface, or close the returned session."
             (appkit-media-present-video-session
              (setq session
                    (appkit-media-video-session-create
-                    (appkit-media-resource-create :file path :name (file-name-nondirectory path))
+                    (appkit-media-resource-create
+                     :file path
+                     :name (file-name-nondirectory path))
                     label
                     :owner owner))
              label

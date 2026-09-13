@@ -34,7 +34,8 @@ multiple media cards remain segment-aware.")
 
 CALLBACK is a zero-argument function.  HELP-ECHO defaults to `Activate'.  Do
 nothing when CALLBACK is not callable or the region is empty."
-  (appkit-ui-add-action start end callback :help-echo help-echo))
+  (appkit-ui-add-action start end callback
+                        :help-echo help-echo))
 
 (cl-defun appkit-media-card-context-create
     (&key payload kind title open-action download-action cancel-action

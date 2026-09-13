@@ -116,7 +116,9 @@
                                (and (integerp part) (>= part 0))))
                          path))
     (signal 'appkit-markup-codec-error '(invalid-loss)))
-  (appkit-markup-loss--create :kind kind :path (copy-sequence path)))
+  (appkit-markup-loss--create
+   :kind kind
+   :path (copy-sequence path)))
 
 (cl-defun appkit-markup-parse-result (document &key diagnostics side-channels)
   "Return a validated parse result for DOCUMENT."

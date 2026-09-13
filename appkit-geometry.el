@@ -148,7 +148,8 @@ FRAME-PREDICATE restricts candidates by their owning frame."
           (if (and (frame-live-p frame) (display-graphic-p frame))
               (list (appkit-geometry-columns-pixel-width target window))
             target)))
-    (insert (appkit-geometry-display-space :align-to align-to))))
+    (insert (appkit-geometry-display-space
+             :align-to align-to))))
 
 (defun appkit-geometry-window-width (&optional window margin-columns)
   "Return usable columns for WINDOW, reserving MARGIN-COLUMNS at the right."

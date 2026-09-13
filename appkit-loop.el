@@ -598,7 +598,8 @@ send that encounters a runtime fault re-signals the stored condition."
       (appkit-loop--data-lane loop) (appkit-loop--send-reserve loop)))
     'busy)
    (t
-    (let ((ticket (appkit-loop--ticket-create :state 'pending)))
+    (let ((ticket (appkit-loop--ticket-create
+                   :state 'pending)))
       (appkit-loop--cancel-scheduled loop)
       (unwind-protect
           (let ((appkit-loop--send-context (cons loop ticket)))

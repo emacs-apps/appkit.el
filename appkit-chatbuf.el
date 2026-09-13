@@ -152,7 +152,8 @@ When RESET-HISTORY-P is non-nil, clear shared history navigation state."
   "Clear canonical composer input.
 
 When RESET-HISTORY-P is non-nil, clear shared history navigation state."
-  (appkit-chatbuf-input-state-set "" :reset-history-p reset-history-p))
+  (appkit-chatbuf-input-state-set ""
+                                  :reset-history-p reset-history-p))
 
 (cl-defun appkit-chatbuf-input-state-sync (&key (reset-history-p t))
   "Synchronize canonical composer input from the editable tail region.

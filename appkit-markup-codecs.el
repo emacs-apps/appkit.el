@@ -516,7 +516,8 @@
                       (stringp bullet)
                       (string-match "[0-9]+" bullet)
                       (string-to-number (match-string 0 bullet)))))
-           (push (appkit-markup-list style items :start start) blocks)))
+           (push (appkit-markup-list style items
+                                     :start start) blocks)))
         ('src-block
          (push (appkit-markup-preformatted
                 (string-remove-suffix

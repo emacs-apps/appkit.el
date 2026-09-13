@@ -475,7 +475,8 @@ Appkit prefix helpers instead of inserting it into buffer text."
     (if-let* ((body-inserter (appkit-discussion-entry-body-inserter entry)))
         (funcall body-inserter body-prefix properties)
       ;; Keep the lower avatar slice visible for body-less entries.
-      (appkit-ui-insert-prefixed-lines body-prefix "" :properties properties))
+      (appkit-ui-insert-prefixed-lines body-prefix ""
+                                       :properties properties))
     (when-let* ((footer (appkit-discussion-entry-footer entry)))
       (unless (string-empty-p footer)
         (appkit-ui-insert-prefixed-lines

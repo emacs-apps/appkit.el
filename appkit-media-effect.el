@@ -200,7 +200,9 @@ which is cancelled when the viewer closes or the presentation is cancelled."
                 (setq setup-cancellation capability)
                 ;; Setup can synchronously close the viewer before it returns.
                 (when finished-p (cancel-setup))))
-            (appkit-cancellation-create :kind 'logical :cancel #'close-presentation))
+            (appkit-cancellation-create
+             :kind 'logical
+             :cancel #'close-presentation))
         ((error quit)
          (close-presentation)
          (funcall reject (error-message-string condition))

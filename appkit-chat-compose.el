@@ -409,11 +409,15 @@ automatic separators between header, footer, and prompt."
   (appkit-surface-type-create
    :name 'appkit-chat-compose
    :mode #'appkit-chat-compose--initialize-mode
-   :init (lambda (_context _input) (appkit-next :model nil :render t))
+   :init (lambda (_context _input) (appkit-next
+                                    :model nil
+                                    :render t))
    :update (lambda (_context model message)
              (unless (eq message 'refresh)
                (error "Unsupported compose Surface message: %S" message))
-             (appkit-next :model model :render t))
+             (appkit-next
+              :model model
+              :render t))
    :renderer-factory #'appkit-chat-compose--renderer))
 
 (defun appkit-chat-compose--renderer (_surface)
