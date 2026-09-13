@@ -37,8 +37,18 @@
 
 (cl-defstruct
     (appkit-app (:constructor appkit-app--create) (:copier nil))
-  identity type loop effect-runtime source-runtime resource-coordinator
-  command-batch command-limit surfaces handles surface-limit alive-p)
+  identity
+  type
+  loop
+  effect-runtime
+  source-runtime
+  resource-coordinator
+  command-batch
+  command-limit
+  surfaces
+  handles
+  surface-limit
+  alive-p)
 
 (defun appkit-app-live-p (app)
   "Return non-nil when APP can accept domain work."

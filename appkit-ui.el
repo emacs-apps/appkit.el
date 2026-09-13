@@ -135,7 +135,7 @@ either colour cannot be resolved."
                 (+ (* alpha foreground) (* (- 1 alpha) base)))
               accent background)))
         `(:background ,(apply #'color-rgb-to-hex (append blended '(2)))
-                      :extend t)))))
+          :extend t)))))
 
 (defun appkit-ui-buffer-substring-filter (beg end delete &optional presentation-end)
   "Copy BEG..END while removing display-only Appkit presentation.
@@ -161,7 +161,7 @@ Omitting the boundary cleans the entire copied region."
     (remove-list-of-text-properties
      0 presentation-length
      '(display line-prefix wrap-prefix appkit-ui-source-line-marker
-               rear-nonsticky)
+       rear-nonsticky)
      text)
     text))
 

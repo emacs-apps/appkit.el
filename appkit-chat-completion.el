@@ -43,7 +43,13 @@ keep expensive image annotations lazy until the completion UI requests a row.
 GROUP is a string or function of CANDIDATE naming its completion section.
 SEARCH-TERMS contains alternate strings matched by the shared table.  VALUE
 carries the opaque application object used by an insertion callback."
-  label insert prefix annotation search-terms value group)
+  label
+  insert
+  prefix
+  annotation
+  search-terms
+  value
+  group)
 
 (defvar-local appkit-chat-completion-functions nil
   "Ordered functions tried by `appkit-chat-completion-complete'.

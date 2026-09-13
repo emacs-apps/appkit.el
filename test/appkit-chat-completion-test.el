@@ -34,10 +34,13 @@
     (insert "@gre")
     (let* ((candidate
             (appkit-chat-completion-candidate-create
-             :label "@GreenKite" :insert "<@1356835185>"
-             :prefix "[G] " :annotation " QQ 1356835185"))
+             :label "@GreenKite"
+             :insert "<@1356835185>"
+             :prefix "[G] "
+             :annotation " QQ 1356835185"))
            (capf (appkit-chat-completion-capf
-                  (- (point) 4) (point) (list candidate) :suffix " "))
+                  (- (point) 4) (point) (list candidate)
+                  :suffix " "))
            (table (nth 2 capf))
            (affix (plist-get (nthcdr 3 capf) :affixation-function))
            (exit (plist-get (nthcdr 3 capf) :exit-function)))
@@ -55,7 +58,8 @@
     (appkit-chatbuf-install-prompt ">>> ")
     (insert "@alice")
     (let* ((candidate (appkit-chat-completion-candidate-create
-                       :label "@alice" :insert "<@1>"))
+                       :label "@alice"
+                       :insert "<@1>"))
            (capf (appkit-chat-completion-capf
                   (- (point) 6) (point) (list candidate)))
            (exit (plist-get (nthcdr 3 capf) :exit-function)))
@@ -70,11 +74,13 @@
     (insert "@old")
     (appkit-chatbuf-input-state-sync)
     (let ((candidate (appkit-chat-completion-candidate-create
-                      :label "@new" :insert "@new")))
+                      :label "@new"
+                      :insert "@new")))
       (delete-region (- (point) 4) (point))
       (insert "@new")
       (appkit-chat-completion-apply-candidate
-       "@new" candidate :suffix " ")
+       "@new" candidate
+       :suffix " ")
       (should (equal "@new " (appkit-chatbuf-input-string)))
       (should (equal "@new " (appkit-chatbuf-input-state))))))
 
@@ -99,11 +105,13 @@
     (insert "@old rest")
     (goto-char (+ (appkit-chatbuf-input-start-position) 4))
     (let ((candidate (appkit-chat-completion-candidate-create
-                      :label "@new" :insert "<@1>")))
+                      :label "@new"
+                      :insert "<@1>")))
       (delete-region (- (point) 4) (point))
       (insert "@new")
       (appkit-chat-completion-apply-candidate
-       "@new" candidate :suffix " ")
+       "@new" candidate
+       :suffix " ")
       (should (equal "<@1> rest" (appkit-chatbuf-input-string))))))
 
 (ert-deftest appkit-chat-completion-decorations-are-lazy ()
@@ -135,7 +143,8 @@
     (emacs-lisp-mode)
     (let* ((candidate
             (appkit-chat-completion-candidate-create
-             :label "@徐天天" :search-terms '("GreenKite")))
+             :label "@徐天天"
+             :search-terms '("GreenKite")))
            (capf (appkit-chat-completion-capf 1 1 (list candidate)))
            (table (nth 2 capf)))
       (should (equal '("@徐天天") (all-completions "@@green" table))))))
@@ -144,7 +153,8 @@
   (let* ((appkit-chat-completion-ignore-case nil)
          (candidate
           (appkit-chat-completion-candidate-create
-           :label "@user" :search-terms '("GreenKite")))
+           :label "@user"
+           :search-terms '("GreenKite")))
          (capf (appkit-chat-completion-capf 1 1 (list candidate)))
          (table (nth 2 capf)))
     (should-not (all-completions "@green" table))
@@ -156,7 +166,8 @@
     (appkit-chatbuf-install-prompt ">>> ")
     (insert "x")
     (let ((candidate (appkit-chat-completion-candidate-create
-                      :label "very-long-label" :insert "bad")))
+                      :label "very-long-label"
+                      :insert "bad")))
       (should-not
        (appkit-chat-completion-apply-candidate "very-long-label" candidate))
       (should (string-prefix-p "timeline\n>>> " (buffer-string))))))
@@ -167,7 +178,8 @@
     (insert "@徐天天")
     (let* ((candidate
             (appkit-chat-completion-candidate-create
-             :label "@徐天天" :value '((user-id . "1356835185"))))
+             :label "@徐天天"
+             :value '((user-id . "1356835185"))))
            (capf
             (appkit-chat-completion-capf
              (- (point) 4) (point) (list candidate)
@@ -271,7 +283,8 @@
                      (substring-no-properties title))))))
       (should
        (eq (appkit-chat-completion-read-visual
-            "Visual: " (list candidate) :default-candidate candidate)
+            "Visual: " (list candidate)
+            :default-candidate candidate)
            candidate))
       (should (string-match-p "surprised" seen-title))
       (should (equal (get-text-property 0 'display seen-prefix) preview))

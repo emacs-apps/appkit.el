@@ -23,10 +23,12 @@
   (with-temp-buffer
     (appkit-compose-setup)
     (let ((first (appkit-compose-operation-begin
-                  'submitting :label "Sending")))
+                  'submitting
+                  :label "Sending")))
       (should (appkit-compose-operation-finish first))
       (let ((second (appkit-compose-operation-begin
-                     'submitting :label "Retrying")))
+                     'submitting
+                     :label "Retrying")))
         (should-not (appkit-compose-operation-finish first))
         (should (appkit-compose-operation-current-p second))
         (should (equal "Retrying" (appkit-compose-status-text)))
@@ -60,7 +62,8 @@
       (appkit-compose-setup :generation 4)
       (let ((owner
              (appkit-compose-operation-begin
-              'saving :cancel-function (lambda () (setq cancelled t)))))
+              'saving
+              :cancel-function (lambda () (setq cancelled t)))))
         (appkit-compose-reset :generation 9)
         (should cancelled)
         (should (= 9 (appkit-compose-generation)))

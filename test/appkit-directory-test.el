@@ -20,24 +20,48 @@
   "Return a section, group, two items, note, and spacer projection."
   (list
    (appkit-directory-entry-create
-    :key '(section . "s") :role 'section :label "Scope"
-    :foldable-p t :fold-key '(section . "s")
-    :fold-default-expanded-p t :expanded-p t)
+    :key '(section . "s")
+    :role 'section
+    :label "Scope"
+    :foldable-p t
+    :fold-key '(section . "s")
+    :fold-default-expanded-p t
+    :expanded-p t)
    (appkit-directory-entry-create
-    :key '(group . "g") :role 'group :section-key '(section . "s")
-    :label "Group" :indent 2
-    :foldable-p t :fold-key '(group . "g")
-    :fold-default-expanded-p t :expanded-p (and first-expanded-p t))
+    :key '(group . "g")
+    :role 'group
+    :section-key '(section . "s")
+    :label "Group"
+    :indent 2
+    :foldable-p t
+    :fold-key '(group . "g")
+    :fold-default-expanded-p t
+    :expanded-p (and first-expanded-p t))
    (appkit-directory-entry-create
-    :key '(item . "one") :role 'item :section-key '(section . "s")
-    :group-key '(group . "g") :label "One" :indent 4
-    :item-p t :unread-p t :payload 'one)
+    :key '(item . "one")
+    :role 'item
+    :section-key '(section . "s")
+    :group-key '(group . "g")
+    :label "One"
+    :indent 4
+    :item-p t
+    :unread-p t
+    :payload 'one)
    (appkit-directory-entry-create
-    :key '(item . "two") :role 'item :section-key '(section . "s")
-    :group-key '(group . "g") :label "Two" :indent 4
-    :item-p t :payload 'two)
+    :key '(item . "two")
+    :role 'item
+    :section-key '(section . "s")
+    :group-key '(group . "g")
+    :label "Two"
+    :indent 4
+    :item-p t
+    :payload 'two)
    (appkit-directory-entry-create
-    :key 'note :role 'note :label "Note" :indent 2 :face 'shadow)
+    :key 'note
+    :role 'note
+    :label "Note"
+    :indent 2
+    :face 'shadow)
    (appkit-directory-entry-create :key 'gap :role 'spacer)))
 
 (ert-deftest appkit-directory-renders-flat-roles-with-stable-properties ()
@@ -81,9 +105,14 @@
        surface
        (list
         (appkit-directory-entry-create
-         :key 'section :role 'section :label "Section")
+         :key 'section
+         :role 'section
+         :label "Section")
         (appkit-directory-entry-create
-         :key 'item :role 'item :section-key 'section :indent 2
+         :key 'item
+         :role 'item
+         :section-key 'section
+         :indent 2
          :item-p t)))
       (should (equal "Custom section\n  Handled\n" (buffer-string)))
       (should-not item-fallback-called))))
@@ -102,9 +131,14 @@
        surface
        (list
         (appkit-directory-entry-create
-         :key 'section :role 'section :label "Section")
+         :key 'section
+         :role 'section
+         :label "Section")
         (appkit-directory-entry-create
-         :key 'item :role 'item :section-key 'section :label "Item"
+         :key 'item
+         :role 'item
+         :section-key 'section
+         :label "Item"
          :item-p t)))
       (should (equal "Section\nItem\n" (buffer-string)))
       (should (equal '(item section) seen)))))
@@ -122,14 +156,19 @@
       surface
       (list
        (appkit-directory-entry-create
-        :key 'note :role 'note :label "Ignored"))))))
+        :key 'note
+        :role 'note
+        :label "Ignored"))))))
 
 (ert-deftest appkit-directory-item-may-belong-directly-to-section ()
   (appkit-directory-test--with-surface
     (let ((entry
            (appkit-directory-entry-create
-            :key 'direct :role 'item :section-key 'section
-            :label "Direct" :item-p t)))
+            :key 'direct
+            :role 'item
+            :section-key 'section
+            :label "Direct"
+            :item-p t)))
       (appkit-directory-reconcile surface (list entry))
       (should (equal "Direct\n" (buffer-string)))
       (should (equal 'section
@@ -206,7 +245,8 @@
                              (appkit-directory-surface-node-table surface))))
         (should (= 1 (gethash key prints)))
         (appkit-directory-reconcile
-         surface entries :force-keys (list key))
+         surface entries
+         :force-keys (list key))
         (should (= 2 (gethash key prints)))))))
 
 (ert-deftest appkit-directory-navigation-and-activation-ignore-passive-rows ()
@@ -256,10 +296,15 @@
              (fold-key '(threads . "general"))
              (entry
               (appkit-directory-entry-create
-               :key key :role 'item :section-key 'channels
-               :item-p t :payload 'general
-               :foldable-p t :fold-key fold-key
-               :fold-default-expanded-p nil :expanded-p nil
+               :key key
+               :role 'item
+               :section-key 'channels
+               :item-p t
+               :payload 'general
+               :foldable-p t
+               :fold-key fold-key
+               :fold-default-expanded-p nil
+               :expanded-p nil
                :primary-action 'item)))
         (appkit-directory-reconcile surface (list entry))
         (goto-char (point-min))
@@ -274,7 +319,8 @@
 (ert-deftest appkit-directory-next-unread-wraps-over-items-only ()
   (appkit-directory-test--with-surface
     (appkit-directory-configure
-     surface :item-inserter #'appkit-directory-test--item-inserter)
+     surface
+     :item-inserter #'appkit-directory-test--item-inserter)
     (appkit-directory-reconcile
      surface (appkit-directory-test--entries t))
     (goto-char (point-max))
@@ -310,12 +356,16 @@
      (appkit-directory-reconcile
       surface
       (list (appkit-directory-entry-create
-             :key "group" :role 'group :label "orphan"))))
+             :key "group"
+             :role 'group
+             :label "orphan"))))
     (should-error
      (appkit-directory-reconcile
       surface
       (list (appkit-directory-entry-create
-             :key "item" :role 'item :item-p t))))))
+             :key "item"
+             :role 'item
+             :item-p t))))))
 
 (ert-deftest appkit-directory-rejects-invalid-primary-actions ()
   (appkit-directory-test--with-surface
@@ -324,14 +374,19 @@
       surface
       (list
        (appkit-directory-entry-create
-        :key "not-foldable" :role 'item :section-key 'section
-        :item-p t :primary-action 'fold))))
+        :key "not-foldable"
+        :role 'item
+        :section-key 'section
+        :item-p t
+        :primary-action 'fold))))
     (should-error
      (appkit-directory-reconcile
       surface
       (list
        (appkit-directory-entry-create
-        :key "not-item" :role 'note :primary-action 'item))))))
+        :key "not-item"
+        :role 'note
+        :primary-action 'item))))))
 
 (provide 'appkit-directory-test)
 

@@ -15,8 +15,11 @@
 
 (ert-deftest appkit-mode-line-indicator-is-clickable-with-optional-prefix ()
   (let ((text (appkit-mode-line-indicator
-               "@2" :prefix " " :face 'warning
-               :command #'ignore :help-echo "mentions")))
+               "@2"
+               :prefix " "
+               :face 'warning
+               :command #'ignore
+               :help-echo "mentions")))
     (should (equal " @2" (substring-no-properties text)))
     (should (eq 'warning (get-text-property 1 'face text)))
     (should (keymapp (get-text-property 1 'local-map text)))

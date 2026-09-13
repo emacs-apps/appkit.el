@@ -68,8 +68,11 @@ receives OBJECT."
     (error "Cannot register handle under unavailable owner"))
   (let ((handle
          (appkit-handle--create
-          :type type :object object :cancel cancel-function
-          :owner owner :alive-p t)))
+          :type type
+          :object object
+          :cancel cancel-function
+          :owner owner
+          :alive-p t)))
     (appkit-owner-set-handles
      owner (cons handle (appkit-owner-handles owner)))
     handle))

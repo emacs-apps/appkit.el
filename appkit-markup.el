@@ -151,7 +151,8 @@ and is meaningful only for ordered lists."
                              (integerp start) (> start 0))))
     (appkit-markup--invalid 'invalid-list-start))
   (appkit-markup--list-create
-   :style style :start start
+   :style style
+   :start start
    :items (appkit-markup--proper-list items 'invalid-list-items)))
 
 (defun appkit-markup-list-item (blocks)
@@ -181,7 +182,8 @@ and is meaningful only for ordered lists."
     (when (string-match-p "[\r\n]" text)
       (appkit-markup--invalid 'inline-text-contains-newline))
     (appkit-markup--text-create
-     :text text :styles (appkit-markup--styles styles))))
+     :text text
+     :styles (appkit-markup--styles styles))))
 
 (defun appkit-markup-link (url children)
   "Return a link to URL with owned styled-text label CHILDREN.
@@ -338,7 +340,8 @@ When LINK-LABEL-P is non-nil, accept styled text nodes only."
                         (appkit-markup-heading-children node) active
                         (append path '(children)))))
             (appkit-markup--heading-create
-             :level level :children children))))
+             :level level
+             :children children))))
        ((appkit-markup-quote-p node)
         (when-let* ((blocks
                      (appkit-markup--normalize-blocks
@@ -364,7 +367,9 @@ When LINK-LABEL-P is non-nil, accept styled text nodes only."
                             items))
           (when items
             (appkit-markup--list-create
-             :style style :start start :items (nreverse items)))))
+             :style style
+             :start start
+             :items (nreverse items)))))
        ((appkit-markup-preformatted-p node)
         (let ((language (appkit-markup-preformatted-language node)))
           (when (and language

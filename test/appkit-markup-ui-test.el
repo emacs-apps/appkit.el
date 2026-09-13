@@ -118,12 +118,15 @@
             (list (appkit-markup-paragraph
                    (list (appkit-markup-text "body")))))))
       (appkit-markup-ui-insert-document
-       document :final-newline-p nil :properties '(row-id 9))
+       document
+       :final-newline-p nil
+       :properties '(row-id 9))
       (should (equal (buffer-string) "body"))
       (should (eq (get-text-property (point-min) 'row-id) 9))
       (should-error
        (appkit-markup-ui-insert-document
-        document :properties '(face bold))))))
+        document
+        :properties '(face bold))))))
 
 (ert-deftest appkit-markup-ui-rolls-back-failed-client-inserter ()
   (with-temp-buffer
@@ -230,7 +233,8 @@
          depths)
     (with-temp-buffer
       (appkit-markup-ui-insert-document
-       document :interactive-p t
+       document
+       :interactive-p t
        :quote-style (lambda (depth)
                       (push depth depths)
                       (list :prefix (format "%d> " depth)
@@ -255,7 +259,8 @@
       (appkit-markup-document
        (list (appkit-markup-quote
               (list (appkit-markup-paragraph (list (appkit-markup-text "quote")))))))
-      :interactive-p t :quote-style (lambda (_) (insert "bad") nil)))
+      :interactive-p t
+      :quote-style (lambda (_) (insert "bad") nil)))
     (should (equal (buffer-string) "existing"))))
 
 (ert-deftest appkit-markup-ui-spacing-distinguishes-line-breaks-and-code ()
@@ -268,8 +273,8 @@
                 (appkit-markup-preformatted "  code\n\nlast\n")
                 (appkit-markup-paragraph (list (appkit-markup-text "end")))))))
     (pcase-dolist (`(,options ,expected)
-                  '((nil "one\ncontinued\n\n  code\n\nlast\n\nend\n")
-                    ((:block-spacing nil) "one\ncontinued\n  code\n\nlast\n\nend\n")))
+                   '((nil "one\ncontinued\n\n  code\n\nlast\n\nend\n")
+                     ((:block-spacing nil) "one\ncontinued\n  code\n\nlast\n\nend\n")))
       (with-temp-buffer
         (apply #'appkit-markup-ui-insert-document document options)
         (should (equal (buffer-substring-no-properties (point-min) (point-max))

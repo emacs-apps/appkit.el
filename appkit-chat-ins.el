@@ -441,7 +441,9 @@ space."
   "Insert compact media STATUS using PREFIX and FACE."
   (when (and (stringp status) (not (string-empty-p status)))
     (appkit-chat-ins-insert-prefixed-line
-     status :prefix (or prefix "    ") :face face)))
+     status
+     :prefix (or prefix "    ")
+     :face face)))
 
 (cl-defun appkit-chat-ins-insert-media-card
     (&key kind title details meta status transfer prefix border-face
@@ -479,12 +481,16 @@ the final card span."
      :help-echo (or open-help-echo "Open media"))
     (when (and (stringp meta-text) (not (string-empty-p meta-text)))
       (appkit-chat-ins-insert-prefixed-line
-       meta-text :prefix prefix-state :face meta-face))
+       meta-text
+       :prefix prefix-state
+       :face meta-face))
     (when (and transfer (listp transfer))
       (apply #'appkit-chat-ins-insert-transfer
              :prefix prefix-state :face meta-face transfer))
     (appkit-chat-ins-insert-media-status-line
-     status :prefix prefix-state :face meta-face)
+     status
+     :prefix prefix-state
+     :face meta-face)
     (when (functionp body-inserter)
       (funcall body-inserter prefix-state))
     (when properties

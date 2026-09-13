@@ -604,7 +604,9 @@
                                    (progn
                                      (push (appkit-media-video-session-create
                                             (appkit-media-resource-create :url "https://example.invalid/movie.mp4")
-                                            "test-client" :cache-key "stable-movie" :cache-directory directory
+                                            "test-client"
+                                            :cache-key "stable-movie"
+                                            :cache-directory directory
                                             :cache-update-function (lambda (resource) (setq updated resource)))
                                            sessions)
                                      (let ((target (car cache-files)) (complete (car cache-callbacks)))
@@ -616,7 +618,9 @@
                                        (appkit-media-video-session-close (car sessions))
                                        (push (appkit-media-video-session-create
                                               (appkit-media-resource-create :url "https://example.invalid/rotated.mp4")
-                                              "test-client" :cache-key "stable-movie" :cache-directory directory)
+                                              "test-client"
+                                              :cache-key "stable-movie"
+                                              :cache-directory directory)
                                              sessions)
                                        (should (equal (car opened-sources) target))
                                        (should-not (car cache-files))
@@ -637,7 +641,8 @@
                (lambda (_session) (setq closed t))))
       (let ((session (appkit-media-video-session-create
                       (appkit-media-resource-create :url "https://example.invalid/movie.mp4")
-                      "test" :cache-policy 'none)))
+                      "test"
+                      :cache-policy 'none)))
         (unwind-protect
             (progn
               (should (equal opened-source "https://example.invalid/movie.mp4"))
@@ -702,7 +707,8 @@
       (let* ((session
               (appkit-media-video-session-create
                '((url . "https://example.invalid/shared.mp4"))
-               "test" :cache-policy 'none))
+               "test"
+               :cache-policy 'none))
              (surface
               (appkit-media-video-inline-create
                session 320 180
@@ -712,7 +718,8 @@
                  (cl-incf callback-count)))))
         (setq viewer
               (appkit-media-present-video-session
-               session "test" :start nil))
+               session "test"
+               :start nil))
         (should (= create-count 1))
         (should (eq inline-player player))
         (should (eq presented-player player))
@@ -730,7 +737,8 @@
 (ert-deftest appkit-media-owned-video-buffer-stops-with-app ()
   (ert-with-temp-file source :suffix ".mp4"
                       (let ((app (appkit-app-start
-                                  appkit-test--app-type :identity 'owned))
+                                  appkit-test--app-type
+                                  :identity 'owned))
                             viewer
                             closed)
                         (unwind-protect
@@ -750,7 +758,8 @@
                                          viewer)))
                               (let ((result
                                      (appkit-media-play-video-file
-                                      source "test" :owner app)))
+                                      source "test"
+                                      :owner app)))
                                 (should (eq result viewer)))
                               (should (buffer-live-p viewer))
 
@@ -764,7 +773,8 @@
 (ert-deftest appkit-media-owned-video-buffer-stops-with-surface ()
   (ert-with-temp-file source :suffix ".mp4"
                       (let ((app (appkit-app-start
-                                  appkit-test--app-type :identity 'surface))
+                                  appkit-test--app-type
+                                  :identity 'surface))
                             (buffer (generate-new-buffer " *appkit-media-surface-owner*"))
                             viewer
                             surface
@@ -774,7 +784,9 @@
                               (setq surface
                                     (appkit-open-generated-surface
                                      appkit-test--surface-type
-                                     :app app :identity 'video :buffer buffer))
+                                     :app app
+                                     :identity 'video
+                                     :buffer buffer))
                               (cl-letf (((symbol-function 'video-session-create)
                                          (lambda (&rest _) 'session))
                                         ((symbol-function 'video-session-live-p)
@@ -792,7 +804,8 @@
                                 (let ((result
                                        (appkit-media-play-video-file
                                         source
-                                        "test" :owner surface)))
+                                        "test"
+                                        :owner surface)))
                                   (should (eq result viewer)))
 
                                 (appkit-surface-stop surface)
@@ -808,7 +821,8 @@
 (ert-deftest appkit-media-video-buffer-kill-retires-owner ()
   (ert-with-temp-file source :suffix ".mp4"
                       (let ((app (appkit-app-start
-                                  appkit-test--app-type :identity 'buffer-kill))
+                                  appkit-test--app-type
+                                  :identity 'buffer-kill))
                             viewer
                             closed)
                         (unwind-protect
@@ -827,7 +841,8 @@
 
                                          viewer)))
                               (appkit-media-play-video-file
-                               source "test" :owner app)
+                               source "test"
+                               :owner app)
 
                               (kill-buffer viewer)
                               (should-not (buffer-live-p viewer))
@@ -841,7 +856,8 @@
 (ert-deftest appkit-media-video-constructor-error-retires-owner ()
   (ert-with-temp-file source :suffix ".mp4"
                       (let ((app (appkit-app-start
-                                  appkit-test--app-type :identity 'constructor-error))
+                                  appkit-test--app-type
+                                  :identity 'constructor-error))
                             viewer
                             closed)
                         (unwind-protect
@@ -861,7 +877,8 @@
                               (let ((condition
                                      (should-error
                                       (appkit-media-play-video-file
-                                       source "test" :owner app))))
+                                       source "test"
+                                       :owner app))))
                                 (should
                                  (equal (error-message-string condition)
                                         "video constructor failed")))
@@ -873,7 +890,8 @@
 (ert-deftest appkit-media-video-constructor-throw-retires-owner ()
   (ert-with-temp-file source :suffix ".mp4"
                       (let ((app (appkit-app-start
-                                  appkit-test--app-type :identity 'constructor-throw))
+                                  appkit-test--app-type
+                                  :identity 'constructor-throw))
                             viewer
                             closed)
                         (unwind-protect
@@ -894,7 +912,8 @@
                                (eq :escaped
                                    (catch 'appkit-media-constructor-exit
                                      (appkit-media-play-video-file
-                                      source "test" :owner app)
+                                      source "test"
+                                      :owner app)
                                      :returned)))
                               (should closed)
                               (should-not (buffer-live-p viewer)))
@@ -904,7 +923,8 @@
 (ert-deftest appkit-media-video-stop-during-open-kills-viewer ()
   (ert-with-temp-file source :suffix ".mp4"
                       (let ((app (appkit-app-start
-                                  appkit-test--app-type :identity 'reentrant))
+                                  appkit-test--app-type
+                                  :identity 'reentrant))
                             viewer
                             closed)
                         (cl-letf (((symbol-function 'video-session-create)
@@ -923,14 +943,16 @@
                                      viewer)))
                           (should-error
                            (appkit-media-play-video-file
-                            source "test" :owner app))
+                            source "test"
+                            :owner app))
                           (should closed)
                           (should-not (buffer-live-p viewer))))))
 
 (ert-deftest appkit-media-video-dead-owner-never-opens ()
   (ert-with-temp-file source :suffix ".mp4"
                       (let ((app (appkit-app-start
-                                  appkit-test--app-type :identity 'dead))
+                                  appkit-test--app-type
+                                  :identity 'dead))
                             opened)
                         (appkit-app-close app)
                         (cl-letf (((symbol-function 'video-session-create)
@@ -938,7 +960,8 @@
                                      (setq opened t))))
                           (should-error
                            (appkit-media-play-video-file
-                            source "test" :owner app))
+                            source "test"
+                            :owner app))
                           (should-not opened)))))
 
 (ert-deftest appkit-media-video-rejects-invalid-sources ()
@@ -988,7 +1011,8 @@
             (should-error
              (appkit-media-copy-or-download-resource-async
               '((url . "https://example.invalid/report.pdf"))
-              target #'ignore #'ignore :headers headers)))
+              target #'ignore #'ignore
+              :headers headers)))
           (should-not dispatched))
       (delete-directory directory t))))
 

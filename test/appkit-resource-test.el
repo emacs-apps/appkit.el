@@ -83,7 +83,9 @@
                    :identity (make-symbol "resource-app")))
             (setq surface
                   (appkit-open-generated-surface
-                   surface-type :app app :identity 'resource))
+                   surface-type
+                   :app app
+                   :identity 'resource))
             (setq buffer (appkit-surface-buffer surface))
             (should (functionp resolve))
             (should (= 1 projects))
@@ -148,7 +150,8 @@
                    :entries
                    (list
                     (appkit-resource-interest-create
-                     :key 'late :row-keys '(row))))))
+                     :key 'late
+                     :row-keys '(row))))))
                :recover nil
                :resource-request (lambda (_keys) 'render)
                :unmount #'ignore)))))
@@ -160,7 +163,9 @@
                    :identity (make-symbol "resource-cancel-app")))
             (setq surface
                   (appkit-open-generated-surface
-                   surface-type :app app :identity 'resource-cancel))
+                   surface-type
+                   :app app
+                   :identity 'resource-cancel))
             (setq buffer (appkit-surface-buffer surface))
             (should (functionp resolve))
             (appkit-surface-stop surface)
@@ -210,7 +215,8 @@
                    :entries
                    (list
                     (appkit-resource-interest-create
-                     :key 'broken :row-keys '(row))))))
+                     :key 'broken
+                     :row-keys '(row))))))
                :recover nil
                :resource-request (lambda (_keys) 'render)
                :unmount #'ignore)))))
@@ -222,7 +228,9 @@
                    :identity (make-symbol "resource-fault-app")))
             (setq surface
                   (appkit-open-generated-surface
-                   surface-type :app app :identity 'resource-fault))
+                   surface-type
+                   :app app
+                   :identity 'resource-fault))
             (setq buffer (appkit-surface-buffer surface))
             (should (eq (appkit-app-status app) 'running))
             (should (= 1 (appkit-loop-run-pass (appkit-app-loop app))))
@@ -246,8 +254,9 @@
            :name 'appkit-resource-page-test
            :mode #'special-mode
            :init (lambda (_context _input)
-                   (appkit-next :model nil
-                                :render (appkit-projection-change-create :full-p t)))
+                   (appkit-next
+                    :model nil
+                    :render (appkit-projection-change-create :full-p t)))
            :update (lambda (_context _model _message)
                      (appkit-next-reject 'unsupported))
            :renderer-factory
@@ -258,12 +267,17 @@
                 (mapcar
                  (lambda (index)
                    (appkit-projection-row-create
-                    :key index :payload index :dependencies (list index)
+                    :key index
+                    :payload index
+                    :dependencies (list index)
                     :resource-demands
                     (list (appkit-resource-demand-create
-                           :key index :input index :loader loader
+                           :key index
+                           :input index
+                           :loader loader
                            :acquisition-identity (list 'page index)
-                           :sharing-policy 'app-private :cache-policy 'while-interested))))
+                           :sharing-policy 'app-private
+                           :cache-policy 'while-interested))))
                  (number-sequence 0 (1- count))))
               :printer
               (lambda (surface _app row)
@@ -279,7 +293,9 @@
           (setq app (appkit-app-start appkit-resource-test--app-type
                                       :identity (make-symbol "resource-page-app")))
           (setq surface (appkit-open-generated-surface
-                         surface-type :app app :identity 'page)
+                         surface-type
+                         :app app
+                         :identity 'page)
                 buffer (appkit-surface-buffer surface))
           (appkit-loop-run-pass (appkit-app-loop app))
           (appkit-loop-run-pass (appkit-surface-loop surface))
@@ -318,7 +334,9 @@
                    (mapcar
                     (lambda (index)
                       (appkit-resource-demand-create
-                       :key index :input index :loader loader
+                       :key index
+                       :input index
+                       :loader loader
                        :acquisition-identity (list 'limit index)
                        :sharing-policy 'app-private
                        :cache-policy 'while-interested))
@@ -335,7 +353,9 @@
                    :identity (make-symbol "resource-limit-app")))
             (should-error
              (appkit-open-generated-surface
-              surface-type :app app :identity 'resource-limit)
+              surface-type
+              :app app
+              :identity 'resource-limit)
              :type 'error)
             (should (= 0 starts))
             (should (= 0 (appkit-app-surface-count app)))
@@ -349,17 +369,29 @@
          (broker
           (appkit-resource--broker-create
            :acquisitions (make-hash-table :test #'equal)
-           :active-count 1 :max-active 1 :queue-count 1 :max-queued 1))
+           :active-count 1
+           :max-active 1
+           :queue-count 1
+           :max-queued 1))
          (active
           (appkit-resource--acquisition-create
-           :broker broker :identity 'active :state 'active :leases nil
+           :broker broker
+           :identity 'active
+           :state 'active
+           :leases nil
            :cancellation
            (appkit-cancellation-create
-            :kind 'transport :cancel (lambda () (error "cancel failed")))))
+            :kind 'transport
+            :cancel (lambda () (error "cancel failed")))))
          (queued
           (appkit-resource--acquisition-create
-           :broker broker :identity 'queued :input 'queued :state 'new
-           :queued-p t :leases nil :token 'queued-token
+           :broker broker
+           :identity 'queued
+           :input 'queued
+           :state 'new
+           :queued-p t
+           :leases nil
+           :token 'queued-token
            :loader
            (lambda (_context _input _success _failure)
              (setq starts (1+ starts))
@@ -382,20 +414,30 @@
          (broker
           (appkit-resource--broker-create
            :acquisitions (make-hash-table :test #'equal)
-           :active-count 2 :max-active 2 :queue-count 0 :max-queued 1))
+           :active-count 2
+           :max-active 2
+           :queue-count 0
+           :max-queued 1))
          (coordinator
           (appkit-resource--coordinator-create-internal
            :entries (make-hash-table :test #'equal)
            :interests (make-hash-table :test #'eq)
-           :max-entries 2 :max-interests 2 :alive-p t)))
+           :max-entries 2
+           :max-interests 2
+           :alive-p t)))
     (dotimes (key 2)
       (let* ((demand
               (appkit-resource-demand-create
-               :key key :input key :loader #'ignore
-               :acquisition-identity key :cache-policy 'while-interested))
+               :key key
+               :input key
+               :loader #'ignore
+               :acquisition-identity key
+               :cache-policy 'while-interested))
              (acquisition
               (appkit-resource--acquisition-create
-               :broker broker :identity key :state 'active
+               :broker broker
+               :identity key
+               :state 'active
                :cancellation
                (appkit-cancellation-create
                 :kind 'transport
@@ -404,7 +446,9 @@
                           (error "cancel failed")))))
              (entry
               (appkit-resource--entry-create
-               :coordinator coordinator :key key :demand demand
+               :coordinator coordinator
+               :key key
+               :demand demand
                :acquisition acquisition)))
         (setf (appkit-resource--acquisition-leases acquisition) (list entry))
         (puthash key acquisition (appkit-resource--broker-acquisitions broker))
@@ -455,11 +499,15 @@
                 (lambda (_surface _app-read-view model)
                   (list
                    (appkit-projection-row-create
-                    :key 'row :payload model :dependencies (list model)
+                    :key 'row
+                    :payload model
+                    :dependencies (list model)
                     :resource-demands
                     (list
                      (appkit-resource-demand-create
-                      :key model :input model :loader loader
+                      :key model
+                      :input model
+                      :loader loader
                       :acquisition-identity (list 'test model)
                       :sharing-policy 'app-private
                       :cache-policy 'while-interested)))))
@@ -480,7 +528,9 @@
                        appkit-resource-test--app-type
                        :identity (make-symbol "resource-retirement-app")))
             (setq surface (appkit-open-generated-surface
-                           surface-type :app app :identity 'resource-retirement)
+                           surface-type
+                           :app app
+                           :identity 'resource-retirement)
                   buffer (appkit-surface-buffer surface))
             ;; The old completion already owns the wake when its interest ends.
             (funcall (gethash 'old resolvers) "retired")

@@ -317,7 +317,8 @@
   (with-temp-buffer
     (appkit-compose-setup)
     (appkit-markup-compose-setup
-     :codecs '(markdown org) :active-codec 'markdown)
+     :codecs '(markdown org)
+     :active-codec 'markdown)
     (let ((generation (appkit-compose-generation)))
       (appkit-markup-compose-set-active-codec 'org)
       (should (= (appkit-compose-generation) (1+ generation)))

@@ -461,13 +461,16 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
       (dolist (next
                (list
                 (appkit-next
-                 :model 'first :render '(first)
+                 :model 'first
+                 :render '(first)
                  :commands (list (appkit-command-start-effect old-a)))
                 (appkit-next
-                 :model 'second :render '(second)
+                 :model 'second
+                 :render '(second)
                  :commands (list (appkit-command-start-effect effect-b)))
                 (appkit-next
-                 :model 'third :render '(third)
+                 :model 'third
+                 :render '(third)
                  :commands (list (appkit-command-start-effect new-a)))))
         (appkit-surface-post surface next))
       (should (= (appkit-loop-run-pass (appkit-surface-loop surface)) 3))
@@ -532,11 +535,13 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
             (pcase message
               ('start
                (appkit-next
-                :model 'active :render 'active
+                :model 'active
+                :render 'active
                 :commands (list (appkit-command-start-effect effect))))
               ('cancel
                (appkit-next
-                :model 'cancelled :render 'cancelled
+                :model 'cancelled
+                :render 'cancelled
                 :commands (list (appkit-command-cancel-effect 'owned))))))
           :renderer-factory
           (lambda (_surface)
@@ -564,7 +569,8 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
           (lambda (_surface model message)
             (if (eq message 'start)
                 (appkit-next
-                 :model 'active :render appkit-render-none
+                 :model 'active
+                 :render appkit-render-none
                  :commands (list (appkit-command-start-effect effect)))
               (error "broken update from %S" model)))
           :renderer-factory
@@ -584,7 +590,8 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
          (record (lambda (event) (push event events)))
          (effect-a
           (appkit-surface-test--effect
-           'a record :cancel-error t))
+           'a record
+           :cancel-error t))
          (effect-b (appkit-surface-test--effect 'b record)))
     (appkit-surface-test--with-surface
         (surface
@@ -721,11 +728,13 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                   :init
                   (lambda (_context input)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (_context model _message)
                     (appkit-next
-                     :model model :render appkit-render-none)))
+                     :model model
+                     :render appkit-render-none)))
                  :input nil))
           (setq surface
                 (appkit-open-generated-surface
@@ -733,14 +742,16 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                   :init
                   (lambda (_context input)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (&rest _arguments)
                     (error "Surface transition fault"))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer #'ignore)))
-                 :app app :identity 'faulted)
+                 :app app
+                 :identity 'faulted)
                 buffer (appkit-surface-buffer surface))
           (should-error (appkit-surface-send surface 'fault)
                         :type 'error)

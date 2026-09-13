@@ -46,11 +46,15 @@
   (let* ((batch (appkit-command--batch-create 2))
          (first
           (appkit-command-source-intent
-           :key 'stream :expected-identity 'one :payload 'first
+           :key 'stream
+           :expected-identity 'one
+           :payload 'first
            :result-mapper #'ignore))
          (second
           (appkit-command-source-intent
-           :key 'stream :expected-identity 'one :payload 'second
+           :key 'stream
+           :expected-identity 'one
+           :payload 'second
            :result-mapper #'ignore)))
     (appkit-command--batch-add batch (list first second) 2)
     (let ((work (appkit-command--batch-drain batch)))
@@ -59,7 +63,9 @@
               (list first second)))))
   (should-error
    (appkit-command-source-intent
-    :key 'stream :expected-identity 'one :payload nil
+    :key 'stream
+    :expected-identity 'one
+    :payload nil
     :result-mapper (lambda (&rest _arguments)))
    :type 'error))
 

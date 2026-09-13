@@ -30,63 +30,105 @@
                (:constructor appkit-resource-demand-create)
                (:copier nil))
   "One owned presentation-resource acquisition demand."
-  key input loader acquisition-identity sharing-policy cache-policy)
+  key
+  input
+  loader
+  acquisition-identity
+  sharing-policy
+  cache-policy)
 
 (cl-defstruct (appkit-resource-interest
                (:constructor appkit-resource-interest-create)
                (:copier nil))
   "One resource KEY retained by projected ROW-KEYS."
-  key row-keys)
+  key
+  row-keys)
 
 (cl-defstruct (appkit-resource-interest-update
                (:constructor appkit-resource-interest-update-create)
                (:copier nil))
   "A Renderer interest update whose MODE is `unchanged' or `replace'."
-  mode entries)
+  mode
+  entries)
 
 (cl-defstruct (appkit-render-result
                (:constructor appkit-render-result-create)
                (:copier nil))
   "Closed companion result returned by a successful Renderer phase."
-  resource-demands resource-interest-update)
+  resource-demands
+  resource-interest-update)
 
 (cl-defstruct (appkit-resource-state
                (:constructor appkit-resource--state-create)
                (:copier nil))
   "Stable presentation state for one logical resource."
-  status value reason)
+  status
+  value
+  reason)
 
 (cl-defstruct (appkit-resource--entry
                (:constructor appkit-resource--entry-create)
                (:copier nil))
-  coordinator key input demand state acquisition token)
+  coordinator
+  key
+  input
+  demand
+  state
+  acquisition
+  token)
 
 (cl-defstruct (appkit-resource--coordinator
                (:constructor appkit-resource--coordinator-create-internal)
                (:copier nil))
-  app entries interests max-entries max-interests alive-p)
+  app
+  entries
+  interests
+  max-entries
+  max-interests
+  alive-p)
 
 (cl-defstruct (appkit-resource--acquisition
                (:constructor appkit-resource--acquisition-create)
                (:copier nil))
-  broker identity input loader token state leases cancellation queued-p
-  value reason)
+  broker
+  identity
+  input
+  loader
+  token
+  state
+  leases
+  cancellation
+  queued-p
+  value
+  reason)
 
 (cl-defstruct (appkit-resource--broker
                (:constructor appkit-resource--broker-create)
                (:copier nil))
-  acquisitions active-count max-active queue-head queue-tail queue-count
+  acquisitions
+  active-count
+  max-active
+  queue-head
+  queue-tail
+  queue-count
   max-queued)
 
 (cl-defstruct (appkit-resource--coordinator-delivery
                (:constructor appkit-resource--coordinator-delivery-create)
                (:copier nil))
-  coordinator entry token status payload)
+  coordinator
+  entry
+  token
+  status
+  payload)
 
 (cl-defstruct (appkit-resource--surface-delivery
                (:constructor appkit-resource--surface-delivery-create)
                (:copier nil))
-  coordinator surface incarnation keys)
+  coordinator
+  surface
+  incarnation
+  keys)
 
 (defconst appkit-resource-default-entry-limit 256)
 (defconst appkit-resource-default-interest-limit 512)
@@ -134,7 +176,9 @@
 (cl-defstruct (appkit-resource--pending
                (:constructor appkit-resource--pending-create)
                (:copier nil))
-  completions coordinator-wake-p surfaces)
+  completions
+  coordinator-wake-p
+  surfaces)
 
 (defvar appkit-resource--pending-by-coordinator
   (make-hash-table :test #'eq :weakness 'key)
@@ -188,9 +232,11 @@ The first completion wakes the App; later completions share that wake."
     (let* ((coordinator (appkit-resource--entry-coordinator entry))
            (pending (appkit-resource--pending-state coordinator t))
            (delivery (appkit-resource--coordinator-delivery-create
-                      :coordinator coordinator :entry entry
+                      :coordinator coordinator
+                      :entry entry
                       :token (appkit-resource--entry-token entry)
-                      :status status :payload payload)))
+                      :status status
+                      :payload payload)))
       (if (appkit-resource--pending-coordinator-wake-p pending)
           (puthash (appkit-resource--entry-key entry) delivery
                    (appkit-resource--pending-completions pending))
@@ -351,11 +397,13 @@ The first completion wakes the App; later completions share that wake."
                (appkit-resource--acquisition-reason existing)))))
       (let ((acquisition
              (appkit-resource--acquisition-create
-              :broker broker :identity identity
+              :broker broker
+              :identity identity
               :input (appkit-resource-demand-input demand)
               :loader (appkit-resource-demand-loader demand)
               :token (make-symbol "appkit-resource-acquisition-")
-              :state 'new :leases (list entry))))
+              :state 'new
+              :leases (list entry))))
         (puthash identity acquisition
                  (appkit-resource--broker-acquisitions broker))
         (setf (appkit-resource--entry-acquisition entry) acquisition)
@@ -425,8 +473,10 @@ The first completion wakes the App; later completions share that wake."
                 (appkit-loop--post-control-addressed
                  loop
                  (appkit-resource--surface-delivery-create
-                  :coordinator coordinator :surface surface
-                  :incarnation incarnation :keys keys)
+                  :coordinator coordinator
+                  :surface surface
+                  :incarnation incarnation
+                  :keys keys)
                  incarnation)))
           (when (eq outcome 'full)
             (appkit-loop--enter-fault
@@ -451,9 +501,13 @@ The first completion wakes the App; later completions share that wake."
         (setf (appkit-resource--entry-state entry)
               (if (eq status 'ready)
                   (appkit-resource--state-create
-                   :status 'ready :value payload :reason nil)
+                   :status 'ready
+                   :value payload
+                   :reason nil)
                 (appkit-resource--state-create
-                 :status 'failed :value nil :reason payload)))
+                 :status 'failed
+                 :value nil
+                 :reason payload)))
         (dolist (surface (appkit-resource--interested-surfaces entry))
           (appkit-resource--notify-surface
            coordinator surface (list (appkit-resource--entry-key entry))))
@@ -690,7 +744,8 @@ The first completion wakes the App; later completions share that wake."
             (error "App resource entry limit exceeded"))
           (let ((entry
                  (appkit-resource--entry-create
-                  :coordinator coordinator :key key
+                  :coordinator coordinator
+                  :key key
                   :input (appkit-resource-demand-input demand)
                   :demand demand
                   :state (appkit-resource--state-create :status 'pending)

@@ -164,95 +164,100 @@
             preformatted-inserter quote-style block-spacing (quote-depth 0))
   "Insert normalized BLOCKS under the current rendering policy."
   (cl-loop for block in blocks for first = t then nil do
-    (when (and block-spacing (not first))
-      (unless (and (eq (char-before) ?\n)
-                   (eq (char-before (1- (point))) ?\n))
-        (insert "\n")))
-    (cond
-     ((appkit-markup-paragraph-p block)
-      (appkit-markup-ui--insert-inlines
-       (appkit-markup-paragraph-children block)
-       :interactive-p interactive-p
-       :link-action link-action
-       :object-inserter object-inserter)
-      (appkit-markup-ui--ensure-terminator))
-     ((appkit-markup-heading-p block)
-      (let ((start (point))
-            (level (appkit-markup-heading-level block)))
-        (appkit-markup-ui--insert-inlines
-         (appkit-markup-heading-children block)
-         :interactive-p interactive-p
-         :link-action link-action
-         :object-inserter object-inserter)
-        (add-face-text-property
-         start (point)
-         (list :inherit 'appkit-markup-heading-face
-               :height (aref appkit-markup-ui--heading-heights (1- level)))
-         'append)
-        (appkit-markup-ui--ensure-terminator)))
-     ((appkit-markup-quote-p block)
-      (let* ((start (point))
-             (depth (1+ quote-depth))
-             (style (and interactive-p quote-style
-                         (appkit-markup-ui--call-factory quote-style depth))))
-        (appkit-markup-ui--insert-blocks
-         (appkit-markup-quote-blocks block)
-         :interactive-p interactive-p
-         :link-action link-action
-         :object-inserter object-inserter
-         :preformatted-inserter preformatted-inserter
-         :quote-style quote-style :quote-depth depth :block-spacing block-spacing)
-        (when-let* ((face (plist-get style :face)))
-          ;; Inner quote styles retain precedence over enclosing backgrounds.
-          (add-face-text-property start (point) face 'append))
-        (appkit-ui-apply-line-prefix
-         start (point)
-         (or (plist-get style :prefix)
-             (propertize "│ " 'face 'appkit-markup-quote-face)))))
-     ((appkit-markup-list-p block)
-      (let ((number (or (appkit-markup-list-start block) 1)))
-        (dolist (item (appkit-markup-list-items block))
-          (let* ((start (point))
-                 (marker
-                  (if (eq (appkit-markup-list-style block) 'ordered)
-                      (prog1 (format "%d. " number)
-                        (setq number (1+ number)))
-                    "• ")))
-            (appkit-markup-ui--insert-blocks
-             (appkit-markup-list-item-blocks item)
-             :interactive-p interactive-p
-             :link-action link-action
-             :object-inserter object-inserter
-             :preformatted-inserter preformatted-inserter
-             :quote-style quote-style :quote-depth quote-depth)
-            ;; List items stay compact, independently of outer block spacing.
-            ;; Empty list items retain one visible, selectable row.
-            (when (= start (point))
-              (appkit-markup-ui--ensure-terminator))
-            (appkit-ui-apply-line-prefix
-             start (point)
-             (appkit-ui-make-prefix-state
-              marker (make-string (string-width marker) ?\s)))))))
-     ((appkit-markup-preformatted-p block)
-      (let ((start (point)))
-        (if (and interactive-p (functionp preformatted-inserter))
-            (appkit-markup-ui--call-inserter preformatted-inserter block)
-          (insert (appkit-markup-preformatted-text block))
-          (add-face-text-property
-           start (point) 'appkit-markup-preformatted-face 'append))
-        (appkit-markup-ui--ensure-terminator)))
-     ((appkit-markup-object-block-p block)
-      (let ((start (point)))
-        (if (and interactive-p (functionp object-inserter))
-            (appkit-markup-ui--call-inserter object-inserter block)
-          (appkit-markup-ui--insert-blocks
-           (appkit-markup-object-block-fallback block)
-           :interactive-p nil :quote-depth quote-depth :block-spacing block-spacing)
-          (add-face-text-property
-           start (point) 'appkit-markup-object-fallback-face 'append))
-        (when (or (= start (point)) (not (bolp)))
-          (appkit-markup-ui--ensure-terminator))))
-     (t (error "Unsupported normalized Appkit block node")))))
+           (when (and block-spacing (not first))
+             (unless (and (eq (char-before) ?\n)
+                          (eq (char-before (1- (point))) ?\n))
+               (insert "\n")))
+           (cond
+            ((appkit-markup-paragraph-p block)
+             (appkit-markup-ui--insert-inlines
+              (appkit-markup-paragraph-children block)
+              :interactive-p interactive-p
+              :link-action link-action
+              :object-inserter object-inserter)
+             (appkit-markup-ui--ensure-terminator))
+            ((appkit-markup-heading-p block)
+             (let ((start (point))
+                   (level (appkit-markup-heading-level block)))
+               (appkit-markup-ui--insert-inlines
+                (appkit-markup-heading-children block)
+                :interactive-p interactive-p
+                :link-action link-action
+                :object-inserter object-inserter)
+               (add-face-text-property
+                start (point)
+                (list :inherit 'appkit-markup-heading-face
+                      :height (aref appkit-markup-ui--heading-heights (1- level)))
+                'append)
+               (appkit-markup-ui--ensure-terminator)))
+            ((appkit-markup-quote-p block)
+             (let* ((start (point))
+                    (depth (1+ quote-depth))
+                    (style (and interactive-p quote-style
+                                (appkit-markup-ui--call-factory quote-style depth))))
+               (appkit-markup-ui--insert-blocks
+                (appkit-markup-quote-blocks block)
+                :interactive-p interactive-p
+                :link-action link-action
+                :object-inserter object-inserter
+                :preformatted-inserter preformatted-inserter
+                :quote-style quote-style
+                :quote-depth depth
+                :block-spacing block-spacing)
+               (when-let* ((face (plist-get style :face)))
+                 ;; Inner quote styles retain precedence over enclosing backgrounds.
+                 (add-face-text-property start (point) face 'append))
+               (appkit-ui-apply-line-prefix
+                start (point)
+                (or (plist-get style :prefix)
+                    (propertize "│ " 'face 'appkit-markup-quote-face)))))
+            ((appkit-markup-list-p block)
+             (let ((number (or (appkit-markup-list-start block) 1)))
+               (dolist (item (appkit-markup-list-items block))
+                 (let* ((start (point))
+                        (marker
+                         (if (eq (appkit-markup-list-style block) 'ordered)
+                             (prog1 (format "%d. " number)
+                               (setq number (1+ number)))
+                           "• ")))
+                   (appkit-markup-ui--insert-blocks
+                    (appkit-markup-list-item-blocks item)
+                    :interactive-p interactive-p
+                    :link-action link-action
+                    :object-inserter object-inserter
+                    :preformatted-inserter preformatted-inserter
+                    :quote-style quote-style
+                    :quote-depth quote-depth)
+                   ;; List items stay compact, independently of outer block spacing.
+                   ;; Empty list items retain one visible, selectable row.
+                   (when (= start (point))
+                     (appkit-markup-ui--ensure-terminator))
+                   (appkit-ui-apply-line-prefix
+                    start (point)
+                    (appkit-ui-make-prefix-state
+                     marker (make-string (string-width marker) ?\s)))))))
+            ((appkit-markup-preformatted-p block)
+             (let ((start (point)))
+               (if (and interactive-p (functionp preformatted-inserter))
+                   (appkit-markup-ui--call-inserter preformatted-inserter block)
+                 (insert (appkit-markup-preformatted-text block))
+                 (add-face-text-property
+                  start (point) 'appkit-markup-preformatted-face 'append))
+               (appkit-markup-ui--ensure-terminator)))
+            ((appkit-markup-object-block-p block)
+             (let ((start (point)))
+               (if (and interactive-p (functionp object-inserter))
+                   (appkit-markup-ui--call-inserter object-inserter block)
+                 (appkit-markup-ui--insert-blocks
+                  (appkit-markup-object-block-fallback block)
+                  :interactive-p nil
+                  :quote-depth quote-depth
+                  :block-spacing block-spacing)
+                 (add-face-text-property
+                  start (point) 'appkit-markup-object-fallback-face 'append))
+               (when (or (= start (point)) (not (bolp)))
+                 (appkit-markup-ui--ensure-terminator))))
+            (t (error "Unsupported normalized Appkit block node")))))
 
 (cl-defun appkit-markup-ui-insert-document
     (document &key prefix properties (final-newline-p t) interactive-p
@@ -293,7 +298,8 @@ Insertion is atomic.  Errors leave no partial document behind."
          :link-action link-action
          :object-inserter object-inserter
          :preformatted-inserter preformatted-inserter
-         :quote-style quote-style :block-spacing block-spacing)
+         :quote-style quote-style
+         :block-spacing block-spacing)
         (unless (eq (current-buffer) buffer)
           (error "Appkit markup renderer changed the current buffer"))
         (when (and (not final-newline-p)

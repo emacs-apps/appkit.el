@@ -103,7 +103,10 @@
                (<= 0 start end))
     (signal 'appkit-markup-codec-error '(invalid-diagnostic)))
   (appkit-markup-diagnostic--create
-   :kind kind :severity severity :start start :end end))
+   :kind kind
+   :severity severity
+   :start start
+   :end end))
 
 (defun appkit-markup-loss (kind path)
   "Return semantic loss KIND at structural PATH."
@@ -203,8 +206,10 @@ PARSE and PRINT are required synchronous functions."
                        source)))
       (signal 'appkit-markup-codec-error '(invalid-object-span)))
     (appkit-markup-object-occurrence--create
-     :value payload :text (substring-no-properties stored)
-     :start start :end end)))
+     :value payload
+     :text (substring-no-properties stored)
+     :start start
+     :end end)))
 
 (defun appkit-markup-codec--next-token-character (source used cursor)
   "Return an unused private character absent from SOURCE after CURSOR."
@@ -288,7 +293,8 @@ PARSE and PRINT are required synchronous functions."
                    ;; Preserve the boundary spacer as ordinary source text.
                    (emit-range body-end end)
                    (push (appkit-markup-codec--object-create
-                          :token token :occurrence occurrence)
+                          :token token
+                          :occurrence occurrence)
                          semantic)))
                 ('side-channel
                  ;; Removing an occurrence advances the original coordinate at

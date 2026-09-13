@@ -40,7 +40,9 @@
     (setq runtime (appkit-effect-runtime-create loop max-active)
           harness
           (appkit-effect-test--harness-create
-           :loop loop :runtime runtime :messages nil))
+           :loop loop
+           :runtime runtime
+           :messages nil))
     harness))
 
 (defun appkit-effect-test--cleanup (harness)
@@ -454,12 +456,14 @@
         (appkit-effect-runtime-start
          runtime
          (appkit-effect-test--spec
-          'bad starter :input 'bad
+          'bad starter
+          :input 'bad
           :cancellation-requirement 'transport))
         (appkit-effect-runtime-start
          runtime
          (appkit-effect-test--spec
-          'good starter :input 'good
+          'good starter
+          :input 'good
           :cancellation-requirement 'transport))
         (should-error (appkit-effect-runtime-stop runtime) :type 'error)
         (should (= (length cancelled) 2))

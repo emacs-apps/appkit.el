@@ -630,7 +630,7 @@ offset from the input start when possible."
       (add-text-properties
        (point-min) end
        '(read-only t front-sticky (read-only)
-                   rear-nonsticky (read-only))))))
+         rear-nonsticky (read-only))))))
 
 (cl-defun appkit-chatbuf-bind-input-region (&key visible-p prompt input-text post-bind-function)
   "Ensure the tail input region matches VISIBLE-P, PROMPT and INPUT-TEXT.
@@ -857,7 +857,8 @@ would otherwise glue it into the attachment."
     ;; open/close brackets before post-command validation runs.
     (let ((inhibit-modification-hooks t))
       (insert (appkit-chatbuf-input-object-string
-               content object :properties properties))))
+               content object
+               :properties properties))))
   (unless (appkit-chatbuf-rendering-p)
     (appkit-chatbuf-input-state-sync)))
 

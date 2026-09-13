@@ -123,7 +123,8 @@
         (insert "plain\n")
         (setq plain-button
               (appkit-ui-make-action-row
-               start (point) 'plain #'ignore :help-echo "Open plain")))
+               start (point) 'plain #'ignore
+               :help-echo "Open plain")))
       (let ((start (point)))
         (insert (propertize "highlighted" 'face 'bold) "\n")
         (setq highlighted-button
@@ -188,9 +189,11 @@
       (let ((second-start (point)))
         (insert "second\nbody\n")
         (appkit-ui-add-action
-         (point-min) second-start (lambda () (push 'first calls)) :face 'bold)
+         (point-min) second-start (lambda () (push 'first calls))
+         :face 'bold)
         (appkit-ui-add-action
-         second-start (point-max) (lambda () (push 'second calls)) :face 'italic)
+         second-start (point-max) (lambda () (push 'second calls))
+         :face 'italic)
         ;; Hover uses the contiguous mouse-face run, not the action's bounds.
         (should (eq 'highlight (get-text-property (point-min) 'mouse-face)))
         (should (= (1- second-start)
@@ -240,7 +243,7 @@
                                            (point-min) (point-max))))
           (let ((editable (+ (point-min) 9)))
             (dolist (property '(display line-prefix wrap-prefix
-                                        appkit-ui-source-line-marker rear-nonsticky))
+                                appkit-ui-source-line-marker rear-nonsticky))
               (should-not (text-property-not-all (point-min) editable property nil)))
             (should (eq 'bold (get-text-property (point-min) 'face)))
             (should (equal "editable" (get-text-property editable 'display)))
@@ -406,7 +409,8 @@
               ((symbol-function 'display-images-p) (lambda (&rest _) t)))
       (let* ((rendered
               (appkit-ui-render-one-line-preview
-               preview 24 :face 'shadow))
+               preview 24
+               :face 'shadow))
              (image-position
               (text-property-any
                0 (length rendered) 'display image rendered)))

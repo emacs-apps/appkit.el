@@ -447,7 +447,8 @@ and position without inspecting ROWS."
          (lambda (key row-keys)
            (push
             (appkit-resource-interest-create
-             :key key :row-keys (nreverse row-keys))
+             :key key
+             :row-keys (nreverse row-keys))
             entries))
          interests)
         (nreverse entries))))))

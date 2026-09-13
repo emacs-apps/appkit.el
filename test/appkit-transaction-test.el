@@ -7,30 +7,30 @@
 
 (ert-deftest appkit-content-update-is-generated-and-undo-free ()
   (appkit-test-with-surface
-    (let ((view (appkit-current-surface)))
-      (setq buffer-undo-list nil)
-      (appkit-with-content-update view
-        (insert "generated"))
-      (should (equal (buffer-string) "generated"))
-      (should-not buffer-undo-list))))
+   (let ((view (appkit-current-surface)))
+     (setq buffer-undo-list nil)
+     (appkit-with-content-update view
+       (insert "generated"))
+     (should (equal (buffer-string) "generated"))
+     (should-not buffer-undo-list))))
 
 (ert-deftest appkit-property-update-rejects-text-mutation-in-strict-mode ()
   (appkit-test-with-surface
-    (let ((view (appkit-current-surface))
-          (appkit-strict-boundaries t))
-      (insert "text")
-      (should-error
-       (appkit-with-property-update view
-         (insert "invalid"))))))
+   (let ((view (appkit-current-surface))
+         (appkit-strict-boundaries t))
+     (insert "text")
+     (should-error
+      (appkit-with-property-update view
+        (insert "invalid"))))))
 
 (ert-deftest appkit-property-update-allows-display-properties ()
   (appkit-test-with-surface
-    (let ((view (appkit-current-surface))
-          (appkit-strict-boundaries t))
-      (insert "text")
-      (appkit-with-property-update view
-        (put-text-property (point-min) (point-max) 'face 'bold))
-      (should (eq (get-text-property (point-min) 'face) 'bold)))))
+   (let ((view (appkit-current-surface))
+         (appkit-strict-boundaries t))
+     (insert "text")
+     (appkit-with-property-update view
+       (put-text-property (point-min) (point-max) 'face 'bold))
+     (should (eq (get-text-property (point-min) 'face) 'bold)))))
 
 (provide 'appkit-transaction-test)
 

@@ -381,7 +381,8 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
       (let* ((sequence (appkit-effect--next-sequence instance))
              (observation
               (appkit-effect--observation-create
-               :sequence sequence :payload payload))
+               :sequence sequence
+               :payload payload))
              (policy (appkit-effect-spec-observation-policy spec)))
         (pcase policy
           ('lossless

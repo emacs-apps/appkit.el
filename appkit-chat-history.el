@@ -242,7 +242,8 @@ automatic retry at that same edge; moving the window edge clears it."
     (appkit-chat-history-request-cancel)
     (let ((operation
            (appkit-chat-history-operation--create
-            :surface surface :alive-p t))
+            :surface surface
+            :alive-p t))
           (state (appkit-chat-history-init-state)))
       (setf (appkit-chat-history--state-loading state) kind
             (appkit-chat-history--state-owner state) operation)

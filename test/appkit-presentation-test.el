@@ -113,8 +113,10 @@
 (ert-deftest appkit-presentation-one-line-row-places-normalized-context-trail-inside-brackets ()
   (with-temp-buffer
     (appkit-presentation-insert-one-line-row
-     (appkit-presentation-one-line-row-create :context "Group"
-                                              :context-trail "  7\nnew  " :preview (appkit-ui-one-line-preview-create :text "preview") )
+     (appkit-presentation-one-line-row-create
+      :context "Group"
+      :context-trail "  7\nnew  "
+      :preview (appkit-ui-one-line-preview-create :text "preview") )
      :width 60
      :context-width-spec 20)
     (goto-char (point-min))
@@ -175,9 +177,11 @@
   (with-temp-buffer
     (let ((trail (propertize "42" 'appkit-test-trail t)))
       (appkit-presentation-insert-one-line-row
-       (appkit-presentation-one-line-row-create :context "Group"
-                                                :context-trail trail
-                                                :context-trail-face 'font-lock-warning-face :preview (appkit-ui-one-line-preview-create :text "preview") )
+       (appkit-presentation-one-line-row-create
+        :context "Group"
+        :context-trail trail
+        :context-trail-face 'font-lock-warning-face
+        :preview (appkit-ui-one-line-preview-create :text "preview") )
        :width 60
        :context-width-spec 20))
     (goto-char (point-min))
@@ -193,10 +197,12 @@
 (ert-deftest appkit-presentation-one-line-row-preserves-context-trail-text-properties ()
   (with-temp-buffer
     (appkit-presentation-insert-one-line-row
-     (appkit-presentation-one-line-row-create :context "Group"
-                                              :context-trail
-                                              (concat (propertize "12\n" 'face 'success)
-                                                      (propertize "@3" 'face 'warning)) :preview (appkit-ui-one-line-preview-create :text "preview") )
+     (appkit-presentation-one-line-row-create
+      :context "Group"
+      :context-trail
+      (concat (propertize "12\n" 'face 'success)
+              (propertize "@3" 'face 'warning))
+      :preview (appkit-ui-one-line-preview-create :text "preview") )
      :width 60
      :context-width-spec 20)
     (goto-char (point-min))
@@ -211,8 +217,10 @@
   (with-temp-buffer
     (dolist (trail '(nil "7" "12345"))
       (appkit-presentation-insert-one-line-row
-       (appkit-presentation-one-line-row-create :context "Group"
-                                                :context-trail trail :preview (appkit-ui-one-line-preview-create :text "preview") )
+       (appkit-presentation-one-line-row-create
+        :context "Group"
+        :context-trail trail
+        :preview (appkit-ui-one-line-preview-create :text "preview") )
        :width 60
        :context-width-spec 20))
     (let (closing-columns)
@@ -227,8 +235,10 @@
 (ert-deftest appkit-presentation-one-line-row-long-context-retains-right-aligned-trail ()
   (with-temp-buffer
     (appkit-presentation-insert-one-line-row
-     (appkit-presentation-one-line-row-create :context (make-string 80 ?x)
-                                              :context-trail "NEW" :preview (appkit-ui-one-line-preview-create :text "preview") )
+     (appkit-presentation-one-line-row-create
+      :context (make-string 80 ?x)
+      :context-trail "NEW"
+      :preview (appkit-ui-one-line-preview-create :text "preview") )
      :width 60
      :context-width-spec 16)
     (goto-char (point-min))
@@ -259,8 +269,11 @@
 (ert-deftest appkit-presentation-one-line-row-does-not-infer-hover-from-help ()
   (with-temp-buffer
     (appkit-presentation-insert-one-line-row
-     (appkit-presentation-one-line-row-create :context "Group" :preview (appkit-ui-one-line-preview-create :text "preview") :time "12:34"
-                                              :help-echo "Open Group")
+     (appkit-presentation-one-line-row-create
+      :context "Group"
+      :preview (appkit-ui-one-line-preview-create :text "preview")
+      :time "12:34"
+      :help-echo "Open Group")
      :width 80)
     (should (equal "Open Group" (get-text-property (point-min) 'help-echo)))
     (should-not (text-property-not-all
@@ -269,8 +282,11 @@
 (ert-deftest appkit-presentation-one-line-row-supports-explicit-hover-face ()
   (with-temp-buffer
     (appkit-presentation-insert-one-line-row
-     (appkit-presentation-one-line-row-create :context "Group" :preview (appkit-ui-one-line-preview-create :text "preview") :time "12:34"
-                                              :mouse-face 'highlight)
+     (appkit-presentation-one-line-row-create
+      :context "Group"
+      :preview (appkit-ui-one-line-preview-create :text "preview")
+      :time "12:34"
+      :mouse-face 'highlight)
      :width 80)
     (should (eq 'highlight (get-text-property (point-min) 'mouse-face)))))
 

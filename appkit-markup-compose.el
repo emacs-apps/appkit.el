@@ -15,6 +15,7 @@
 (require 'appkit-markup-codec)
 (require 'appkit-markup-codecs)
 (require 'appkit-markup-ui)
+
 (cl-defstruct (appkit-markup-compose-capture
                (:constructor appkit-markup-compose--capture-create)
                (:copier nil))
@@ -181,7 +182,8 @@ No client action, object renderer, transport, hook, or codec callback runs after
 capture.  PREFIX and PROPERTIES have the native markup UI meanings."
   (appkit-markup-ui-insert-document
    (appkit-markup-compose-document capture)
-   :prefix prefix :properties properties
+   :prefix prefix
+   :properties properties
    :final-newline-p final-newline-p
    :interactive-p nil))
 

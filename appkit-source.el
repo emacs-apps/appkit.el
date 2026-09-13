@@ -26,30 +26,63 @@
 (cl-defstruct (appkit-source-spec
                (:constructor appkit-source-spec--create)
                (:copier nil))
-  key identity input start event closed outbound emission-policy pending-limit
-  outbound-pending-limit cancellation-requirement)
+  key
+  identity
+  input
+  start
+  event
+  closed
+  outbound
+  emission-policy
+  pending-limit
+  outbound-pending-limit
+  cancellation-requirement)
 
 (cl-defstruct (appkit-source-cancellation
                (:constructor appkit-source-cancellation--create)
                (:copier nil))
-  kind cancel)
+  kind
+  cancel)
 
 (cl-defstruct (appkit-source--item
                (:constructor appkit-source--item-create)
                (:copier nil))
-  sequence kind payload mapper mapper-input token)
+  sequence
+  kind
+  payload
+  mapper
+  mapper-input
+  token)
 
 (cl-defstruct (appkit-source--intent
                (:constructor appkit-source--intent-create)
                (:copier nil))
-  token mapper input state)
+  token
+  mapper
+  input
+  state)
 
 (cl-defstruct (appkit-source--instance
                (:constructor appkit-source--instance-create)
                (:copier nil))
-  runtime spec token state cancellation ready-p quiescence-posted-p
-  event-head event-tail event-count latest-event coalesced-events
-  result-head result-tail close-item intents intent-order intent-count)
+  runtime
+  spec
+  token
+  state
+  cancellation
+  ready-p
+  quiescence-posted-p
+  event-head
+  event-tail
+  event-count
+  latest-event
+  coalesced-events
+  result-head
+  result-tail
+  close-item
+  intents
+  intent-order
+  intent-count)
 
 (cl-defstruct (appkit-source-delivery
                (:constructor appkit-source--delivery-create)
@@ -59,14 +92,24 @@
 (cl-defstruct (appkit-source--quiescent-delivery
                (:constructor appkit-source--quiescent-delivery-create)
                (:copier nil))
-  runtime instance token)
+  runtime
+  instance
+  token)
 
 (cl-defstruct (appkit-source-runtime
                (:constructor appkit-source--runtime-create)
                (:copier nil))
-  loop instances desired pending-starts max-sources
-  ready-head ready-tail ready-count wake-pending-p
-  sequence alive-p)
+  loop
+  instances
+  desired
+  pending-starts
+  max-sources
+  ready-head
+  ready-tail
+  ready-count
+  wake-pending-p
+  sequence
+  alive-p)
 
 (cl-defun appkit-source-spec-create
     (&key key identity input start event closed outbound
@@ -100,8 +143,14 @@
     (error "Unsupported Source cancellation requirement: %S"
            cancellation-requirement))
   (appkit-source-spec--create
-   :key key :identity identity :input input :start start :event event
-   :closed closed :outbound outbound :emission-policy emission-policy
+   :key key
+   :identity identity
+   :input input
+   :start start
+   :event event
+   :closed closed
+   :outbound outbound
+   :emission-policy emission-policy
    :pending-limit pending-limit
    :outbound-pending-limit outbound-pending-limit
    :cancellation-requirement cancellation-requirement))
@@ -225,7 +274,8 @@
    runtime
    (appkit-source--item-create
     :sequence (appkit-source--next-sequence runtime)
-    :kind 'fault :payload condition)))
+    :kind 'fault
+    :payload condition)))
 
 (defun appkit-source--fault-instance (instance condition)
   "Revoke INSTANCE and stage owner fault CONDITION through its mailbox."
@@ -298,7 +348,8 @@
            (item
             (appkit-source--item-create
              :sequence (appkit-source--next-sequence runtime)
-             :kind 'event :payload payload)))
+             :kind 'event
+             :payload payload)))
       (pcase (appkit-source-spec-emission-policy spec)
         ('lossless
          (if (>= (appkit-source--instance-event-count instance)
@@ -357,7 +408,8 @@
            :sequence
            (appkit-source--next-sequence
             (appkit-source--instance-runtime instance))
-           :kind 'closed :payload reason))
+           :kind 'closed
+           :payload reason))
     (when cancel-p
       (appkit-source--invoke-cancellation instance #'ignore))
     (appkit-source--request-wake instance)
@@ -443,7 +495,8 @@
                (null (gethash key (appkit-source-runtime-instances runtime))))
       (let* ((instance
               (appkit-source--instance-create
-               :runtime runtime :spec spec
+               :runtime runtime
+               :spec spec
                :token (make-symbol "appkit-source-instance-")
                :state 'active
                :event-count 0
@@ -539,7 +592,9 @@
              (appkit-loop--post-control-addressed
               loop
               (appkit-source--quiescent-delivery-create
-               :runtime runtime :instance instance :token token)
+               :runtime runtime
+               :instance instance
+               :token token)
               (appkit-loop-incarnation loop))))
         (when (eq outcome 'full)
           (appkit-loop--enter-fault
@@ -608,7 +663,10 @@
    runtime
    (appkit-source--item-create
     :sequence (appkit-source--next-sequence runtime)
-    :kind 'outbound :mapper mapper :mapper-input input :payload outcome)))
+    :kind 'outbound
+    :mapper mapper
+    :mapper-input input
+    :payload outcome)))
 
 (defun appkit-source--stage-intent-outcome (instance intent outcome)
   "Settle current outbound INTENT once with validated OUTCOME."
@@ -669,7 +727,9 @@
              (token (make-symbol "appkit-source-intent-"))
              (intent
               (appkit-source--intent-create
-               :token token :mapper result-mapper :input payload
+               :token token
+               :mapper result-mapper
+               :input payload
                :state 'pending))
              returned completed-p condition)
         (puthash token intent (appkit-source--instance-intents instance))

@@ -47,7 +47,8 @@
   (with-temp-buffer
     (insert "Alice")
     (let ((span (appkit-chat-ins-insert-right-aligned-text
-                 "12:34" 30 :face 'shadow)))
+                 "12:34" 30
+                 :face 'shadow)))
       (should (equal (buffer-substring-no-properties
                       (car span) (cdr span))
                      " 12:34"))
@@ -59,7 +60,8 @@
   (with-temp-buffer
     (insert "Alice")
     (let ((span (appkit-chat-ins-insert-right-aligned-text
-                 "12:34" 30 :right-edge-margin 2)))
+                 "12:34" 30
+                 :right-edge-margin 2)))
       (should (equal (buffer-substring-no-properties
                       (car span) (cdr span))
                      " 12:34"))
@@ -70,7 +72,8 @@
   (with-temp-buffer
     (insert (make-string 20 ?x))
     (let ((span (appkit-chat-ins-insert-right-aligned-text
-                 "12:34" 30 :left-prefix-width 4)))
+                 "12:34" 30
+                 :left-prefix-width 4)))
       (should (= (car span) (line-beginning-position)))
       (should (= (line-number-at-pos) 2))
       (should (equal (get-text-property (car span) 'display)
@@ -79,7 +82,8 @@
 (ert-deftest appkit-chat-ins-insert-media-card-stores-context-and-prefixes ()
   (with-temp-buffer
     (let* ((context (appkit-media-card-context-create
-                     :kind 'image :title "photo.png"))
+                     :kind 'image
+                     :title "photo.png"))
            (span (appkit-chat-ins-insert-media-card
                   :kind 'image
                   :title "photo.png"

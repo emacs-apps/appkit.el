@@ -46,10 +46,10 @@
   "Initial Evil state for `appkit-directory-mode'.
 When nil, leave Evil's initial-state selection untouched."
   :type '(choice (const :tag "Don't override" nil)
-          (const :tag "Normal" normal)
-          (const :tag "Motion" motion)
-          (const :tag "Emacs" emacs)
-          (symbol :tag "Custom state"))
+                 (const :tag "Normal" normal)
+                 (const :tag "Motion" motion)
+                 (const :tag "Emacs" emacs)
+                 (symbol :tag "Custom state"))
   :group 'appkit-evil)
 
 (defvar appkit-evil--deferred-bindings nil
@@ -216,7 +216,6 @@ Do nothing until Evil is loaded or when STATE is nil."
       (with-current-buffer buffer
         (when (apply #'derived-mode-p modes)
           (appkit-evil-normalize-keymaps))))))
-
 
 (defun appkit-evil-chatbuf-enter-input ()
   "Focus the current Appkit chat composer and enter Evil insert state."

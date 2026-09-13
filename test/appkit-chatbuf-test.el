@@ -237,7 +237,8 @@
     (appkit-ui-insert-prefixed-lines "    " "Message")
     (appkit-chatbuf-install-prompt ">>> ")
     (appkit-chatbuf-input-insert
-     "@alice" :object '(:kind mention :id "alice")
+     "@alice"
+     :object '(:kind mention :id "alice")
      :properties '(display "Alice"))
     (let ((input-offset (- (appkit-chatbuf-input-start-position) (point-min)))
           (copied (filter-buffer-substring (point-min) (point-max))))
@@ -324,7 +325,9 @@
   (with-temp-buffer
     (appkit-chatbuf-mode)
     (appkit-chatbuf-bind-input-region
-     :visible-p t :prompt ">>> " :input-text "draft")
+     :visible-p t
+     :prompt ">>> "
+     :input-text "draft")
     (let ((sync-count 0))
       (setq-local appkit-chatbuf-input-sync-function
                   (lambda ()
@@ -347,7 +350,9 @@
   (with-temp-buffer
     (insert "timeline\n")
     (appkit-chatbuf-bind-input-region
-     :visible-p t :prompt ">>> " :input-text "draft")
+     :visible-p t
+     :prompt ">>> "
+     :input-text "draft")
     (should-not
      (text-property-not-all
       (point-min) (appkit-chatbuf-prompt-start-position) 'read-only t))
@@ -362,7 +367,9 @@
     (appkit-chatbuf-mode)
     (insert "timeline\n")
     (appkit-chatbuf-bind-input-region
-     :visible-p t :prompt ">>> " :input-text "")
+     :visible-p t
+     :prompt ">>> "
+     :input-text "")
     (appkit-chatbuf-use-timeline-mode
      #'appkit-chatbuf-test--timeline-mode)
     (goto-char (point-min))
@@ -379,7 +386,9 @@
     (appkit-chatbuf-mode)
     (insert "timeline\n")
     (appkit-chatbuf-bind-input-region
-     :visible-p t :prompt ">>> " :input-text "draft")
+     :visible-p t
+     :prompt ">>> "
+     :input-text "draft")
     (appkit-chatbuf-use-timeline-mode
      #'appkit-chatbuf-test--timeline-mode)
     (goto-char (point-min))
@@ -419,7 +428,9 @@
     (should (equal "" (appkit-chatbuf-input-state)))
     ;; A later frame rebind must not resurrect the stale canonical value.
     (appkit-chatbuf-bind-input-region
-     :visible-p t :prompt ">>> " :input-text (appkit-chatbuf-input-state))
+     :visible-p t
+     :prompt ">>> "
+     :input-text (appkit-chatbuf-input-state))
     (should (equal "" (appkit-chatbuf-input-string)))))
 
 (ert-deftest appkit-chatbuf-after-change-syncs-backspace-at-input-end ()
@@ -438,21 +449,25 @@
     (delete-char -1)
     (should (equal "ab" (appkit-chatbuf-input-state)))
     (appkit-chatbuf-bind-input-region
-     :visible-p t :prompt ">>> " :input-text (appkit-chatbuf-input-state))
+     :visible-p t
+     :prompt ">>> "
+     :input-text (appkit-chatbuf-input-state))
     (should (equal "ab" (appkit-chatbuf-input-string)))))
 
 (ert-deftest appkit-chatbuf-input-objects-delete-as-one-unit ()
   (with-temp-buffer
     (appkit-chatbuf-install-prompt ">>> ")
     (appkit-chatbuf-input-insert
-     "@Alice" :object '(:kind mention :user-id "1"))
+     "@Alice"
+     :object '(:kind mention :user-id "1"))
     (insert "after")
     (goto-char (+ (appkit-chatbuf-input-start-position) 7))
     (appkit-chatbuf-input-backward-delete 1)
     (should (equal "after" (appkit-chatbuf-input-string)))
     (goto-char (appkit-chatbuf-input-start-position))
     (appkit-chatbuf-input-insert
-     "@Alice" :object '(:kind mention :user-id "1"))
+     "@Alice"
+     :object '(:kind mention :user-id "1"))
     (goto-char (appkit-chatbuf-input-start-position))
     (appkit-chatbuf-input-forward-delete 1)
     (should (equal "after" (appkit-chatbuf-input-string)))
@@ -523,7 +538,8 @@
   (with-temp-buffer
     (appkit-chatbuf-install-prompt ">>> ")
     (appkit-chatbuf-input-insert
-     "@Alice" :object '(:kind mention :user-id "1"))
+     "@Alice"
+     :object '(:kind mention :user-id "1"))
     (goto-char (+ (appkit-chatbuf-input-start-position) 2))
     (let ((inhibit-modification-hooks t))
       (delete-char 1))
@@ -620,9 +636,12 @@
   (let (cancelled)
     (with-temp-buffer
       (insert
-       (appkit-chatbuf-aux-render :title "Reply to Alice" :preview (appkit-ui-one-line-preview-create :text "  (sticker)\n preview  ") :cancel-action (lambda () (setq cancelled t))
-                                  :cancel-help "Cancel reply"
-                                  :width 40))
+       (appkit-chatbuf-aux-render
+        :title "Reply to Alice"
+        :preview (appkit-ui-one-line-preview-create :text "  (sticker)\n preview  ")
+        :cancel-action (lambda () (setq cancelled t))
+        :cancel-help "Cancel reply"
+        :width 40))
       (should
        (equal "× ▏ Reply to Alice\n  ▏ (sticker) preview\n"
               (buffer-substring-no-properties (point-min) (point-max))))

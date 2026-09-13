@@ -51,7 +51,8 @@ set; its owner runtime validates the applicable capacity."
 (cl-defstruct
     (appkit-next-rejected (:constructor appkit-next-reject (reason))
                           (:copier nil))
-  "A normal client-domain rejection carrying REASON." reason)
+  "A normal client-domain rejection carrying REASON."
+  reason)
 
 (cl-defstruct (appkit-command
                (:constructor nil)
@@ -109,7 +110,10 @@ to attach a return route when TARGET is an address."
                (:constructor appkit-command-source-intent--create)
                (:copier nil))
   "Send owned PAYLOAD through one matching declarative Source."
-  key expected-identity payload result-mapper)
+  key
+  expected-identity
+  payload
+  result-mapper)
 
 (cl-defun appkit-command-source-intent
     (&key key expected-identity payload result-mapper)
@@ -120,13 +124,17 @@ to attach a return route when TARGET is an address."
   (unless (and (symbolp result-mapper) (functionp result-mapper))
     (error "Source intent result mapper must be a function symbol"))
   (appkit-command-source-intent--create
-   :key key :expected-identity expected-identity
-   :payload payload :result-mapper result-mapper))
+   :key key
+   :expected-identity expected-identity
+   :payload payload
+   :result-mapper result-mapper))
 
 (cl-defstruct (appkit-command-work
                (:constructor appkit-command--work-create)
                (:copier nil))
-  posts effects source-intents)
+  posts
+  effects
+  source-intents)
 
 (cl-defstruct (appkit-command--batch
                (:constructor appkit-command--batch-create-internal)
@@ -219,7 +227,8 @@ oversized lists fail without an unbounded scan."
         (push (cdr entry) effects)))
     (appkit-command--batch-clear batch)
     (appkit-command--work-create
-     :posts posts :effects (nreverse effects)
+     :posts posts
+     :effects (nreverse effects)
      :source-intents source-intents)))
 
 (defun appkit-command--revoke-effects (runtime commands warning-type)

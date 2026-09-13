@@ -24,7 +24,7 @@
         (should (equal "> quoted\n" (buffer-substring-no-properties
                                      (point-min) (point-max))))
         (dolist (property '(display line-prefix wrap-prefix
-                                    appkit-ui-source-line-marker rear-nonsticky))
+                            appkit-ui-source-line-marker rear-nonsticky))
           (should-not (text-property-not-all
                        (point-min) (point-max) property nil)))))))
 
@@ -43,10 +43,11 @@
         :body-inserter
         (lambda (prefix properties)
           (appkit-ui-insert-prefixed-lines
-           prefix "first\nsecond" :properties properties))
+           prefix "first\nsecond"
+           :properties properties))
         :footer "3/5 replies"
         :properties '(client-entry "reply-2"
-                                   rear-nonsticky (client-entry)))
+                      rear-nonsticky (client-entry)))
        :width 50
        :indent-width 3))
     (should (string-match-p "Author replies" (buffer-string)))
@@ -103,7 +104,8 @@
           :body-inserter
           (lambda (prefix properties)
             (appkit-ui-insert-prefixed-lines
-             prefix "body" :properties properties)))
+             prefix "body"
+             :properties properties)))
          :indent-width 3)))
     (should (equal (buffer-string)
                    "renoted by Alice\nOriginal author\nbody\n\n"))
@@ -127,7 +129,8 @@
       :body-inserter
       (lambda (prefix properties)
         (appkit-ui-insert-prefixed-lines
-         prefix "body" :properties properties)))
+         prefix "body"
+         :properties properties)))
      :avatar-p nil
      :separate-p nil)
     (should (equal (buffer-string) "Author\nbody\n"))))
@@ -141,13 +144,13 @@
       (appkit-discussion-insert-entry
        (appkit-discussion-entry-create
         :key "long"
-        :heading
-        "Alice Extremely Long Identity renoted Bob Equally Long Identity"
+        :heading "Alice Extremely Long Identity renoted Bob Equally Long Identity"
         :time "12:34"
         :body-inserter
         (lambda (prefix properties)
           (appkit-ui-insert-prefixed-lines
-           prefix "body" :properties properties)))
+           prefix "body"
+           :properties properties)))
        :width 30))
     (goto-char (point-min))
     (search-forward "12:34")
@@ -175,7 +178,8 @@
       :body-inserter
       (lambda (prefix properties)
         (appkit-ui-insert-prefixed-lines
-         prefix "body" :properties properties)))
+         prefix "body"
+         :properties properties)))
      :avatar-p nil
      :indent-width 3)
     (goto-char (point-min))
@@ -203,7 +207,8 @@
         :body-inserter
         (lambda (prefix properties)
           (appkit-ui-insert-prefixed-lines
-           prefix "body" :properties properties)))
+           prefix "body"
+           :properties properties)))
        :avatar-p nil))
     (goto-char (point-min))
     (should (string-prefix-p "│ " (get-text-property (point) 'line-prefix)))
@@ -228,7 +233,8 @@
           :body-inserter
           (lambda (prefix properties)
             (appkit-ui-insert-prefixed-lines
-             prefix "body" :properties properties)))
+             prefix "body"
+             :properties properties)))
          :avatar-p nil
          :separate-p nil)))
     (let* ((prefix (get-text-property (point-min) 'line-prefix))

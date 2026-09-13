@@ -132,13 +132,16 @@
           (setq projection
                 (appkit-projection-create
                  printer anchor-property
-                 :header header :footer footer :no-separator-p t)))
+                 :header header
+                 :footer footer
+                 :no-separator-p t)))
         (setq-local
          appkit-chat-timeline--state
          (appkit-chat-timeline--state-create
           :projection projection
           :after-mutation-function after-mutation-function
-          :mutation-depth 0 :deferred-keys nil))))
+          :mutation-depth 0
+          :deferred-keys nil))))
     (appkit-chat-timeline-ewoc)))
 
 (defun appkit-chat-timeline-scroll-observer ()
@@ -161,8 +164,7 @@
       (let ((observer
              (appkit-scroll-observer-install
               surface
-              :end-boundary-function
-              #'appkit-chat-timeline-footer-start-position
+              :end-boundary-function #'appkit-chat-timeline-footer-start-position
               :start-function start-function
               :end-function end-function)))
         (setf (appkit-chat-timeline--state-scroll-observer state) observer)

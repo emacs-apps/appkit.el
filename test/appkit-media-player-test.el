@@ -149,7 +149,9 @@
                   ((symbol-function 'cancel-timer) #'ignore))
           (setq session
                 (appkit-media-player-start-file
-                 file :command '("ffplay" "-autoexit") :owner app
+                 file
+                 :command '("ffplay" "-autoexit")
+                 :owner app
                  :duration-seconds 2
                  :on-finalize
                  (lambda (current)
@@ -194,7 +196,9 @@
                    (lambda (object) (eq object :timer)))
                   ((symbol-function 'cancel-timer) #'ignore))
           (appkit-media-player-start-file
-           file :command '("ffplay" "-autoexit") :owner app
+           file
+           :command '("ffplay" "-autoexit")
+           :owner app
            :on-finalize
            (lambda (session)
              (setq final-status

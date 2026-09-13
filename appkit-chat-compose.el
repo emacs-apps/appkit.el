@@ -442,7 +442,8 @@ automatic separators between header, footer, and prompt."
     (setq-local appkit-chat-compose--surface
                 (appkit-open-generated-surface
                  appkit-chat-compose--surface-type
-                 :app app :identity (and app (list 'compose (current-buffer)))
+                 :app app
+                 :identity (and app (list 'compose (current-buffer)))
                  :buffer (current-buffer)))))
 
 (defun appkit-chat-compose--render (_surface _app-read-view _model _request)

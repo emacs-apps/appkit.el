@@ -48,8 +48,8 @@
      :attachments-function
      (lambda ()
        '(:title "Media"
-                :items nil
-                :empty-label "  No media attached.")))
+         :items nil
+         :empty-label "  No media attached.")))
     (goto-char (appkit-chat-compose-body-start-position))
     (insert "draft")
     (appkit-chat-compose-add-item)
@@ -333,7 +333,8 @@
     (let* ((canceled 0)
            (generation (appkit-compose-generation))
            (owner (appkit-compose-operation-begin
-                   'publish :cancel-function (lambda () (cl-incf canceled))))
+                   'publish
+                   :cancel-function (lambda () (cl-incf canceled))))
            (buffer-read-only t))
       (let ((inhibit-read-only t))
         (appkit-chat-compose-set-items

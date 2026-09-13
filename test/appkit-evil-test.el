@@ -119,7 +119,7 @@
 ;;; appkit-evil-test.el ends here
 
 (ert-deftest
-    appkit-evil-normalizes-live-descendants-after-parent-bindings nil
+    appkit-evil-normalizes-live-descendants-after-parent-bindings ()
   (let*
       ((parent (make-symbol "appkit-test-parent"))
        (child (make-symbol "appkit-test-child"))

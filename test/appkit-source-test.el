@@ -53,11 +53,14 @@
         :render appkit-render-none)))
     (`(send ,identity ,payload)
      (appkit-next
-      :model model :render appkit-render-none
+      :model model
+      :render appkit-render-none
       :commands
       (list
        (appkit-command-source-intent
-        :key 'stream :expected-identity identity :payload payload
+        :key 'stream
+        :expected-identity identity
+        :payload payload
         :result-mapper #'appkit-source-test--intent-message))))
     ('tick
      (appkit-next :model model :render appkit-render-none))
@@ -138,7 +141,9 @@
             (lambda (_model)
               (list
                (appkit-source-spec-create
-                :key 'latest :identity 'latest :input 'latest
+                :key 'latest
+                :identity 'latest
+                :input 'latest
                 :start
                 (lambda (_context _input emit _close)
                   (setq emit-latest emit)
@@ -148,14 +153,17 @@
                 :emission-policy 'latest
                 :cancellation-requirement 'logical)
                (appkit-source-spec-create
-                :key 'coalesced :identity 'coalesced :input 'coalesced
+                :key 'coalesced
+                :identity 'coalesced
+                :input 'coalesced
                 :start
                 (lambda (_context _input emit _close)
                   (setq emit-coalesced emit)
                   (appkit-source-cancellation-create :kind 'logical))
                 :event #'appkit-source-test--tagged-event
                 :closed #'appkit-source-test--closed-message
-                :emission-policy 'coalesce-by-key :pending-limit 2
+                :emission-policy 'coalesce-by-key
+                :pending-limit 2
                 :cancellation-requirement 'logical)))
             :shutdown #'ignore)))
       (unwind-protect
@@ -196,7 +204,9 @@
             (lambda (_model)
               (list
                (appkit-source-spec-create
-                :key 'surface-stream :identity 'surface-stream :input nil
+                :key 'surface-stream
+                :identity 'surface-stream
+                :input nil
                 :start
                 (lambda (_context _input emit-gate _close-gate)
                   (push 'source-start events)
@@ -254,11 +264,14 @@
              (lambda (_model)
                (list
                 (appkit-source-spec-create
-                 :key 'stream :identity 'overflow :input nil
+                 :key 'stream
+                 :identity 'overflow
+                 :input nil
                  :start starter
                  :event #'appkit-source-test--event-message
                  :closed #'appkit-source-test--closed-message
-                 :emission-policy 'lossless :pending-limit 2
+                 :emission-policy 'lossless
+                 :pending-limit 2
                  :cancellation-requirement 'transport)))
              :shutdown #'ignore)))
       (unwind-protect
@@ -291,7 +304,9 @@
               (let ((identity (plist-get model :identity)))
                 (list
                  (appkit-source-spec-create
-                  :key 'stream :identity identity :input identity
+                  :key 'stream
+                  :identity identity
+                  :input identity
                   :start starter
                   :event #'appkit-source-test--event-message
                   :closed #'appkit-source-test--closed-message
@@ -349,7 +364,9 @@
              (lambda (_model)
                (list
                 (appkit-source-spec-create
-                 :key 'stream :identity 'live :input 'owned
+                 :key 'stream
+                 :identity 'live
+                 :input 'owned
                  :start
                  (lambda (_context _input emit-gate _close-gate)
                    (setq emit emit-gate)

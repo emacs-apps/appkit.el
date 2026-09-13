@@ -18,12 +18,14 @@
                   (lambda (context input)
                     (push context contexts)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (context model message)
                     (push context contexts)
                     (appkit-next
-                     :model (+ model message) :render appkit-render-none))
+                     :model (+ model message)
+                     :render appkit-render-none))
                   :shutdown (lambda (current) (setq shutdown-app current)))
                  :input 2))
           (let ((ticket (appkit-app-send app 3)))
@@ -55,11 +57,13 @@
                   :init
                   (lambda (_context input)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (_context model _message)
                     (appkit-next
-                     :model model :render appkit-render-none)))
+                     :model model
+                     :render appkit-render-none)))
                  :input 'canonical))
           (setq surface
                 (appkit-open-generated-surface
@@ -91,7 +95,8 @@
                        nil)
                      :recover (lambda (&rest _arguments))
                      :unmount (lambda (_surface)))))
-                 :app app :identity 'primary))
+                 :app app
+                 :identity 'primary))
           (setq buffer (appkit-surface-buffer surface))
           (should (= (appkit-app-surface-count app) 1))
           (should
@@ -126,7 +131,8 @@
                   :init
                   (lambda (_context input)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (_context _model message)
                     (appkit-next
@@ -202,11 +208,13 @@
                   :init
                   (lambda (_context input)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (_context model _message)
                     (appkit-next
-                     :model model :render appkit-render-none))
+                     :model model
+                     :render appkit-render-none))
                   :shutdown
                   (lambda (_app)
                     (setq shutdown-count (1+ shutdown-count)
@@ -223,11 +231,13 @@
                   :init
                   (lambda (_context input)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (_context model _message)
                     (appkit-next
-                     :model model :render appkit-render-none))
+                     :model model
+                     :render appkit-render-none))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-generated-renderer-create
@@ -243,7 +253,8 @@
                               surface-address 'too-late))
                        (appkit-app-close app)
                        (error "unmount cleanup failed")))))
-                 :app app :identity 'owned)
+                 :app app
+                 :identity 'owned)
                 buffer (appkit-surface-buffer surface)
                 surface-address
                 (appkit-routing--address (appkit-surface-loop surface)))
@@ -284,7 +295,8 @@
                   :init
                   (lambda (_context _input)
                     (appkit-next
-                     :model nil :render appkit-render-none))
+                     :model nil
+                     :render appkit-render-none))
                   :update
                   (lambda (_context model message)
                     (pcase message
@@ -322,7 +334,8 @@
                   :init
                   (lambda (_context input)
                     (appkit-next
-                     :model input :render appkit-render-none))
+                     :model input
+                     :render appkit-render-none))
                   :update
                   (lambda (&rest _arguments)
                     (error "parent transition fault")))
@@ -353,7 +366,8 @@
                   :update
                   (lambda (_context model _message)
                     (appkit-next
-                     :model model :render appkit-render-none))
+                     :model model
+                     :render appkit-render-none))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-generated-renderer-create
@@ -362,7 +376,8 @@
                      :render (lambda (&rest _arguments))
                      :recover nil
                      :unmount (lambda (&rest _arguments)))))
-                 :app app :identity 'fault-child))
+                 :app app
+                 :identity 'fault-child))
           (appkit-app-post app 'fault)
           (appkit-loop-run-pass (appkit-app-loop app))
           (should (eq (appkit-app-status app) 'faulted))

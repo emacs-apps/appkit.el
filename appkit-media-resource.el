@@ -393,10 +393,14 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
         (let ((inline
                 (video-session-inline-create
                  video-session width height
-                 :poster poster :fit fit :buffer buffer
-                 :canvas canvas :canvas-width canvas-width
+                 :poster poster
+                 :fit fit
+                 :buffer buffer
+                 :canvas canvas
+                 :canvas-width canvas-width
                  :canvas-height canvas-height
-                 :destination-x destination-x :destination-y destination-y
+                 :destination-x destination-x
+                 :destination-y destination-y
                  :visible-function visible-function
                  :alive-function alive-function
                  :activate-function activate-function
@@ -511,7 +515,8 @@ state.  DISPLAY-FUNCTION is forwarded to video.el."
           (let ((opened
                  (video-session-present
                   (appkit-media-video-session-video-session session)
-                  :buffer buffer :display-function display-function)))
+                  :buffer buffer
+                  :display-function display-function)))
             (unless (and (eq opened buffer)
                          (buffer-live-p buffer)
                          (or (null owner) (appkit-owner-live-p owner)))
@@ -560,7 +565,8 @@ CLIENT-LABEL, OWNER, BUFFER, and DISPLAY-FUNCTION have the same meanings as in
     (video-inline-prepare inline)
     (setq buffer
           (appkit-media-present-video-session
-           session client-label :owner owner
+           session client-label
+           :owner owner
            :buffer (or buffer
                        (and (buffer-live-p previous)
                             (eq (buffer-local-value 'video--buffer-player previous)
@@ -568,7 +574,8 @@ CLIENT-LABEL, OWNER, BUFFER, and DISPLAY-FUNCTION have the same meanings as in
                             (eq (buffer-local-value 'video--buffer-session previous)
                                 (appkit-media-video-session-video-session session))
                             previous))
-           :start nil :display-function display-function))
+           :start nil
+           :display-function display-function))
     (setf (video-inline-presentation-buffer inline) buffer)
     buffer))
 
@@ -629,10 +636,16 @@ surface, or close the returned session."
         (user-error "%s: video resource has neither local file nor HTTPS URL"
                     label)))
       (appkit-media--video-session-create
-       :resource resource :label label :source source
+       :resource resource
+       :label label
+       :source source
        :video-session
        (video-session-create
-        source :kind 'video :muted muted :live live :auto-close t
+        source
+        :kind 'video
+        :muted muted
+        :live live
+        :auto-close t
         :request-headers request-headers
         :cache-file cache-file
         :cache-complete-function cache-complete-function)))))
@@ -649,8 +662,11 @@ surface, or close the returned session."
              (setq session
                    (appkit-media-video-session-create
                     (appkit-media-resource-create :file path :name (file-name-nondirectory path))
-                    label :owner owner))
-             label :owner owner :start t)
+                    label
+                    :owner owner))
+             label
+             :owner owner
+             :start t)
           (setq opened-p t))
       (unless opened-p
         (appkit-media-video-session-close session)))))
@@ -762,7 +778,9 @@ surface, or close the returned session."
 (defun appkit-media--add-transfer-handle (transfer success error)
   "Add and return a caller handle on TRANSFER for SUCCESS and ERROR."
   (let ((handle (appkit-media--transfer-handle-create
-                 :transfer transfer :success success :error error)))
+                 :transfer transfer
+                 :success success
+                 :error error)))
     (setf (appkit-media--transfer-listeners transfer)
           (append (appkit-media--transfer-listeners transfer)
                   (list handle)))
