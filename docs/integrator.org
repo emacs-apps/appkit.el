@@ -159,6 +159,47 @@ For incoming presentation, construct a normalized Document and call
 ~appkit-markup-ui-insert-document~.  Use ~:interactive-p nil~ for previews;
 Appkit then invokes no link/object/code callback and traverses stored fallback.
 
+** Inline translation
+
+~appkit-translate~ is optional.  It owns transient translation state, a bounded
+owner-scoped request queue, and an inline region with pending/error feedback,
+hide/show and explicit retranslation actions.  It does not replace original
+messages, persist translations, or translate anything during rendering.
+
+Create a context with ~appkit-translate-context-create~ using the exact live
+App or Surface and a callback that schedules a targeted redraw for a source
+key.  A Surface-local context is disposable; recreate it when its owner changes.
+
+An application supplies a source plist:
+
+- ~:key~ is its stable, account-scoped content identity.
+- ~:version~ identifies the exact original content and representation.
+- ~:text~ is plain text extracted from canonical content, not the rendered
+  buffer.  The application decides which content is eligible; hidden/private
+  material must not be added implicitly.
+- Optional ~:data~ carries backend-specific input, such as a platform post ID.
+
+Call ~appkit-translate-request~ only from an explicit user action.  Render
+~appkit-translate-insert~ below the unchanged original; render-time source
+plists need only key/version, avoiding repeated plain-text extraction.
+Edited content cannot display an older version's result.  Request replacement
+and owner disposal revoke old callbacks; physical cancellation depends on the
+backend and does not promise that remote processing has stopped.
+
+Backends are descriptors with ~:id~ (configuration identity), ~:label~ (service
+shown to the user), and ~:start~.  The starter receives source, target language,
+resolve and reject callbacks, returning a cancellation function, AppKit handle,
+or nil for logical-only cancellation.  Resolve supplies the translated string;
+reject supplies an error string.  Factories freeze settings in both the
+identity and starter.  There is no automatic retry or backend fallback.
+
+~appkit-translate-target-language~ defaults to ~"zh"~.
+~appkit-translate-backend-function~ defaults to the optional
+~appkit-translate-respond-backend~ factory; applications may explicitly choose
+their own platform backend.  Respond is loaded only when selected and uses
+its independent Codex login and ~appkit-translate-respond-model~.  Translation
+does not depend on agent sessions or tool execution.
+
 ** Transfer control
 
 A timeline transfer control presents one upload or download.  The
