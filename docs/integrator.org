@@ -166,10 +166,12 @@ owner-scoped request queue, and an inline region with pending/error feedback,
 hide/show and explicit retranslation actions.  It does not replace original
 messages, persist translations, or translate anything during rendering.
 
-Create a context with ~appkit-translate-context-create~ using the exact live
-App or Surface and a callback that schedules a targeted redraw for a source
-key.  A Surface-local context is disposable; recreate it when its owner changes.
-
+Translation runtime is owned directly by a live App or Generated Surface via
+lifecycle handles.  Applications configure targeted row invalidation with
+~appkit-translate-enable~; on Generated Surfaces without custom notification,
+state changes post an ~appkit-projection-change~ with the source key by default.
+Stopping the owner cancels active tasks, drops queued work, and retires its
+translation runtime without caller-managed contexts or buffer-local variables.
 An application supplies a source plist:
 
 - ~:key~ is its stable, account-scoped content identity.
@@ -181,11 +183,11 @@ An application supplies a source plist:
 
 Call ~appkit-translate-request~ only from an explicit user action.  Render
 ~appkit-translate-insert~ below the unchanged original; render-time source
-plists need only key/version, avoiding repeated plain-text extraction.
+plists need only key/version, avoiding repeated plain-text extraction.  Both
+functions default their owner to ~appkit-current-surface~.
 Edited content cannot display an older version's result.  Request replacement
 and owner disposal revoke old callbacks; physical cancellation depends on the
 backend and does not promise that remote processing has stopped.
-
 Backends are descriptors with ~:id~ (configuration identity), ~:label~ (service
 shown to the user), and ~:start~.  The starter receives source, target language,
 resolve and reject callbacks, returning a cancellation function, AppKit handle,
