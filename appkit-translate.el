@@ -213,6 +213,28 @@ NOTIFY-OR-SURFACE can be a notification callback or an explicit surface."
                (appkit-translate--notify context state))))
           state)))))
 
+(defun appkit-translate-request-many
+    (sources &optional backend language force notify-or-surface surface)
+  "Explicitly translate SOURCES through one owner's existing bounded queue.
+Arguments follow `appkit-translate-request'.  Capture the owner, backend and
+target language once for the batch.  Return states in SOURCES order, retaining
+per-source caching, errors and cancellation; requests are not merged on the wire.
+An empty SOURCES list does not initialize a backend or translation context.
+Callers select the scope and omit sources without translatable text."
+  (when sources
+    (let ((owner (or surface
+                     (and (not (functionp notify-or-surface)) notify-or-surface)
+                     (appkit-current-surface))))
+      (unless (appkit-owner-live-p owner)
+        (user-error "Translation view is closed"))
+      (let ((backend (or backend (funcall appkit-translate-backend-function)))
+            (language (copy-sequence (or language appkit-translate-target-language))))
+        (mapcar
+         (lambda (source)
+           (appkit-translate-request
+            source backend language force notify-or-surface owner))
+         sources)))))
+
 (defun appkit-translate-hide (source-or-state &optional surface)
   "Hide SOURCE-OR-STATE and revoke unfinished work, without affecting other sources."
   (let* ((owner (or surface (appkit-current-surface)))
