@@ -188,6 +188,16 @@ functions default their owner to ~appkit-current-surface~.
 Edited content cannot display an older version's result.  Request replacement
 and owner disposal revoke old callbacks; physical cancellation depends on the
 backend and does not promise that remote processing has stopped.
+
+For an explicit multi-message action, collect source plists and call
+~appkit-translate-request-many~.  It accepts the same optional arguments as
+~appkit-translate-request~, captures one owner/backend/target language for the
+batch, and returns per-source states in input order.  Existing owner-scoped
+concurrency limits, cache reuse, failure isolation and cancellation still apply;
+this does not merge messages into one remote request.  An empty list does not
+initialize a backend.  Applications own range selection and must omit sources
+without translatable text before submitting the batch.
+
 Backends are descriptors with ~:id~ (configuration identity), ~:label~ (service
 shown to the user), and ~:start~.  The starter receives source, target language,
 resolve and reject callbacks, returning a cancellation function, AppKit handle,
