@@ -88,6 +88,21 @@
        (appkit-chat-timeline--projection state))
     nil))
 
+(defun appkit-chat-timeline-keys-in-range (begin end)
+  "Return distinct exact row keys intersecting half-open BEGIN..END.
+Do not use nearby-row fallback or include the composer."
+  (let* ((property (appkit-projection--engine-anchor-property
+                    (appkit-chat-timeline--projection)))
+         (position (max (point-min) begin))
+         (end (min end (or (appkit-chatbuf-prompt-start-position) (point-max))))
+         keys)
+    (when property
+      (while (< position end)
+        (when-let* ((key (get-text-property position property)))
+          (unless (member key keys) (push key keys)))
+        (setq position (next-single-property-change position property nil end))))
+    (nreverse keys)))
+
 (defun appkit-chat-timeline-node (key)
   "Return current EWOC node identified by KEY, or nil."
   (when-let* ((state (appkit-chat-timeline--current-state)))
