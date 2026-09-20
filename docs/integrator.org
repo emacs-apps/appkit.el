@@ -311,6 +311,25 @@ starting asynchronous work.
 Keep viewport observation independent of projection invalidation: a height-only
 resize changes visible edges without requiring width-dependent rows to reflow.
 
+** Stable-key selection
+
+~appkit-selection~ provides protocol-neutral selection values.  Store the value
+in the client Surface model and return replacements from transitions using
+~appkit-selection-set~, ~appkit-selection-toggle~ (clear/restore), and
+~appkit-selection-forget~.  Treat values and their key lists as immutable.
+Projection caches never own persistent selection.
+
+~appkit-chat-timeline-keys-in-range~ maps a half-open rendered range to distinct
+row keys, excluding the composer.  A row leaving that range or disappearing
+from a projection does not imply deletion.  Only the client's authoritative
+deletion transition should forget a key, including its restorable mark.
+
+Clients still own target ordering, selectability, action cardinality,
+permissions and transport.  Capture exact Surface identity and stable keys for
+menus; resolve current objects at execution without falling back to a new point
+target.  Batch requests should advance through committed transitions and owned
+Effects, not renderer callbacks.
+
 ** Media
 
 Callers adapt backend objects into canonical resource descriptors and explicit
