@@ -123,5 +123,38 @@
         (should (string-match-p "Show" (buffer-string)))
         (should-not (string-match-p "Translated: Sample text" (buffer-string)))))))
 
+(ert-deftest appkit-translate-batch-freezes-settings-and-isolates-failure ()
+  (appkit-test-with-surface
+    (let* ((appkit-translate-target-language "zh")
+           (factories 0)
+           callbacks calls
+           (appkit-translate-backend-function
+            (lambda ()
+              (cl-incf factories)
+              (list :id factories :label "Batch"
+                    :start
+                    (lambda (source language resolve reject)
+                      (let ((key (plist-get source :key)))
+                        (push (list key language) calls)
+                        (push (list key resolve reject) callbacks)
+                        ;; A synchronous callback can change global settings,
+                        ;; but must not split this batch across configurations.
+                        (setq appkit-translate-target-language "ja")
+                        nil)))))
+           (sources '((:key a :version 1 :text "First")
+                      (:key b :version 1 :text "Second")
+                      (:key c :version 1 :text "Third")))
+           (states (appkit-translate-request-many sources)))
+      (should (equal (reverse calls) '((a "zh") (b "zh"))))
+      (funcall (nth 2 (assq 'a callbacks)) "Service rejected first message")
+      (should (equal (reverse calls) '((a "zh") (b "zh") (c "zh"))))
+      (funcall (nth 1 (assq 'b callbacks)) "第二条")
+      (funcall (nth 1 (assq 'c callbacks)) "第三条")
+      (should (= factories 1))
+      (should (equal (mapcar (lambda (state) (plist-get state :status)) states)
+                     '(failed completed completed)))
+      (should (equal (plist-get (appkit-translate-state (nth 2 sources)) :text)
+                     "第三条")))))
+
 (provide 'appkit-translate-test)
 ;;; appkit-translate-test.el ends here
