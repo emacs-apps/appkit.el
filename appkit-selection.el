@@ -4,7 +4,8 @@
 
 ;; Protocol-neutral values for client Surface models.  Transitions return new
 ;; selections; projection caches and buffer positions never own these values.
-;; Clients decide order, selectability, deletion, rendering and key bindings.
+;; Clients decide order, selectability, deletion and key bindings.
+;; Chat selection decoration lives separately in `appkit-chat-ins'.
 
 ;;; Code:
 

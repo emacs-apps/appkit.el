@@ -324,6 +324,15 @@ row keys, excluding the composer.  A row leaving that range or disappearing
 from a projection does not imply deletion.  Only the client's authoritative
 deletion transition should forget a key, including its restorable mark.
 
+Selection presentation belongs to ~appkit-chat-ins~, not individual clients.
+After inserting a selected message, call
+~appkit-chat-ins-apply-message-selection~ with its heading/body bounds,
+excluding preceding date and unread dividers.  Apply it once to the fresh
+rendering; normal row replacement removes the decoration when unmarked.
+It composes the strip with existing avatar and content prefixes on both
+logical and wrapped lines, without changing text or content faces.
+Customize ~appkit-chat-selection-marker~ for the shared appearance.
+
 Clients still own target ordering, selectability, action cardinality,
 permissions and transport.  Capture exact Surface identity and stable keys for
 menus; resolve current objects at execution without falling back to a new point
