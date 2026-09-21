@@ -22,6 +22,24 @@
 (require 'appkit-ui)
 (require 'appkit-geometry)
 
+(defface appkit-chat-selection-marker
+  '((t :inherit region))
+  "Face for the continuous strip beside selected chat messages."
+  :group 'appkit)
+
+(defconst appkit-chat-ins--selection-prefix
+  (propertize " " 'face 'appkit-chat-selection-marker)
+  "Shared display-only prefix for a selected message's visual lines.")
+
+(defun appkit-chat-ins-apply-message-selection (start end)
+  "Decorate a freshly rendered selected message between START and END.
+
+Apply once, after inserting the message body and its existing prefixes.
+The caller supplies the message bounds, excluding date and unread dividers.
+The strip covers both logical and wrapped lines, preserving avatars,
+content faces and buffer text.  Selection ownership remains with the caller."
+  (appkit-ui-apply-line-prefix start end appkit-chat-ins--selection-prefix))
+
 (defun appkit-chat-ins--current-line-prefix-width ()
   "Return the display prefix width already attached to the current line."
   (let ((prefix (or (get-text-property (line-beginning-position) 'line-prefix)
