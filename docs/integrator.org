@@ -558,10 +558,11 @@ so every map needs an explicit state shorthand.  For example:
 
 The underlying installer defers until both Evil and the target map exist.
 
-Read-only surfaces may add ~appkit-evil-define-readonly-keys~.  Keep
-timeline-only bindings on the point-sensitive timeline minor map so they
-disappear in editable input.  Use ~appkit-evil-set-initial-states~ and
-~appkit-evil-normalize-buffers~ for client lifecycle setup.
+Read-only surfaces may add ~appkit-evil-define-readonly-keys~ for quit and
+~g?~ help.  Keep timeline-only bindings on the point-sensitive minor map so
+they disappear in editable input.  Preserve Evil's bare ~?~ search and visual
+~o~ motion; use ~C-c C-o~ for input options.  Use ~appkit-evil-set-initial-states~
+and ~appkit-evil-normalize-buffers~ for client lifecycle setup.
 
 Message actions follow Telega where supported.  Keep application commands
 (~ga~), chat navigation (~gA~), and point-local activation separate.
