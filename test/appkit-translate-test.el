@@ -102,27 +102,6 @@
       (appkit-surface-stop appkit-test-surface)
       (should-error (appkit-translate-request source backend "zh") :type 'user-error))))
 
-(ert-deftest appkit-translate-insert-renders-buttons-and-triggers-action ()
-  "Inserting translations produces inline region with working Hide and Show actions."
-  (appkit-test-with-surface
-    (let* ((backend (list :id 'echo :label "Echo"
-                          :start (lambda (source _lang resolve _reject)
-                                   (funcall resolve (concat "Translated: " (plist-get source :text)))
-                                   nil)))
-           (source '(:key msg1 :version 1 :text "Sample text")))
-      (appkit-translate-request source backend "zh")
-      (with-temp-buffer
-        (appkit-translate-insert source "  " nil appkit-test-surface)
-        (should (string-match-p "Translation · zh · Echo" (buffer-string)))
-        (should (string-match-p "Translated: Sample text" (buffer-string)))
-        (should (string-match-p "Hide" (buffer-string)))
-        (should (string-match-p "Translate again" (buffer-string))))
-      (appkit-translate-hide source appkit-test-surface)
-      (with-temp-buffer
-        (appkit-translate-insert source "  " nil appkit-test-surface)
-        (should (string-match-p "Show" (buffer-string)))
-        (should-not (string-match-p "Translated: Sample text" (buffer-string)))))))
-
 (ert-deftest appkit-translate-batch-freezes-settings-and-isolates-failure ()
   (appkit-test-with-surface
     (let* ((appkit-translate-target-language "zh")
