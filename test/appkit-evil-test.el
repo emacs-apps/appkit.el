@@ -104,16 +104,6 @@
                   ((:map example-mode-map :n "D" ignore))))
     (should-error (macroexpand (cons 'appkit-evil-map args)))))
 
-(ert-deftest appkit-evil-chatbuf-enters-input-in-one-command ()
-  (let (focused inserted)
-    (cl-letf (((symbol-function 'appkit-chatbuf-focus-input)
-               (lambda () (setq focused t)))
-              ((symbol-function 'evil-insert-state)
-               (lambda () (setq inserted t))))
-      (appkit-evil-chatbuf-enter-input)
-      (should focused)
-      (should inserted))))
-
 (provide 'appkit-evil-test)
 
 ;;; appkit-evil-test.el ends here

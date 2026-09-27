@@ -227,12 +227,13 @@ Do nothing until Evil is loaded or when STATE is nil."
 (defun appkit-evil-define-readonly-keys (keymap-symbol)
   "Install standard read-only modal bindings in KEYMAP-SYMBOL.
 
-`q' and `ZZ' close the window, and `ZQ' uses `evil-quit'.  Editing commands
-are deliberately left to Evil and the buffer's own read-only enforcement.
+`q' and `ZZ' close the window, `ZQ' uses `evil-quit', and `g?' describes
+the mode.  Editing and search commands remain Evil's responsibility.
 Call this before adding surface-specific bindings."
   (appkit-evil-define-keys appkit-evil--readonly-states keymap-symbol
     "q" #'quit-window
     "ZZ" #'quit-window
+    "g ?" #'describe-mode
     "ZQ" #'evil-quit))
 
 (defun appkit-evil--define-directory-keys ()
