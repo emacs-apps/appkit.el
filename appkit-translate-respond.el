@@ -69,12 +69,14 @@ no authentication failure initiates login, fallback, or request replay."
                                                                       :text (plist-get source :text))))))
                     :on-done
                     (lambda (result)
-                      (if (eq (respond-request-status result) 'completed)
-                          (settle t (appkit-translate-respond--text result))
-                        (settle nil
-                                (or (plist-get (respond-request-error result) :message)
-                                    (format "Translation request ended as %s"
-                                            (respond-request-status result))))))))
+                      (condition-case err
+                          (if (eq (respond-request-status result) 'completed)
+                              (settle t (appkit-translate-respond--text result))
+                            (settle nil
+                                    (or (plist-get (respond-request-error result) :message)
+                                        (format "Translation request ended as %s"
+                                                (respond-request-status result)))))
+                        (error (settle nil (error-message-string err)))))))
                (error (settle nil (error-message-string err)))))))
       (condition-case err
           (setq auth-cancel
