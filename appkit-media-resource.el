@@ -373,17 +373,17 @@ The only valid results are `image', `video', and `file'."
 
 (cl-defun appkit-media-video-inline-create
     (session width height
-             &key poster (fit 'contain) buffer
+             &key poster (fit 'contain) buffer anchor
              canvas canvas-width canvas-height
              (destination-x 0) (destination-y 0)
-             visible-function alive-function background-function
+             visible-function alive-function
              activate-function close-function)
   "Create an inline surface borrowing SESSION at WIDTH by HEIGHT.
 
-POSTER, FIT, BUFFER, CANVAS, CANVAS-WIDTH, CANVAS-HEIGHT, DESTINATION-X,
-DESTINATION-Y, VISIBLE-FUNCTION, ALIVE-FUNCTION, BACKGROUND-FUNCTION, and
-ACTIVATE-FUNCTION carry video.el's presentation contracts.  Audio state
-remains on SESSION's player.
+POSTER, FIT, BUFFER, ANCHOR, CANVAS, CANVAS-WIDTH, CANVAS-HEIGHT,
+DESTINATION-X, DESTINATION-Y, VISIBLE-FUNCTION, ALIVE-FUNCTION, and
+ACTIVATE-FUNCTION carry video.el's presentation contracts.
+Audio state remains on SESSION's player.
 CLOSE-FUNCTION is called once with the returned surface after it closes."
   (unless (appkit-media-video-session-live-p session)
     (error "Cannot create an inline surface for a closed video session"))
@@ -400,6 +400,7 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
                  :poster poster
                  :fit fit
                  :buffer buffer
+                 :anchor anchor
                  :canvas canvas
                  :canvas-width canvas-width
                  :canvas-height canvas-height
@@ -407,7 +408,6 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
                  :destination-y destination-y
                  :visible-function visible-function
                  :alive-function alive-function
-                 :background-function background-function
                  :activate-function activate-function
                  :close-function
                  (lambda (inline)
