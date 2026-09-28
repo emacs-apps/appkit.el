@@ -388,14 +388,17 @@ host supplies its actual image-span position for background resolution, so
 transparent images respect message faces and buffer-local face remapping even
 when activation runs while point is elsewhere.
 
-For a host-owned Canvas, supply ~:visible-function~, ~:alive-function~,
-~:background-function~, and ~:activate-function~.  The background callback
-receives the backend inline and returns packed ~0xRRGGBB~; use
-~video-background-color~ with the scene's buffer and display position.
-Use ~video-canvas-create~ for a standalone Canvas, passing the same background
-to it and to one-shot ~video-canvas-draw-uri~ poster draws.  The host redraws
-its static scene when its colors change; video.el recomposes live or paused
-targets without changing their shared player.
+For a host-owned Canvas, supply its existing display marker as ~:anchor~,
+alongside ~:visible-function~, ~:alive-function~, and ~:activate-function~.
+The marker identifies the buffer and occurrence; video.el resolves its
+background automatically, without a host color callback.  Standard
+~appkit-media-inline-host-attach~ already knows its spans and requires no
+additional placement or color arguments.
+Use ~video-canvas-create~ for a standalone Canvas.  Resolve its static drawing
+background with ~video-background-color~ at the scene's display marker and
+pass it to the constructor and one-shot ~video-canvas-draw-uri~ poster draws.
+The host redraws its static scene when its colors change; video.el recomposes
+live or paused targets without changing their shared player.
 The activation callback publishes the Canvas over the complete image span;
 copying native frames alone does not replace the host's static display.
 

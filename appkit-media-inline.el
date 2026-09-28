@@ -209,18 +209,14 @@ Character ticks distinguish row replacement from harmless property styling."
                                          (* rows (appkit-media--char-pixel-height))
                                        (or (cdr-safe size)
                                            (appkit-media--char-pixel-height)))))
-                       :buffer (current-buffer) :poster poster
+                       :poster poster
                        :visible-function
                        (lambda (_inline)
                          (appkit-media--inline-visible-p host))
                        :alive-function
                        (lambda (_inline)
                          (appkit-media-inline-host-live-p host))
-                       :background-function
-                       (lambda (_inline)
-                         (video-background-color
-                          (appkit-media-inline-host-buffer host)
-                          (caar (appkit-media-inline-host-ranges host))))
+                       :anchor (caar (appkit-media-inline-host-ranges host))
                        :activate-function
                        (lambda (surface canvas)
                          (appkit-media--inline-show-canvas host surface canvas))
