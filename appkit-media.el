@@ -21,6 +21,7 @@
 (require 'appkit-media-effect)
 (require 'appkit-media-player)
 (require 'appkit-media-video)
+(require 'appkit-media-inline)
 
 (provide 'appkit-media)
 

@@ -587,10 +587,11 @@
 
 (ert-deftest appkit-media-video-streams-and-reuses-complete-playback-cache ()
   (ert-with-temp-directory directory
-                           (let (sessions opened-sources cache-files cache-callbacks closed-players updated)
+                           (let (sessions opened-sources opened-kinds cache-files cache-callbacks closed-players updated)
                              (cl-letf (((symbol-function 'video-session-create)
                                         (lambda (source &rest arguments)
                                           (push source opened-sources)
+                                          (push (plist-get arguments :kind) opened-kinds)
                                           (push (plist-get arguments :cache-file) cache-files)
                                           (push (plist-get arguments :cache-complete-function) cache-callbacks)
                                           (list 'session source)))
@@ -611,6 +612,7 @@
                                            sessions)
                                      (let ((target (car cache-files)) (complete (car cache-callbacks)))
                                        (should (equal (car opened-sources) "https://example.invalid/movie.mp4"))
+                                       (should (eq (car opened-kinds) 'video))
                                        (make-directory (file-name-directory target) t)
                                        (with-temp-file target (insert "complete video"))
                                        (funcall complete 'player target)
@@ -623,6 +625,7 @@
                                               :cache-directory directory)
                                              sessions)
                                        (should (equal (car opened-sources) target))
+                                       (should (eq (car opened-kinds) 'video))
                                        (should-not (car cache-files))
                                        (should-not (car cache-callbacks))))
                                  (mapc #'appkit-media-video-session-close sessions))))))
@@ -649,6 +652,40 @@
               (should-not cache-file)
               (should-not cache-complete))
           (appkit-media-video-session-close session))))))
+
+(ert-deftest appkit-media-image-session-bypasses-video-cache ()
+  (ert-with-temp-directory directory
+    (let* ((url "https://example.invalid/animated.gif")
+           (cache-key "shared-asset")
+           (target (appkit-media--video-cache-target cache-key directory))
+           opened-source arguments updated)
+      (make-directory (file-name-directory target) t)
+      (with-temp-file target (insert "old video cache"))
+      (cl-letf (((symbol-function 'video-session-create)
+                 (lambda (source &rest options)
+                   (setq opened-source source arguments options)
+                   'image-session))
+                ((symbol-function 'video-session-close) #'ignore)
+                ((symbol-function 'appkit-media-copy-or-download-resource-async)
+                 (lambda (&rest _)
+                   (ert-fail "Image playback must not start a transfer"))))
+        (let ((session
+               (appkit-media-video-session-create
+                (appkit-media-resource-create :url url)
+                "test"
+                :kind 'image :muted t
+                :cache-key cache-key :cache-directory directory
+                :cache-update-function (lambda (resource) (setq updated resource)))))
+          (unwind-protect
+              (progn
+                (should (eq (appkit-media-video-session-kind session) 'image))
+                (should (equal opened-source url))
+                (should (eq (plist-get arguments :kind) 'image))
+                (should (plist-get arguments :muted))
+                (should-not (plist-get arguments :cache-file))
+                (should-not (plist-get arguments :cache-complete-function))
+                (should-not updated))
+            (appkit-media-video-session-close session)))))))
 
 (ert-deftest appkit-media-inline-and-dedicated-surfaces-share-one-player ()
   (let ((player (list :position 23.5 :desired-state 'playing))

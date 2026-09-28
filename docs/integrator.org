@@ -363,6 +363,27 @@ Closing either surface does not interrupt the other; video.el closes the player
 after its last inline or dedicated lease disappears.  A client's optional
 ~:close-function~ runs exactly once after video.el retires the inline surface.
 
+Applications rendering an image poster into a buffer can delegate its full
+inline lifecycle to ~appkit-media-inline-host-attach~.  Call it after inserting
+the poster, before or after card/context/line-prefix property writes.  Text
+replacement retires the host; styling preserves it.  Pass START, END, an
+immutable static POSTER, a canonical Appkit RESOURCE or nil, and
+~:kind image~ or ~:kind video~.  Use ~appkit-media-inline-static-poster~ to
+copy an animated GIF descriptor without its Appkit animation flag.  Attach
+returns nil if no image display spans exist.  ~:owner~ is the exact live
+Generated Surface; deletion, replacement, mode change, buffer death, or
+Surface retirement cancels work and releases the inline video.el lease.
+~appkit-media-inline-host-live-p~ and ~appkit-media-inline-host-at-point~
+identify a still-owned occurrence; ~appkit-media-inline-host-activate~ promotes
+the same session with nil (inline), ~dedicated~, or ~frame~ presentation.
+~:autoplay~ starts visible Canvas-capable images only after the buffer has
+committed; videos never autoplay.  ~:toggle-p~ makes RET/click toggle inline
+playback rather than open the image in a viewer.  When RESOURCE is nil,
+~:resolve-function~ receives (SUCCESS FAILURE) only on user activation;
+SUCCESS accepts a canonical resource alist and FAILURE a human-readable
+reason string.  The resolver returns a cancellation function or nil; it is
+called while pending if the host retires.  Stale callbacks cannot start media.
+
 For a host-owned Canvas, supply ~:visible-function~, ~:alive-function~, and
 ~:activate-function~.  Use ~video-canvas-create~ for a standalone Canvas.  The
 activation callback publishes the supplied Canvas over the complete image span;
