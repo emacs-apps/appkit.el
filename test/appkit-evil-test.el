@@ -104,6 +104,45 @@
                   ((:map example-mode-map :n "D" ignore))))
     (should-error (macroexpand (cons 'appkit-evil-map args)))))
 
+(ert-deftest appkit-evil-native-actions-own-both-return-events ()
+  (save-window-excursion
+    (dolist (kind '(span button row))
+      (dolist (state '(normal motion insert emacs))
+        (with-temp-buffer
+          (switch-to-buffer (current-buffer))
+          (let ((map (make-sparse-keymap))
+                (remaining '(first second))
+                (calls nil))
+            (define-key map (kbd "RET") #'ignore)
+            (define-key map [return] #'ignore)
+            (evil-define-key* '(normal motion insert) map
+              (kbd "RET") #'ignore [return] #'ignore)
+            (use-local-map map)
+            (let ((cancel (lambda ()
+                            (push (pop remaining) calls))))
+              (pcase kind
+                ('span
+                 (insert "Cancel")
+                 (appkit-ui-add-action (point-min) (point) cancel))
+                ('button
+                 (appkit-ui-insert-action-button "Cancel" cancel))
+                ('row
+                 (insert "Cancel")
+                 (appkit-ui-make-action-row
+                  (point-min) (point) nil (lambda (_) (funcall cancel))))))
+            (insert "\nNot an action")
+            (evil-local-mode 1)
+            (evil-change-state state)
+            (dolist (key '("RET" "<return>"))
+              (goto-char (point-min))
+              (execute-kbd-macro (kbd key)))
+            (should (equal calls '(second first)))
+            (should-not remaining)
+            (goto-char (point-max))
+            (dolist (key '("RET" "<return>"))
+              (execute-kbd-macro (kbd key)))
+            (should (equal calls '(second first)))))))))
+
 (provide 'appkit-evil-test)
 
 ;;; appkit-evil-test.el ends here
