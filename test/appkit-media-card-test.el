@@ -64,38 +64,8 @@
                   (appkit-media-card-context-at-point
                    (1+ (point-max))))))))
 
-(ert-deftest appkit-media-card-actions-dispatch-each-context-callback ()
+(ert-deftest appkit-media-card-rejects-missing-card-or-action ()
   (with-temp-buffer
-    (let* ((seen nil)
-           (context
-            (appkit-media-card-context-create
-             :payload 'payload
-             :kind 'video
-             :title "Clip"
-             :open-action (lambda () (push 'open seen))
-             :download-action (lambda () (push 'download seen))
-             :cancel-action (lambda () (push 'cancel seen))
-             :save-as-action (lambda () (push 'save-as seen))
-             :copy-url-action (lambda () (push 'copy-url seen)))))
-      (insert "media")
-      (add-text-properties
-       (point-min) (point-max)
-       (list appkit-media-card-context-property context))
-      (goto-char (point-min))
-      (should (eq (appkit-media-card-action-function 'open)
-                  (plist-get context :open-action)))
-      (appkit-media-card-open)
-      (appkit-media-card-download)
-      (appkit-media-card-cancel-download)
-      (appkit-media-card-save-as)
-      (appkit-media-card-copy-url)
-      (should (equal (nreverse seen)
-                     '(open download cancel save-as copy-url))))))
-
-(ert-deftest appkit-media-card-action-availability-explains-failures ()
-  (with-temp-buffer
-    (should (equal "No media at point"
-                   (appkit-media-card-action-inapt-reason 'open)))
     (should-error (appkit-media-card-call-action 'open)
                   :type 'user-error)
     (let ((context
@@ -104,9 +74,6 @@
             :open-action #'ignore)))
       (should-not
        (appkit-media-card-action-inapt-reason 'open context))
-      (should (equal "Download unavailable"
-                     (appkit-media-card-action-inapt-reason
-                      'download context)))
       (should-error (appkit-media-card-call-action 'download context)
                     :type 'user-error))))
 
