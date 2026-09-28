@@ -116,6 +116,7 @@ The function receives one local filename."
   resource
   label
   source
+  kind
   video-session)
 
 (cl-defstruct (appkit-media-video-inline
@@ -487,7 +488,7 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
 (cl-defun appkit-media-present-video-session
     (session &optional client-label
              &key owner buffer start display-function)
-  "Present SESSION in a dedicated video buffer without replacing its player.
+  "Present SESSION in a dedicated media buffer without replacing its player.
 
 CLIENT-LABEL names a generated BUFFER.  OWNER owns that buffer when non-nil.
 START explicitly requests playback; nil preserves the shared player's exact
@@ -495,14 +496,17 @@ state.  DISPLAY-FUNCTION is forwarded to video.el."
   (let* ((label (or client-label
                     (appkit-media-video-session-label session)
                     "media"))
+         (kind (appkit-media-video-session-kind session))
          (buffer (or (and (buffer-live-p buffer) buffer)
-                     (generate-new-buffer (format "*%s Video*" label))))
+                     (generate-new-buffer
+                      (format "*%s %s*" label
+                              (if (eq kind 'image) "Image" "Video")))))
          handle
          opened-p)
     (unless (or (null owner) (appkit-owner-live-p owner))
       (user-error "%s: media owner is no longer live" label))
     (unless (appkit-media-video-session-live-p session)
-      (error "%s: video session is closed" label))
+      (error "%s: %s session is closed" label kind))
     (unwind-protect
         (progn
           (with-current-buffer buffer
@@ -535,13 +539,20 @@ state.  DISPLAY-FUNCTION is forwarded to video.el."
             (video-player-play
              (appkit-media-video-session-player session)))
           (setq opened-p t)
-          (message
-           "%s: %s video in Emacs"
-           label
-           (if (appkit-media-file-present-p
-                (appkit-media-video-session-source session))
-               "playing local"
-             "streaming"))
+          (if (eq kind 'image)
+              (message
+               "%s: viewing %s image in Emacs"
+               label
+               (if (appkit-media-file-present-p
+                    (appkit-media-video-session-source session))
+                   "local" "remote"))
+            (message
+             "%s: %s video in Emacs"
+             label
+             (if (appkit-media-file-present-p
+                  (appkit-media-video-session-source session))
+                 "playing local"
+               "streaming")))
           buffer)
       (unless opened-p
         (when (buffer-live-p buffer)
@@ -584,18 +595,20 @@ CLIENT-LABEL, OWNER, BUFFER, and DISPLAY-FUNCTION have the same meanings as in
     (resource &optional client-label
               &key owner cache-key cache-directory cache-update-function
               (cache-policy appkit-media-video-cache-policy) muted live
-              request-headers)
-  "Create one Appkit playback session for canonical video RESOURCE.
+              request-headers (kind 'video))
+  "Create one Appkit playback session for canonical RESOURCE.
 
-CLIENT-LABEL identifies errors and messages.  OWNER limits cache callbacks to a
-live Appkit lifecycle.  CACHE-KEY and CACHE-DIRECTORY select persistent
-progressive playback storage.  Automatic CACHE-POLICY retains only a complete
-cache; none leaves buffering session-local.  CACHE-UPDATE-FUNCTION receives a
-canonical resource copy after a complete cache is retained.
+KIND is `video' (the default) or `image'; both use video.el's Canvas player.
+CLIENT-LABEL identifies errors and messages.  OWNER limits video cache callbacks
+to a live Appkit lifecycle.  CACHE-KEY and CACHE-DIRECTORY select persistent
+progressive video playback storage.  Automatic CACHE-POLICY retains only a
+complete video cache; none leaves buffering session-local.  Images do not use
+the persistent video cache regardless of CACHE-POLICY.  CACHE-UPDATE-FUNCTION
+receives a canonical resource copy after a complete video cache is retained.
 MUTED controls the initial player audio state.  LIVE enforces live-stream
-semantics; REQUEST-HEADERS are video transport headers and do not become part
-of RESOURCE identity.  The caller must promptly create an inline or dedicated
-surface, or close the returned session."
+semantics for videos; REQUEST-HEADERS are transport headers and do not become
+part of RESOURCE identity.  The caller must promptly create an inline or
+dedicated surface, or close the returned session."
   (let* ((label (or client-label "media"))
          (resource (appkit-media-resource-normalize resource))
          (file (alist-get 'file resource))
@@ -603,6 +616,8 @@ surface, or close the returned session."
          source
          cache-file
          cache-complete-function)
+    (unless (memq kind '(image video))
+      (user-error "%s: invalid media player kind: %S" label kind))
     (unless (or (null owner) (appkit-owner-live-p owner))
       (user-error "%s: media owner is no longer live" label))
     (unless (memq cache-policy '(automatic none))
@@ -619,7 +634,7 @@ surface, or close the returned session."
        ((appkit-media-file-present-p file)
         (setq source file))
        ((appkit-media--https-url-p url)
-        (if (eq cache-policy 'none)
+        (if (or (eq kind 'image) (eq cache-policy 'none))
             (setq source url)
           (setq cache-file
                 (appkit-media--video-cache-target
@@ -634,16 +649,17 @@ surface, or close the returned session."
             (setq source url
                   cache-complete-function #'remember-cache))))
        (t
-        (user-error "%s: video resource has neither local file nor HTTPS URL"
-                    label)))
+        (user-error "%s: %s resource has neither local file nor HTTPS URL"
+                    label kind)))
       (appkit-media--video-session-create
        :resource resource
        :label label
        :source source
+       :kind kind
        :video-session
        (video-session-create
         source
-        :kind 'video
+        :kind kind
         :muted muted
         :live live
         :auto-close t
