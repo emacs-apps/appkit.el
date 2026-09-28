@@ -46,12 +46,19 @@ it does not turn client semantics into global policy.
 ** Action spans
 
 An action span is one buffer region carrying a client-supplied zero-argument
-action.  ~appkit-ui-add-action~ makes it activatable by ~RET~ or primary click.
-Help text describes the action itself; Appkit does not infer a protocol target
-or install a client keymap.
+action.  ~appkit-ui-add-action~ makes it activatable by ~RET~, graphical
+~<return>~, or primary click.  Help text describes the action itself; Appkit
+does not infer a protocol target or install a client keymap.
 Hover defaults to ~highlight~; pass ~:mouse-face nil~ to disable it without
 disabling activation.  A terminating newline retains its action and face but
 is excluded from hover, so adjacent multi-line action blocks remain separate.
+
+Native control maps own both Return events, so application and Evil bindings
+cannot steal graphical Return before Emacs translates it to ~RET~.  Use
+~appkit-ui-insert-action-button~ for ordinary text buttons and
+~appkit-ui-make-action-row~ for rows; existing native button constructors can
+use ~appkit-ui-button-map~.  Do not put control activation only in a major-mode
+Evil map or modify Emacs's global ~button-map~.
 
 ** Compose primitives
 

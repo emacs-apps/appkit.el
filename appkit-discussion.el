@@ -210,6 +210,7 @@ When nil, Appkit generates a solid periodic bar from
              (interactive)
              (funcall action))))
       (define-key map (kbd "RET") command)
+      (define-key map [return] command)
       (define-key map [mouse-1] command)
       (list 'keymap map
             'mouse-face 'highlight

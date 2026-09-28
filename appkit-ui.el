@@ -173,6 +173,8 @@ Omitting the boundary cleans the entire copied region."
 (defvar appkit-ui-action-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'appkit-ui-activate)
+    ;; A lower-priority [return] binding prevents Emacs translating it to RET.
+    (define-key map [return] #'appkit-ui-activate)
     (define-key map [down-mouse-1] #'ignore)
     (define-key map [mouse-1] #'appkit-ui-activate)
     map)
@@ -247,6 +249,15 @@ Do nothing when ACTION is not callable or the region is empty."
       (add-face-text-property start end face 'append))
     action))
 
+(defvar appkit-ui-button-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map button-map)
+    (define-key map [return] #'push-button)
+    (define-key map [down-mouse-1] #'ignore)
+    (define-key map [mouse-1] #'push-button)
+    map)
+  "Native text-button map owning both Return events and primary clicks.")
+
 (cl-defun appkit-ui-insert-action-button (label action
                                                 &key face help-echo properties)
   "Insert clickable button LABEL calling ACTION.
@@ -256,6 +267,7 @@ text properties passed to `insert-text-button'."
   (let ((button-props
          (append
           (list 'follow-link t
+                'keymap appkit-ui-button-map
                 'action (lambda (_button)
                           (funcall action)))
           (when help-echo
@@ -271,6 +283,7 @@ text properties passed to `insert-text-button'."
     ;; `button-map' or bind `follow-link': either would let Emacs translate a
     ;; mouse-1 event before the button at the event position is dispatched.
     (define-key map (kbd "RET") #'push-button)
+    (define-key map [return] #'push-button)
     (define-key map [down-mouse-1] #'ignore)
     (define-key map [mouse-1] #'push-button)
     ;; Retain the traditional button activation gesture explicitly, without
