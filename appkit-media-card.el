@@ -116,30 +116,30 @@ When CONTEXT is nil, use the media card context at point."
       (user-error "Media action `%s' is unavailable" action))
     (funcall callback)))
 
-(defun appkit-media-card-open ()
-  "Open or play the media card at point."
+(defun appkit-media-card-open (&optional context)
+  "Open or play CONTEXT's media card, defaulting to the card at point."
   (interactive)
-  (appkit-media-card-call-action 'open))
+  (appkit-media-card-call-action 'open context))
 
-(defun appkit-media-card-download ()
-  "Download or retry the media card at point."
+(defun appkit-media-card-download (&optional context)
+  "Download or retry CONTEXT's media card, defaulting to the card at point."
   (interactive)
-  (appkit-media-card-call-action 'download))
+  (appkit-media-card-call-action 'download context))
 
-(defun appkit-media-card-cancel-download ()
-  "Cancel the media card download at point."
+(defun appkit-media-card-cancel-download (&optional context)
+  "Cancel CONTEXT's media download, defaulting to the card at point."
   (interactive)
-  (appkit-media-card-call-action 'cancel))
+  (appkit-media-card-call-action 'cancel context))
 
-(defun appkit-media-card-save-as ()
-  "Save the media card at point to a chosen file."
+(defun appkit-media-card-save-as (&optional context)
+  "Save CONTEXT's media card locally, defaulting to the card at point."
   (interactive)
-  (appkit-media-card-call-action 'save-as))
+  (appkit-media-card-call-action 'save-as context))
 
-(defun appkit-media-card-copy-url ()
-  "Copy the media card URL at point."
+(defun appkit-media-card-copy-url (&optional context)
+  "Copy CONTEXT's media URL, defaulting to the card at point."
   (interactive)
-  (appkit-media-card-call-action 'copy-url))
+  (appkit-media-card-call-action 'copy-url context))
 
 (provide 'appkit-media-card)
 
