@@ -383,10 +383,20 @@ playback rather than open the image in a viewer.  When RESOURCE is nil,
 SUCCESS accepts a canonical resource alist and FAILURE a human-readable
 reason string.  The resolver returns a cancellation function or nil; it is
 called while pending if the host retires.  Stale callbacks cannot start media.
+Initial display and autoplay do not reveal transport controls.  The inline
+host supplies its actual image-span position for background resolution, so
+transparent images respect message faces and buffer-local face remapping even
+when activation runs while point is elsewhere.
 
-For a host-owned Canvas, supply ~:visible-function~, ~:alive-function~, and
-~:activate-function~.  Use ~video-canvas-create~ for a standalone Canvas.  The
-activation callback publishes the supplied Canvas over the complete image span;
+For a host-owned Canvas, supply ~:visible-function~, ~:alive-function~,
+~:background-function~, and ~:activate-function~.  The background callback
+receives the backend inline and returns packed ~0xRRGGBB~; use
+~video-background-color~ with the scene's buffer and display position.
+Use ~video-canvas-create~ for a standalone Canvas, passing the same background
+to it and to one-shot ~video-canvas-draw-uri~ poster draws.  The host redraws
+its static scene when its colors change; video.el recomposes live or paused
+targets without changing their shared player.
+The activation callback publishes the Canvas over the complete image span;
 copying native frames alone does not replace the host's static display.
 
 Explicit remote opens belong to the initiating Surface's Effects.  Use
