@@ -136,17 +136,14 @@ have been displayed."
 (defun appkit-media-inline-image-rendering-available-p (&optional frame)
   "Return non-nil when FRAME can render inline images.
 
-FRAME defaults to the selected frame."
-  (if frame
-      (and (frame-live-p frame)
-           (with-selected-frame frame
-             (appkit-media-inline-image-rendering-available-p)))
-    (and (display-images-p)
-         (or (image-type-available-p 'png)
-             (image-type-available-p 'webp)
-             (image-type-available-p 'jpeg)
-             (image-type-available-p 'gif)
-             (image-type-available-p 'imagemagick)))))
+FRAME defaults to the selected frame.  This query never selects FRAME."
+  (and (or (null frame) (frame-live-p frame))
+       (display-images-p frame)
+       (or (image-type-available-p 'png)
+           (image-type-available-p 'webp)
+           (image-type-available-p 'jpeg)
+           (image-type-available-p 'gif)
+           (image-type-available-p 'imagemagick))))
 
 (defun appkit-media-image-capable-frame (&optional buffer)
   "Return an image-capable frame suitable for rendering BUFFER.
@@ -528,24 +525,29 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
            (cons count duration)))))
 
 (defun appkit-media--mark-inline-animation-image (image file &optional validated)
-  "Mark bounded multi-frame IMAGE from FILE for inline playback.
-VALIDATED means the caller has already validated IMAGE's decoder."
-  (when (and appkit-media-inline-animation-enabled
-             (let ((size (appkit-media--file-size file)))
-               (and size
-                    (<= size
-                        appkit-media-inline-animation-max-file-size)))
-             (or validated (appkit-media-image-object-valid-p image)))
+  "Record animation capability and bounded playback eligibility for IMAGE.
+VALIDATED means the caller has already validated IMAGE's decoder.  Canvas
+players use capability independently of the legacy image.el playback limits."
+  (when (or validated (appkit-media-image-object-valid-p image))
     (when-let* ((frame-data
-                 (appkit-media--inline-animation-frame-data image))
-                (duration (cdr frame-data))
-                ((<= duration
-                     appkit-media-inline-animation-max-duration)))
-      (plist-put (cdr image) :appkit-media-inline-animation t)
-      (plist-put (cdr image)
-                 :appkit-media-inline-animation-duration
-                 duration)))
+                 (appkit-media--inline-animation-frame-data image)))
+      (plist-put (cdr image) :appkit-media-animated t)
+      (when (and appkit-media-inline-animation-enabled
+                 (let ((size (appkit-media--file-size file)))
+                   (and size
+                        (<= size appkit-media-inline-animation-max-file-size)))
+                 (<= (cdr frame-data)
+                     appkit-media-inline-animation-max-duration))
+        (plist-put (cdr image) :appkit-media-inline-animation t)
+        (plist-put (cdr image)
+                   :appkit-media-inline-animation-duration
+                   (cdr frame-data)))))
   image)
+
+(defun appkit-media-animated-image-p (image)
+  "Return non-nil when IMAGE is known to contain multiple frames."
+  (and (eq (car-safe image) 'image)
+       (plist-get (cdr image) :appkit-media-animated)))
 
 (defun appkit-media-inline-animation-image-p (image)
   "Return non-nil when IMAGE is marked for bounded inline animation."

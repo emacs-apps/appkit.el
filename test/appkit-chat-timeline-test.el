@@ -4,6 +4,7 @@
 (require 'cl-lib)
 
 (require 'appkit-chat-timeline)
+(require 'appkit-media-image)
 (require 'appkit-test-helper)
 
 (defun appkit-chat-timeline-test--printer (prints)
@@ -427,6 +428,107 @@
          (appkit-chat-timeline-reset)
          (should-not (appkit-scroll-observer-active-p new))
          (should-not (appkit-chat-timeline-scroll-observer)))))))
+
+(ert-deftest appkit-chat-timeline-replacement-surface-does-not-inherit-node-cache ()
+  (appkit-test-with-surface
+   (let ((prints (make-hash-table :test #'equal)))
+     (appkit-chat-timeline-ensure
+      :printer (appkit-chat-timeline-test--printer prints))
+     (appkit-chat-timeline-sync
+      (list (appkit-chat-timeline-test--row 'old "old payload")))
+     (appkit-surface-stop appkit-test-surface)
+     (appkit-open-generated-surface
+      (appkit-surface-type-create
+       :name 'replacement
+       :mode #'ignore
+       :init (appkit-surface-type-init appkit-test--surface-type)
+       :update (appkit-surface-type-update appkit-test--surface-type)
+       :renderer-factory (appkit-surface-type-renderer-factory appkit-test--surface-type))
+      :app appkit-test-app :identity 'replacement :buffer (current-buffer))
+     (should-not (appkit-chat-timeline-live-p))
+     (appkit-chat-timeline-ensure
+      :printer (appkit-chat-timeline-test--printer prints))
+     (appkit-chat-timeline-sync
+      (list (appkit-chat-timeline-test--row 'new "new payload")))
+     (should (equal '(new) (appkit-chat-timeline-keys)))
+     (should (equal "new:new payload:plain\n" (buffer-string))))))
+
+(ert-deftest appkit-chat-timeline-background-frame-redraw-preserves-rich-composer ()
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'png)))
+  (appkit-test-with-surface
+   (let* ((original-frame (selected-frame))
+          (frame (make-frame '((visibility . nil))))
+          (window (frame-selected-window frame))
+          (footer "\n--- composer boundary ---\n")
+          (avatar
+           (create-image
+            (base64-decode-string
+             "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAEElEQVR4nGMQjDwNRAwoFABHxAc/xiop1gAAAABJRU5ErkJggg==")
+            'png t))
+          (attachment '(:kind image :file "/draft/image.png"))
+          (draft (concat "unsent "
+                         (appkit-chatbuf-input-object-string "image" attachment)
+                         " text"))
+          (rows (list (appkit-chat-timeline-test--row 'a "one")
+                      (appkit-chat-timeline-test--row 'b "two"))))
+     (unwind-protect
+         (progn
+           (set-window-buffer window (current-buffer))
+           (select-frame original-frame)
+           (appkit-chatbuf-init-state 8)
+           (appkit-chatbuf-input-state-set draft)
+           (appkit-chat-timeline-ensure
+            :printer
+            (lambda (row)
+              (let ((start (point)))
+                ;; A cached avatar still probes the target frame during redraw.
+                (when (appkit-media-inline-image-rendering-available-p frame)
+                  (insert (propertize " " 'display avatar)))
+                (insert (appkit-chat-timeline-row-payload row) "\n")
+                (add-text-properties
+                 start (point)
+                 (list 'test-message-key (appkit-chat-timeline-row-key row)))))
+            :anchor-property 'test-message-key
+            :footer footer)
+           (appkit-chat-timeline-sync rows)
+           (appkit-chat-timeline-set-frame
+            "" footer :composer-visible-p t
+            :bind-input-function
+            (lambda ()
+              (appkit-chatbuf-bind-input-region
+               :visible-p t :prompt ">>> " :input-text draft)))
+           (let ((before (appkit-chatbuf-input-string)))
+             (goto-char (+ (appkit-chatbuf-input-start-position) 2))
+             (set-window-point window (point))
+             ;; A misplaced first print corrupts the successor node marker;
+             ;; the next invalidation used to delete across the composer.
+             (dotimes (_ 2) (appkit-chat-timeline-invalidate '(b)))
+             (appkit-chat-timeline-sync
+              (append (list (appkit-chat-timeline-test--row 'older "history"))
+                      rows
+                      (list (appkit-chat-timeline-test--row 'newer "incoming"))))
+             (should (equal-including-properties before (appkit-chatbuf-input-string)))
+             (should (equal-including-properties draft (appkit-chatbuf-input-state)))
+             (should (appkit-chatbuf-prompt-button-live-p))
+             (should (= 2 (- (point) (appkit-chatbuf-input-start-position))))
+             (should (= 2 (- (window-point window) (appkit-chatbuf-input-start-position))))
+             (should (equal
+                      footer
+                      (buffer-substring-no-properties
+                       (appkit-chat-timeline-footer-start-position)
+                       (appkit-chatbuf-prompt-start-position))))
+             (let ((previous (point-min))
+                   (footer-start (appkit-chat-timeline-footer-start-position))
+                   (ewoc (appkit-chat-timeline-ewoc)))
+               (dolist (key (appkit-chat-timeline-keys))
+                 (let ((position (marker-position
+                                  (ewoc-location (appkit-chat-timeline-node key)))))
+                   (should (<= previous position footer-start))
+                   (setq previous position)))
+               (should (= (ewoc-location (ewoc--dll ewoc))
+                          (appkit-chatbuf-prompt-start-position))))
+             (should (appkit-surface-live-p (appkit-current-surface)))))
+       (when (frame-live-p frame) (delete-frame frame t))))))
 
 (provide 'appkit-chat-timeline-test)
 

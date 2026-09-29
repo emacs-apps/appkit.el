@@ -203,6 +203,10 @@ Set ~appkit-chatbuf-input-sync-function~ to synchronize
 protocol-specific draft state.  Do not install a second after-change
 controller.
 
+Rendering consumes canonical input; do not synchronize input back from generated
+buffer text during rendering or recovery.  A chat timeline cache belongs to one
+exact Surface incarnation, even when a replacement reuses the same buffer.
+
 Canonical chatbuf input and ~appkit-chatbuf-input-string~ preserve text
 properties.  Structured input objects carry opaque payload, unique occurrence
 identity, original visible text, and boundary sentinels.  Atomic deletion and
@@ -319,6 +323,11 @@ preview metadata.  Appkit owns HTTPS-only atomic acquisition for explicit
 image and file transfers, byte-level image cache finalization, lifecycle-bound
 video sessions and presentation surfaces, and protocol-restricted preview and
 audio-player processes.
+
+Frame-specific image capability queries do not select the frame or move point.
+~appkit-media-animated-image-p~ reports source animation capability independently
+of the size/duration limits on legacy Emacs image-animation playback.  Canvas
+hosts use that capability to distinguish animated sources from static previews.
 
 A media attachment view is one item's preview, label, description, transfer
 state, and actions.  It is presentation, not the readable or displayable media
@@ -484,6 +493,11 @@ is exposed only as a pass-scoped read view.  Rendering runs after the final
 model commit for the pass, in the exact host buffer.  A renderer may merge
 requests and recover once, but may not mutate the domain model, post messages,
 or start work.
+
+Recovery must discard invalid presentation caches and reconstruct from committed
+state.  Reissuing a full render request against the same damaged cache is not
+recovery.  Without an explicit recovery implementation, the render error faults
+the Surface.
 
 Use ~appkit-app-send~ / ~appkit-surface-send~ for a synchronous external
 transition and ~appkit-app-post~ / ~appkit-surface-post~ for asynchronous

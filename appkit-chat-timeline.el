@@ -39,7 +39,8 @@
   after-mutation-function
   mutation-depth
   deferred-keys
-  scroll-observer)
+  scroll-observer
+  surface)
 
 (defvar-local appkit-chat-timeline--state nil
   "Projected timeline state owned by the current Surface host.")
@@ -52,8 +53,9 @@
 
 (defun appkit-chat-timeline--current-state ()
   "Return the current buffer's timeline state, or nil."
-  (and (appkit-surface-p (appkit-current-surface))
-       (appkit-chat-timeline--state-p appkit-chat-timeline--state)
+  (and (appkit-chat-timeline--state-p appkit-chat-timeline--state)
+       (eq (appkit-current-surface)
+           (appkit-chat-timeline--state-surface appkit-chat-timeline--state))
        appkit-chat-timeline--state))
 
 (defun appkit-chat-timeline-reset ()
@@ -156,7 +158,8 @@ Do not use nearby-row fallback or include the composer."
           :projection projection
           :after-mutation-function after-mutation-function
           :mutation-depth 0
-          :deferred-keys nil))))
+          :deferred-keys nil
+          :surface (appkit-chat-timeline--surface)))))
     (appkit-chat-timeline-ewoc)))
 
 (defun appkit-chat-timeline-scroll-observer ()
