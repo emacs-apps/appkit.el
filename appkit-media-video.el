@@ -302,37 +302,34 @@ When NAMESPACE is nil, clear every decorated preview."
   "Return static IMAGE decorated with a play marker.
 
 Animated previews are returned unchanged.  NAMESPACE owns the cached
-decoration and supports targeted eviction."
+decoration and supports targeted eviction.  Cache lookup precedes image
+decoding and SVG source embedding."
   (if (appkit-media-inline-animation-image-p image)
       image
-    (when (and (appkit-media-image-object-valid-p image)
+    (when (and image
                (image-type-available-p 'svg)
                (fboundp 'svg-create)
                (fboundp 'svg-embed)
                (fboundp 'svg-print))
       (let* ((properties (cdr-safe image))
-             (display-size
-              (ignore-errors (image-size image t (selected-frame))))
              (cache-key
               (list namespace
                     (appkit-media--video-preview-source-identity
                      properties image)
-                    display-size
-                    (plist-get properties :height)
-                    (plist-get properties :width)
-                    (plist-get properties :appkit-media-nslices)
+                    (appkit-media--char-pixel-width)
+                    (appkit-media--char-pixel-height)
+                    properties
                     appkit-media-video-play-icon-radius-divisor
                     appkit-media-video-play-icon-circle-opacity
-                    appkit-media-video-play-icon-triangle-opacity))
-             (cached (gethash cache-key
-                              appkit-media--video-decoration-cache))
-             (source (appkit-media--video-preview-image-source image)))
-        (or (and (appkit-media-image-object-valid-p cached) cached)
-            (when source
-              (let* ((width
-                      (max 1 (round (or (car-safe display-size) 64))))
-                     (height
-                      (max 1 (round (or (cdr-safe display-size) 64))))
+                    appkit-media-video-play-icon-triangle-opacity)))
+        (or (gethash cache-key appkit-media--video-decoration-cache)
+            (when-let* ((display-size
+                         (ignore-errors
+                           (image-size image t (selected-frame))))
+                        (source
+                         (appkit-media--video-preview-image-source image)))
+              (let* ((width (max 1 (round (car display-size))))
+                     (height (max 1 (round (cdr display-size))))
                      (svg (svg-create width height)))
                 (svg-embed svg
                            (plist-get source :source)
@@ -346,7 +343,7 @@ decoration and supports targeted eviction."
                         (appkit-media--video-preview-display-properties
                          image))))
                   (when (appkit-media-image-object-valid-p decorated)
-                    (puthash cache-key decorated
+                    (puthash (copy-tree cache-key) decorated
                              appkit-media--video-decoration-cache)
                     decorated)))))))))
 

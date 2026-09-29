@@ -80,15 +80,22 @@ POSITION defaults to point in the current buffer."
       host)))
 
 (defun appkit-media--inline-visible-p (host)
-  "Return non-nil if any HOST image span is visible in a live window."
+  "Return a window displaying a HOST image span, or nil.
+Reject offscreen slices by buffer positions before asking Emacs for pixel
+visibility.  The returned window also owns this occurrence's background."
   (and (appkit-media-inline-host-live-p host)
        (let ((buffer (appkit-media-inline-host-buffer host)))
-         (cl-some
+         (cl-find-if
           (lambda (window)
-            (cl-some
-             (lambda (range)
-               (pos-visible-in-window-p (car range) window t))
-             (appkit-media-inline-host-ranges host)))
+            (let ((start (window-start window))
+                  (end (window-end window)))
+              (cl-some
+               (lambda (range)
+                 (and (> (cdr range) start)
+                      (or (null end) (< (car range) end))
+                      (pos-visible-in-window-p
+                       (max start (car range)) window t)))
+               (appkit-media-inline-host-ranges host))))
           (get-buffer-window-list buffer nil t)))))
 
 (defun appkit-media--inline-close (host)
@@ -114,34 +121,40 @@ POSITION defaults to point in the current buffer."
       (setq appkit-media--inline-hosts
             (delq host appkit-media--inline-hosts)))))
 
+(defun appkit-media--inline-hosts-in-region (start end)
+  "Return distinct hosts attached to text in START..END."
+  (let (hosts)
+    (while (< start end)
+      (when-let* ((host (get-text-property start 'appkit-media-inline-host)))
+        (unless (memq host hosts)
+          (push host hosts)))
+      (setq start
+            (next-single-property-change start 'appkit-media-inline-host nil end)))
+    hosts))
+
 (defun appkit-media--inline-before-change (start end)
   "Remember hosts whose exact spans overlap a change at START..END.
 Character ticks distinguish row replacement from harmless property styling."
   (setq appkit-media--inline-change
         (cons
          (buffer-chars-modified-tick)
-         (cl-remove-if-not
-          (lambda (host)
-            (cl-some
-             (lambda (range)
-               (let ((begin (marker-position (car range)))
-                     (finish (marker-position (cdr range))))
-                 (and begin finish
-                      (if (= start end)
-                          (and (< begin start) (< start finish))
-                        (and (< start finish) (< begin end))))))
-             (appkit-media-inline-host-ranges host)))
-          appkit-media--inline-hosts))))
+         (if (< start end)
+             (appkit-media--inline-hosts-in-region start end)
+           (when-let* ((host (get-text-property start 'appkit-media-inline-host)))
+             (when (cl-some
+                    (lambda (range)
+                      (and (< (car range) start) (< start (cdr range))))
+                    (appkit-media-inline-host-ranges host))
+               (list host)))))))
 
 (defun appkit-media--inline-reap (&rest _ignored)
   "Retire replaced text spans, but preserve hosts across property styling."
   (let ((change appkit-media--inline-change))
     (setq appkit-media--inline-change nil)
-    (when (and change (/= (car change) (buffer-chars-modified-tick)))
-      (mapc #'appkit-media--inline-close (cdr change))))
-  (dolist (host (copy-sequence appkit-media--inline-hosts))
-    (unless (appkit-media-inline-host-live-p host)
-      (appkit-media--inline-close host))))
+    (dolist (host (cdr change))
+      (when (or (/= (car change) (buffer-chars-modified-tick))
+                (not (appkit-media-inline-host-live-p host)))
+        (appkit-media--inline-close host)))))
 
 (defun appkit-media--inline-release-all ()
   "Retire all hosts before this buffer changes mode or dies."
@@ -216,7 +229,8 @@ Character ticks distinguish row replacement from harmless property styling."
                        :alive-function
                        (lambda (_inline)
                          (appkit-media-inline-host-live-p host))
-                       :anchor (caar (appkit-media-inline-host-ranges host))
+                       :anchor (copy-marker
+                                (caar (appkit-media-inline-host-ranges host)) t)
                        :activate-function
                        (lambda (surface canvas)
                          (appkit-media--inline-show-canvas host surface canvas))
@@ -224,7 +238,10 @@ Character ticks distinguish row replacement from harmless property styling."
                        (lambda (surface)
                          (when (eq surface
                                    (appkit-media-inline-host-inline host))
-                           (setf (appkit-media-inline-host-inline host) nil)))))
+                           (setf (appkit-media-inline-host-inline host) nil)
+                           (appkit-media--inline-show-canvas
+                            host surface
+                            (appkit-media-inline-host-poster host))))))
                 (setf (appkit-media-inline-host-inline host) inline)
                 (appkit-media-video-inline-bind-controls
                  inline (appkit-media-inline-host-map host))
@@ -308,22 +325,32 @@ TOGGLE-P is nil open a dedicated viewer on ordinary activation."
 
 (defun appkit-media--inline-start-visible (&rest _ignored)
   "Start Canvas-capable, visible images after committed buffer changes."
-  (dolist (host (copy-sequence appkit-media--inline-hosts))
-    (cond
-     ((not (appkit-media-inline-host-live-p host))
-      (appkit-media--inline-close host))
-     ((and (eq (appkit-media-inline-host-kind host) 'image)
-           (appkit-media-inline-host-autoplay host)
-           (appkit-media-inline-host-resource host)
-           (not (appkit-media-inline-host-inline host))
-           (appkit-media--inline-canvas-p host)
-           (appkit-media--inline-visible-p host))
-      (condition-case err
-          (appkit-media--inline-use host nil)
-        (error
-         (setf (appkit-media-inline-host-autoplay host) nil)
-         (message "Inline media unavailable: %s"
-                  (error-message-string err))))))))
+  ;; Inspect displayed text, not every media occurrence in retained history.
+  ;; In particular, typing in the composer must not validate all image slices.
+  (let (hosts)
+    (when (image-type-available-p 'canvas)
+      (dolist (window (get-buffer-window-list (current-buffer) nil t))
+        (when (display-graphic-p (window-frame window))
+          (dolist (host (appkit-media--inline-hosts-in-region
+                         (window-start window)
+                         (window-end window t)))
+            (unless (memq host hosts)
+              (push host hosts))))))
+    (dolist (host hosts)
+      (cond
+       ((not (appkit-media-inline-host-live-p host))
+        (appkit-media--inline-close host))
+       ((and (eq (appkit-media-inline-host-kind host) 'image)
+             (appkit-media-inline-host-autoplay host)
+             (appkit-media-inline-host-resource host)
+             (not (appkit-media-inline-host-inline host))
+             (appkit-media--inline-visible-p host))
+        (condition-case err
+            (appkit-media--inline-use host nil)
+          (error
+           (setf (appkit-media-inline-host-autoplay host) nil)
+           (message "Inline media unavailable: %s"
+                    (error-message-string err)))))))))
 
 (defun appkit-media--inline-schedule-start ()
   "Discover visible images after this render, even without another command."
@@ -370,7 +397,7 @@ Callbacks after retirement or replacement are ignored."
              (next (or (next-single-property-change position 'display nil end)
                        end)))
         (when (appkit-media--display-image-spec display)
-          (push (cons (copy-marker position) (copy-marker next)) ranges))
+          (push (cons (copy-marker position t) (copy-marker next)) ranges))
         (setq position next)))
     (when ranges
       (setq ranges (nreverse ranges))
