@@ -77,6 +77,63 @@
         (should (eq (get-text-property start 'display) canvas))
         (should (= (plist-get (cdr canvas) :height) 64))))))
 
+(ert-deftest appkit-media-inline-target-tracks-scaled-poster-geometry ()
+  "Text-scaled slices and their native viewport must retain the same aspect."
+  (skip-unless (and (display-graphic-p)
+                    (image-type-available-p 'canvas)
+                    (image-type-available-p 'png)))
+  (require 'face-remap)
+  (let ((file (make-temp-file "appkit-inline-geometry-" nil ".png")))
+    (unwind-protect
+        (progn
+          ;; Two pixels, red and blue: a deterministic 2:1 source.
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region
+             (base64-decode-string
+              "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADUlEQVR4nGP4zwAE/wEHAAH/4iOeWQAAAABJRU5ErkJggg==")
+             nil file nil 'silent))
+          (save-window-excursion
+            (with-temp-buffer
+              (switch-to-buffer (current-buffer))
+              (dolist (rows '(2 1))
+                (let ((poster (create-image file 'png nil
+                                            :height (cons rows 'ch)
+                                            :appkit-media-nslices rows :scale 1.0)))
+                  (dolist (scale '(0 3 -2 0))
+                    (text-scale-set scale)
+                    (erase-buffer)
+                    (let ((start (point))
+                          (height (* rows (appkit-media--char-pixel-height))))
+                      (appkit-media-insert-image-slices poster)
+                      (let* ((host (appkit-media-inline-host-attach
+                                    start (point) poster
+                                    (appkit-media-resource-create :file file)))
+                             (surface (appkit-media--inline-ensure host))
+                             (inline (appkit-media-video-inline-inline surface)))
+                        (video-inline-prepare inline)
+                        (let ((target (video-inline-target inline)))
+                          (should (= (video-target-width target) (* 2 height)))
+                          (should (= (video-target-height target) height))
+                          (should (equal (image-size (video-target-canvas target) t)
+                                         (cons (* 2 height) height)))))))))
+              ;; A tall, unsliced face keeps its explicit pixel dimensions.
+              (erase-buffer)
+              (text-scale-set 3)
+              (let ((poster (create-image file 'png nil :height 64 :scale 1.0))
+                    (start (point)))
+                (insert (propertize "[face]" 'display poster))
+                (let* ((host (appkit-media-inline-host-attach
+                              start (point) poster
+                              (appkit-media-resource-create :file file)))
+                       (surface (appkit-media--inline-ensure host))
+                       (inline (appkit-media-video-inline-inline surface)))
+                  (video-inline-prepare inline)
+                  (should (equal
+                           (image-size (video-target-canvas
+                                        (video-inline-target inline)) t)
+                           '(128 . 64))))))))
+      (delete-file file))))
+
 (ert-deftest appkit-media-inline-promotion-retains-exact-session-and-releases-lease ()
   (with-temp-buffer
     (let (host session inline presented closed)

@@ -397,6 +397,11 @@ host supplies its actual image-span position for background resolution, so
 transparent images respect message faces and buffer-local face remapping even
 when activation runs while point is elsewhere.
 
+Inline Canvas width and height are measured from the inserted image display,
+after slice normalization, not from the cached POSTER's unscaled ~Nch~ size.
+Rebuild the rows and reattach after text scaling so both dimensions follow
+the new line height.  Unsliced, pixel-sized posters keep their explicit size.
+
 For a host-owned Canvas, supply its existing display marker as ~:anchor~,
 alongside ~:visible-function~, ~:alive-function~, and ~:activate-function~.
 The marker identifies the buffer and occurrence; video.el resolves its

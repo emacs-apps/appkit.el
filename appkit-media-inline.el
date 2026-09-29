@@ -200,8 +200,15 @@ Character ticks distinguish row replacement from harmless property styling."
       (with-current-buffer (appkit-media-inline-host-buffer host)
         (let* ((kind (appkit-media-inline-host-kind host))
                (poster (appkit-media-inline-host-poster host))
-               (size (ignore-errors (image-size poster t)))
-               (rows (length (appkit-media-inline-host-ranges host)))
+               ;; Slice insertion has already resolved cached Nch geometry.
+               ;; Measure that displayed image, not the unscaled source poster.
+               (size (ignore-errors
+                       (image-size
+                        (appkit-media--display-image-spec
+                         (get-text-property
+                          (caar (appkit-media-inline-host-ranges host))
+                          'display))
+                        t)))
                (session
                 (appkit-media-video-session-create
                  (appkit-media-inline-host-resource host)
@@ -218,10 +225,10 @@ Character ticks distinguish row replacement from harmless property styling."
                 (setq inline
                       (appkit-media-video-inline-create
                        session (max 1 (round (or (car-safe size) 320)))
-                       (max 1 (round (if (> rows 1)
-                                         (* rows (appkit-media--char-pixel-height))
-                                       (or (cdr-safe size)
-                                           (appkit-media--char-pixel-height)))))
+                       (max 1 (round
+                               (or (cdr-safe size)
+                                   (* (length (appkit-media-inline-host-ranges host))
+                                      (appkit-media--char-pixel-height)))))
                        :poster poster
                        :visible-function
                        (lambda (_inline)
