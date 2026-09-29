@@ -164,8 +164,9 @@ FRAME-PREDICATE restricts candidates by their owning frame."
                 (bound-and-true-p display-line-numbers-mode)))
              (line-number-pixels
               (if line-numbers-p
-                  (with-selected-window window
-                    (line-number-display-width 'pixels))
+                  (save-excursion
+                    (with-selected-window window
+                      (line-number-display-width 'pixels)))
                 0))
              (character-pixels
               (max 1 (appkit-geometry-columns-pixel-width 1 window)))
