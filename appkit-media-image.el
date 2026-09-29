@@ -527,14 +527,15 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
            (> duration 0)
            (cons count duration)))))
 
-(defun appkit-media--mark-inline-animation-image (image file)
-  "Mark bounded multi-frame IMAGE from FILE for inline playback."
+(defun appkit-media--mark-inline-animation-image (image file &optional validated)
+  "Mark bounded multi-frame IMAGE from FILE for inline playback.
+VALIDATED means the caller has already validated IMAGE's decoder."
   (when (and appkit-media-inline-animation-enabled
-             (appkit-media-image-object-valid-p image)
              (let ((size (appkit-media--file-size file)))
                (and size
                     (<= size
-                        appkit-media-inline-animation-max-file-size))))
+                        appkit-media-inline-animation-max-file-size)))
+             (or validated (appkit-media-image-object-valid-p image)))
     (when-let* ((frame-data
                  (appkit-media--inline-animation-frame-data image))
                 (duration (cdr frame-data))
@@ -702,19 +703,13 @@ text.  Return FALLBACK unchanged when IMAGE is nil."
 
 (defun appkit-media-image-slice-count (image)
   "Return the line count used to render IMAGE as vertical slices."
-  (let* ((properties (cdr-safe image))
-         (explicit-slices
-          (plist-get properties :appkit-media-nslices))
-         (size (and (appkit-media-image-object-valid-p image)
-                    (ignore-errors
-                      (image-size image nil (selected-frame)))))
-         (height (and (consp size) (cdr size))))
-    (max 1
-         (cond
-          ((and (integerp explicit-slices) (> explicit-slices 0))
-           explicit-slices)
-          ((numberp height) (round height))
-          (t 1)))))
+  (let ((explicit-slices
+         (plist-get (cdr-safe image) :appkit-media-nslices)))
+    (if (and (integerp explicit-slices) (> explicit-slices 0))
+        explicit-slices
+      (let* ((size (ignore-errors (image-size image nil (selected-frame))))
+             (height (cdr-safe size)))
+        (max 1 (if (numberp height) (round height) 1))))))
 
 (defun appkit-media-insert-slice-newline ()
   "Insert a newline between image slices without an extra line gap."
@@ -876,12 +871,53 @@ return the source image height instead of a character height."
   "Return the `(HEIGHT . ch)' spec for CHARACTERS text lines."
   (cons (max 1 characters) 'ch))
 
+(defun appkit-media--image-header-size (file)
+  "Read PNG, GIF or WebP FILE dimensions without decoding its pixels.
+Only a fixed-size header is read.  Other formats retain the normal decoder
+fallback, including its orientation and format-specific sizing rules."
+  (ignore-errors
+    (let ((bytes (with-temp-buffer
+                   (set-buffer-multibyte nil)
+                   (insert-file-contents-literally file nil 0 32)
+                   (buffer-string))))
+      (cl-labels ((uint (offset count little-endian)
+                    (let ((value 0))
+                      (dotimes (index count value)
+                        (setq value
+                              (+ (ash value 8)
+                                 (aref bytes
+                                       (+ offset
+                                          (if little-endian
+                                              (- count index 1)
+                                            index)))))))))
+        (let ((size
+               (cond
+                ((appkit-media--bytes-prefix-p
+                  bytes 0 '(137 80 78 71 13 10 26 10))
+                 (cons (uint 16 4 nil) (uint 20 4 nil)))
+                ((or (appkit-media--bytes-prefix-p bytes 0 '(71 73 70 56 55 97))
+                     (appkit-media--bytes-prefix-p bytes 0 '(71 73 70 56 57 97)))
+                 (cons (uint 6 2 t) (uint 8 2 t)))
+                ((appkit-media--webp-bytes-p-at bytes 0)
+                 (cond
+                  ((appkit-media--bytes-prefix-p bytes 12 '(86 80 56 88))
+                   (cons (1+ (uint 24 3 t)) (1+ (uint 27 3 t))))
+                  ((appkit-media--bytes-prefix-p bytes 12 '(86 80 56 76))
+                   (let ((bits (uint 21 4 t)))
+                     (cons (1+ (logand bits #x3fff))
+                           (1+ (logand (ash bits -14) #x3fff)))))
+                  ((and (appkit-media--bytes-prefix-p bytes 12 '(86 80 56 32))
+                        (appkit-media--bytes-prefix-p bytes 23 '(157 1 42)))
+                   (cons (logand (uint 26 2 t) #x3fff)
+                         (logand (uint 28 2 t) #x3fff))))))))
+          (when (and size (> (car size) 0) (> (cdr size) 0))
+            size))))))
+
 (defun appkit-media--image-file-size-pixels (file)
   "Return FILE image size in pixels as (WIDTH . HEIGHT), or nil."
-  (let ((probe (ignore-errors
-                 (create-image file nil nil :ascent 'center))))
-    (and (appkit-media-image-object-valid-p probe)
-         (ignore-errors (image-size probe t)))))
+  (or (appkit-media--image-header-size file)
+      (ignore-errors
+        (image-size (create-image file nil nil :ascent 'center) t))))
 
 (defun appkit-media-preview-height-chars
     (image-size max-width max-height)
@@ -936,24 +972,21 @@ Display is a separate step: call `appkit-media-insert-image-slices' or
          (height-spec
           (appkit-media-ch-height-spec target-height-characters))
          (image
-          (ignore-errors
-            (create-image file nil nil
-                          :height height-spec
-                          :appkit-media-nslices target-height-characters
-                          :scale 1.0
-                          :ascent 'center))))
-    (unless (appkit-media-image-object-valid-p image)
-      (when (image-type-available-p 'imagemagick)
-        (setq image
-              (ignore-errors
-                (create-image file 'imagemagick nil
-                              :height height-spec
-                              :appkit-media-nslices
-                              target-height-characters
-                              :scale 1.0
-                              :ascent 'center)))))
-    (and (appkit-media-image-object-valid-p image)
-         (appkit-media--mark-inline-animation-image image file))))
+          (cl-loop
+           for type in (if (image-type-available-p 'imagemagick)
+                           '(nil imagemagick)
+                         '(nil))
+           for candidate =
+           (ignore-errors
+             (create-image file type nil
+                           :height height-spec
+                           :appkit-media-nslices target-height-characters
+                           :scale 1.0
+                           :ascent 'center))
+           when (appkit-media-image-object-valid-p candidate)
+           return candidate)))
+    (when image
+      (appkit-media--mark-inline-animation-image image file t))))
 
 (defun appkit-media-one-line-preview-image-from-file (file &optional max-width)
   "Create a compact one-row thumbnail for local FILE.

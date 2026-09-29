@@ -23,6 +23,54 @@
     (should-not (appkit-media-image-object-valid-p 'invalid))
     (should-not (appkit-media-image-object-valid-p nil))))
 
+(ert-deftest appkit-media-image-header-dimensions-handle-format-boundaries ()
+  "Header sizing must preserve endian and packed-bit dimension boundaries."
+  (let ((file (make-temp-file "appkit-image-header-")))
+    (unwind-protect
+        (dolist
+            (sample
+             '((((0 . (137 80 78 71 13 10 26 10))
+                 (16 . (0 1 0 1 1 0 0 1)))
+                (65537 . 16777217))
+               (((0 . (71 73 70 56 57 97))
+                 (6 . (1 16 3 8)))
+                (4097 . 2051))
+               (((0 . (82 73 70 70))
+                 (8 . (87 69 66 80 86 80 56 88))
+                 (24 . (0 0 16 0 0 32)))
+                (1048577 . 2097153))
+               (((0 . (82 73 70 70))
+                 (8 . (87 69 66 80 86 80 56 76))
+                 (20 . (47 255 63 0 8)))
+                (16384 . 8193))
+               (((0 . (82 73 70 70))
+                 (8 . (87 69 66 80 86 80 56 32))
+                 (23 . (157 1 42 255 255 1 128)))
+                (16383 . 1))
+               (((0 . (137 80 78 71 13 10 26 10))) nil)))
+          (let ((bytes (make-string 32 0)))
+            (dolist (part (car sample))
+              (cl-loop for byte in (cdr part)
+                       for index from (car part)
+                       do (aset bytes index byte)))
+            (with-temp-file file
+              (set-buffer-multibyte nil)
+              (insert bytes)))
+          (should (equal (appkit-media--image-header-size file)
+                         (cadr sample))))
+      (delete-file file))))
+
+(ert-deftest appkit-media-image-header-truncation-falls-back ()
+  (let ((file (make-temp-file "appkit-short-image-")))
+    (unwind-protect
+        (dolist (bytes (list "GIF89a" (unibyte-string 137 80 78 71 13 10 26 10)
+                            "RIFF\0\0\0\0WEBPVP8L" "not an image"))
+          (with-temp-file file
+            (set-buffer-multibyte nil)
+            (insert bytes))
+          (should-not (appkit-media--image-header-size file)))
+      (delete-file file))))
+
 (ert-deftest appkit-media-image-mime-prefers-file-header ()
   (cl-letf (((symbol-function 'file-readable-p) (lambda (_file) t))
             ((symbol-function 'image-type-from-file-header)
@@ -795,7 +843,7 @@
               ((symbol-function 'appkit-media-image-object-valid-p)
                (lambda (_image) t))
               ((symbol-function 'appkit-media--mark-inline-animation-image)
-               (lambda (image _file) image)))
+               (lambda (image _file &optional _validated) image)))
       (let ((image (appkit-media-preview-image-from-file "/tmp/example.png")))
         (should (eq (car image) 'image))
         (should (= 10
