@@ -1,6 +1,8 @@
 #+title: appkit.el
 #+options: toc:nil num:nil
 
+Repository: [[https://github.com/emacs-apps/appkit.el][emacs-apps/appkit.el]].
+
 * What it is
 
 Appkit is a protocol-neutral runtime for stateful Emacs clients.  Its vNext
@@ -19,11 +21,11 @@ channel, or message models.
 #+begin_src emacs-lisp
 ;; straight.el
 (use-package appkit
-  :straight (:host github :repo "emacs-im/appkit.el"))
+  :straight (:host github :repo "emacs-apps/appkit.el"))
 
 ;; package-vc (Emacs 29+)
 (use-package appkit
-  :vc (:url "https://github.com/emacs-im/appkit.el"))
+  :vc (:url "https://github.com/emacs-apps/appkit.el"))
 #+end_src
 
 * Requirements

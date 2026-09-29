@@ -5,7 +5,7 @@
 ;; Author: 0WD0 <me@0wd0.com>
 ;; Maintainer: 0WD0 <me@0wd0.com>
 ;; Keywords: lisp, extensions
-;; URL: https://github.com/emacs-im/appkit.el
+;; URL: https://github.com/emacs-apps/appkit.el
 ;; Version: 0.3.0
 ;; Package-Requires: ((emacs "31.1"))
 
