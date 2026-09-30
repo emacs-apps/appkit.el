@@ -410,7 +410,11 @@ background automatically, without a host color callback.  Standard
 additional placement or color arguments.
 Use ~video-canvas-create~ for a standalone Canvas.  Resolve its static drawing
 background with ~video-background-color~ at the scene's display marker and
-pass it to the constructor and one-shot ~video-canvas-draw-uri~ poster draws.
+pass it to the constructor and ~video-canvas-draw-source~ using ~:background~.
+The draw API also accepts ~:fit~ and ~:source-format 'lottie~.  Canonical
+resources retain ~application/lottie+json~ or ~application/zip+dotlottie~ MIME
+metadata through opaque cache filenames.  Use ~appkit-media-resource-poster~
+for an immutable, fully drawn first-frame Canvas without starting playback.
 The host redraws its static scene when its colors change; video.el recomposes
 live or paused targets without changing their shared player.
 The activation callback publishes the Canvas over the complete image span;
