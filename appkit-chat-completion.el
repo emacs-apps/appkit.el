@@ -463,10 +463,6 @@ frontends may strip candidate properties without discarding it."
         (push (cons title candidate) choices)))
     (nreverse choices)))
 
-(defvar-local appkit-chat-completion--visual-session nil
-  "Identity of the asynchronous visual reader owning this minibuffer.")
-
-(defvar vertico--candidates-ov)
 (defvar vertico--input)
 (defvar vertico--lock-candidate)
 (declare-function vertico--exhibit "ext:vertico")
@@ -482,15 +478,13 @@ reader.  The caller must select the owning minibuffer window first."
   (let ((selected (car completion-all-sorted-completions)))
     (completion--flush-all-sorted-completions)
     (cond
-     ((and (fboundp 'vertico--exhibit)
-           (bound-and-true-p vertico--candidates-ov))
+     ((bound-and-true-p vertico--input)
       ;; Vertico normally skips recomputation when the input has not changed.
       ;; Its candidate lock preserves the selection across catalog updates.
       (let ((vertico--lock-candidate t))
         (setq vertico--input t)
         (vertico--exhibit)))
-     ((and (bound-and-true-p icomplete-mode)
-           (fboundp 'icomplete-exhibit))
+     ((bound-and-true-p icomplete-mode)
       (let* ((completions (completion-all-sorted-completions))
              (tail completions)
              previous)
@@ -540,8 +534,6 @@ exits, including error or quit.  Publications after exit are ignored."
          (candidate-map (make-hash-table :test #'equal))
          (default-entry
           (and default-candidate (rassq default-candidate choices)))
-         (session (make-symbol "appkit-visual-reader"))
-         (alive t)
          owner status-overlay unsubscribe refresh-timer dirty)
     (dolist (entry choices)
       (puthash (car entry) (cdr entry) candidate-map))
@@ -571,12 +563,7 @@ exits, including error or quit.  Publications after exit are ignored."
               (copy-tree completion-category-overrides))))
            (completion-ignore-case appkit-chat-completion-ignore-case))
       (cl-labels
-          ((live-p ()
-             (and alive
-                  (buffer-live-p owner)
-                  (eq session
-                      (buffer-local-value
-                       'appkit-chat-completion--visual-session owner))))
+          ((live-p () (buffer-live-p owner))
            (refresh ()
              (when (and dirty (live-p))
                (when-let* ((window (active-minibuffer-window))
@@ -616,7 +603,6 @@ exits, including error or quit.  Publications after exit are ignored."
                           (refresh)))))))
            (setup ()
              (setq owner (current-buffer))
-             (setq-local appkit-chat-completion--visual-session session)
              ;; Separate display text from both input and selectable entries.
              (setq status-overlay (make-overlay (point-min) (point-min)))
              ;; If a nested minibuffer was active when publication arrived,
@@ -635,19 +621,18 @@ exits, including error or quit.  Publications after exit are ignored."
                   (cdr entry)
                 (user-error
                  "Unknown visual completion candidate: %s" choice)))
-          ;; Fence callbacks before detaching: unsubscribe itself may publish.
-          (setq alive nil)
-          (when refresh-timer
-            (cancel-timer refresh-timer))
-          (when status-overlay
-            (delete-overlay status-overlay))
-          (when (buffer-live-p owner)
-            (with-current-buffer owner
-              (remove-hook 'post-command-hook #'refresh t)
-              (when (eq session appkit-chat-completion--visual-session)
-                (setq appkit-chat-completion--visual-session nil))))
-          (when (functionp unsubscribe)
-            (funcall unsubscribe)))))))
+          ;; Clearing the owner fences late publications, including unsubscribe.
+          (let ((buffer owner))
+            (setq owner nil)
+            (when refresh-timer
+              (cancel-timer refresh-timer))
+            (when status-overlay
+              (delete-overlay status-overlay))
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (remove-hook 'post-command-hook #'refresh t)))
+            (when unsubscribe
+              (funcall unsubscribe))))))))
 
 (cl-defun appkit-chat-completion-read
     (prompt candidates &key category history initial-input)
