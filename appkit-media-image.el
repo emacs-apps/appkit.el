@@ -31,8 +31,7 @@
 
 (declare-function video-canvas-copy "video-runtime" (image))
 (declare-function video-source-poster
-                  "video-runtime"
-                  (source width height &key source-format fit background))
+                  "video-runtime" (source width height &rest args))
 
 (defgroup appkit-media nil
   "Media rendering primitives for Appkit applications."
