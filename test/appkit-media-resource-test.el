@@ -56,6 +56,27 @@
    (appkit-media-resource-normalize
     '((name . "first") (name . "second")))))
 
+(ert-deftest appkit-media-lottie-metadata-survives-opaque-cache-names ()
+  (let ((file (make-temp-file "appkit-lottie-" nil ".json"))
+        (archive (make-temp-file "appkit-lottie-" nil ".lottie")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"v\":\"5.12.1\",\"w\":64,\"h\":32,\"fr\":30,"
+                    "\"ip\":0,\"op\":60,\"layers\":[]}"))
+          (dolist (source (list file archive))
+            (let ((resource (appkit-media-resource-create :file source)))
+              ;; Acquisition replaces local representation, not source identity.
+              (setf (alist-get 'file resource) "/tmp/opaque-content")
+              (should (eq (appkit-media-resource-kind resource) 'image))
+              (should (eq (appkit-media-resource-source-format resource) 'lottie))))
+          (should (eq (appkit-media-resource-kind
+                       '((name . "ordinary.json")
+                         (mime-type . "application/json")))
+                      'file)))
+      (delete-file file)
+      (delete-file archive))))
+
 (ert-deftest appkit-media-resource-sanitizes-untrusted-filenames ()
   (should (equal "folder_file_name.txt"
                  (appkit-media-sanitize-filename

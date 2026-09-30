@@ -17,7 +17,8 @@
 (cl-defstruct (appkit-media-inline-host
                (:constructor appkit-media--inline-host-create))
   buffer ranges token owner kind resource poster label cache-key cache-directory
-  autoplay toggle-p resolve-function pending cancel inline map owner-handle)
+  autoplay toggle-p resolve-function pending cancel inline map owner-handle
+  animation-loop-policy)
 
 (defvar-local appkit-media--inline-hosts nil
   "Live media occurrences in this buffer.")
@@ -218,7 +219,9 @@ Character ticks distinguish row replacement from harmless property styling."
                  :cache-key (appkit-media-inline-host-cache-key host)
                  :cache-directory (appkit-media-inline-host-cache-directory host)
                  :cache-policy (if (eq kind 'image) 'none 'automatic)
-                 :muted (eq kind 'image)))
+                 :muted (eq kind 'image)
+                 :animation-loop-policy
+                 (appkit-media-inline-host-animation-loop-policy host)))
                inline opened)
           (unwind-protect
               (progn
@@ -374,13 +377,16 @@ TOGGLE-P is nil open a dedicated viewer on ordinary activation."
 
 (cl-defun appkit-media-inline-host-attach
     (start end poster resource &key (kind 'image) owner label cache-key
-           cache-directory autoplay toggle-p resolve-function)
+           cache-directory autoplay toggle-p resolve-function
+           (animation-loop-policy video-animation-loop-policy))
   "Own all image display spans in START..END; return a host or nil.
 Call after inserting POSTER, before or after line-prefix properties change.
 POSTER must be an immutable static image spec; use
 `appkit-media-inline-static-poster' to copy an animated source first.
 RESOURCE is a canonical Appkit media alist or nil; KIND is `image' or
 `video'.  OWNER, if non-nil, must be the exact live Appkit Surface.
+ANIMATION-LOOP-POLICY is captured on first activation; ordinary images use
+their file policy.  A host such as a repeating face may select `forever'.
 AUTOPLAY starts only visible Canvas-capable images after rendering or
 scrolling, never videos.  TOGGLE-P selects inline RET/click playback rather than a
 viewer.  RESOLVE-FUNCTION, if RESOURCE is nil, is invoked only on activation
@@ -418,6 +424,7 @@ Callbacks after retirement or replacement are ignored."
                     :cache-directory cache-directory
                     :autoplay (and autoplay (eq kind 'image))
                     :toggle-p (or (eq kind 'video) toggle-p)
+                    :animation-loop-policy animation-loop-policy
                     :resolve-function resolve-function))
              (map (make-sparse-keymap)))
         (setf (appkit-media-inline-host-map host) map)
