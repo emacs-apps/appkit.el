@@ -27,6 +27,7 @@
 (require 'appkit-core)
 (require 'appkit-geometry)
 (require 'appkit-media-card)
+(require 'video-source)
 
 (defgroup appkit-media nil
   "Media rendering primitives for Appkit applications."
@@ -917,9 +918,12 @@ fallback, including its orientation and format-specific sizing rules."
 
 (defun appkit-media--image-file-size-pixels (file)
   "Return FILE image size in pixels as (WIDTH . HEIGHT), or nil."
-  (or (appkit-media--image-header-size file)
-      (ignore-errors
-        (image-size (create-image file nil nil :ascent 'center) t))))
+  (if (eq (video-source-format file) 'lottie)
+      (let ((metadata (video-source-lottie-metadata file)))
+        (cons (plist-get metadata :width) (plist-get metadata :height)))
+    (or (appkit-media--image-header-size file)
+        (ignore-errors
+          (image-size (create-image file nil nil :ascent 'center) t)))))
 
 (defun appkit-media-preview-height-chars
     (image-size max-width max-height)
@@ -944,6 +948,25 @@ client that rebuilds the `:height Nch' descriptor."
     (max 1
          (min max-rows
               (round (* image-rows scale))))))
+
+(defun appkit-media-lottie-poster (file max-height &optional max-width)
+  "Return a drawn static Canvas poster for local Lottie FILE.
+Fit the intrinsic geometry within MAX-HEIGHT and optional MAX-WIDTH pixels.
+Renderer errors propagate; displays without Canvas return nil."
+  (when (and (display-graphic-p) (image-type-available-p 'canvas))
+    (require 'video-runtime)
+    (let* ((metadata (video-source-lottie-metadata file))
+           (width (plist-get metadata :width))
+           (height (plist-get metadata :height))
+           (scale (min (/ (float (max 1 max-height)) height)
+                       (if max-width (/ (float (max 1 max-width)) width)
+                         most-positive-fixnum)))
+           (poster (video-source-poster
+                    file (max 1 (round (* width scale)))
+                    (max 1 (round (* height scale))) :source-format 'lottie)))
+      (plist-put (cdr poster) :appkit-media-animated
+                 (> (plist-get metadata :frames) 1))
+      poster)))
 
 (defun appkit-media-preview-image-from-file
     (file &optional max-width max-height)
@@ -974,19 +997,25 @@ Display is a separate step: call `appkit-media-insert-image-slices' or
          (height-spec
           (appkit-media-ch-height-spec target-height-characters))
          (image
-          (cl-loop
-           for type in (if (image-type-available-p 'imagemagick)
-                           '(nil imagemagick)
-                         '(nil))
-           for candidate =
-           (ignore-errors
-             (create-image file type nil
-                           :height height-spec
-                           :appkit-media-nslices target-height-characters
-                           :scale 1.0
-                           :ascent 'center))
-           when (appkit-media-image-object-valid-p candidate)
-           return candidate)))
+          (if (eq (video-source-format file) 'lottie)
+              (when-let* ((poster (appkit-media-lottie-poster
+                                  file safe-max-height safe-max-width)))
+                (plist-put (cdr poster) :appkit-media-nslices
+                           target-height-characters)
+                poster)
+            (cl-loop
+             for type in (if (image-type-available-p 'imagemagick)
+                             '(nil imagemagick)
+                           '(nil))
+             for candidate =
+             (ignore-errors
+               (create-image file type nil
+                             :height height-spec
+                             :appkit-media-nslices target-height-characters
+                             :scale 1.0
+                             :ascent 'center))
+             when (appkit-media-image-object-valid-p candidate)
+             return candidate))))
     (when image
       (appkit-media--mark-inline-animation-image image file t))))
 
