@@ -30,13 +30,19 @@
   "Coalesced post-render autoplay timer for this buffer.")
 
 (defun appkit-media-inline-static-poster (image)
-  "Copy IMAGE, clearing its Appkit GIF-animation flag without changing IMAGE.
-The result remains a normal static image on non-Canvas displays."
-  (if (eq (car-safe image) 'image)
-      (let ((copy (cons 'image (copy-sequence (cdr image)))))
-        (plist-put (cdr copy) :appkit-media-inline-animation nil)
-        copy)
-    image))
+  "Return IMAGE's static poster without changing its descriptor or pixels.
+Already static Canvas posters retain their backing-store identity; live
+Canvases are snapshotted.  Other images are copied without the GIF-animation
+flag and remain normal static images on non-Canvas displays."
+  (if (eq (plist-get (cdr-safe image) :type) 'canvas)
+      (if (plist-get (cdr image) :video-static-poster)
+          image
+        (video-canvas-copy image))
+    (if (eq (car-safe image) 'image)
+        (let ((copy (cons 'image (copy-sequence (cdr image)))))
+          (plist-put (cdr copy) :appkit-media-inline-animation nil)
+          copy)
+      image)))
 
 (defun appkit-media-inline-host-live-p (host)
   "Return non-nil while HOST owns every original image display span."

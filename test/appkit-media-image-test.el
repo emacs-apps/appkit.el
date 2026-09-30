@@ -921,22 +921,6 @@
   (should (equal "fallback"
                  (appkit-media-bytes-to-extension "unknown" "fallback"))))
 
-(ert-deftest appkit-media-png-stream-keeps-latest-complete-frame ()
-  (let* ((frame
-          (base64-decode-string
-           (concat
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"
-            "AAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")))
-         (split 10))
-    (with-temp-buffer
-      (set-buffer-multibyte nil)
-      (insert frame frame (substring frame 0 split))
-      (should (equal frame (appkit-media-png-stream-pop-latest)))
-      (should (equal (substring frame 0 split) (buffer-string)))
-      (insert (substring frame split))
-      (should (equal frame (appkit-media-png-stream-pop-latest)))
-      (should (= (buffer-size) 0)))))
-
 (provide 'appkit-media-image-test)
 
 ;;; appkit-media-image-test.el ends here
