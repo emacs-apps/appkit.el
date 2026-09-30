@@ -83,7 +83,8 @@
                     (image-type-available-p 'canvas)
                     (image-type-available-p 'png)))
   (require 'face-remap)
-  (let ((file (make-temp-file "appkit-inline-geometry-" nil ".png")))
+  (let ((file (make-temp-file "appkit-inline-geometry-" nil ".png"))
+        (original-players (copy-sequence video--players)))
     (unwind-protect
         (progn
           ;; Two pixels, red and blue: a deterministic 2:1 source.
@@ -132,6 +133,9 @@
                            (image-size (video-target-canvas
                                         (video-inline-target inline)) t)
                            '(128 . 64))))))))
+      (dolist (player (copy-sequence video--players))
+        (unless (memq player original-players)
+          (video-player-close player)))
       (delete-file file))))
 
 (ert-deftest appkit-media-inline-promotion-retains-exact-session-and-releases-lease ()
