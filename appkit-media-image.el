@@ -29,6 +29,11 @@
 (require 'appkit-media-card)
 (require 'video-source)
 
+(declare-function video-canvas-copy "video-runtime" (image))
+(declare-function video-source-poster
+                  "video-runtime"
+                  (source width height &key source-format fit background))
+
 (defgroup appkit-media nil
   "Media rendering primitives for Appkit applications."
   :group 'appkit)
@@ -578,11 +583,13 @@ registry functions."
   "Return FALLBACK displayed as a current-line thumbnail for IMAGE.
 
 IMAGE should come from `appkit-media-one-line-preview-image-from-file'.
-The cached descriptor is copied and sized to the current line in pixels;
-the original is not mutated.  FALLBACK remains the underlying terminal
-text.  Return FALLBACK unchanged when IMAGE is nil."
-  (if (not image)
-      fallback
+Pre-sized static Canvas thumbnails retain their drawn pixels and identity.
+Other cached descriptors are copied and sized to the current line in pixels.
+FALLBACK remains the underlying terminal text; nil IMAGE returns it unchanged."
+  (if (or (not image)
+          (and (plist-get (cdr image) :video-static-poster)
+               (eq (plist-get (cdr image) :appkit-media-nslices) 1)))
+      (appkit-media-image-display-string image fallback)
     (let* ((animated-p (appkit-media-inline-animation-image-p image))
            (source-image
             (if animated-p
@@ -736,13 +743,16 @@ text.  Return FALLBACK unchanged when IMAGE is nil."
 (defun appkit-media--image-with-pixel-height (image pixel-height)
   "Return IMAGE displayed at PIXEL-HEIGHT.
 
-Canvas descriptors retain their object identity because Emacs associates their
-mutable pixel buffers by `eq'.  Other image descriptors are copied so cached
-`:height Nch' values remain reusable after `text-scale-mode'."
+Static Canvas posters copy their actual pixels before display sizing.
+Live Canvas descriptors retain the identity of their externally updated
+pixel buffers.  Other image descriptors are copied as before."
   (if (eq (plist-get (cdr-safe image) :type) 'canvas)
-      (progn
-        (plist-put (cdr image) :height pixel-height)
-        image)
+      (let ((render-image
+             (if (plist-get (cdr image) :video-static-poster)
+                 (video-canvas-copy image)
+               image)))
+        (plist-put (cdr render-image) :height pixel-height)
+        render-image)
     (let ((properties (copy-sequence (cdr-safe image))))
       (cons 'image (plist-put properties :height pixel-height)))))
 
@@ -1088,67 +1098,6 @@ Display with `appkit-media-one-line-image-display-string'."
          (appkit-media--known-image-signature-at-p bytes 2))
     (substring bytes 2))
    (t bytes)))
-
-(defun appkit-media--buffer-uint32-be (position)
-  "Read one unsigned big-endian 32-bit value at buffer POSITION."
-  (+ (ash (char-after position) 24)
-     (ash (char-after (1+ position)) 16)
-     (ash (char-after (+ position 2)) 8)
-     (char-after (+ position 3))))
-
-(defun appkit-media--png-frame-end (start)
-  "Return end position of a complete PNG frame at START, or nil."
-  (let ((position (+ start 8))
-        end)
-    (when (and (<= (+ start 8) (point-max))
-               (cl-loop for byte in '(137 80 78 71 13 10 26 10)
-                        for offset from 0
-                        always (= (char-after (+ start offset)) byte)))
-      (catch 'done
-        (while (<= (+ position 12) (point-max))
-          (let* ((length (appkit-media--buffer-uint32-be position))
-                 (chunk-end (+ position 12 length)))
-            (when (> chunk-end (point-max))
-              (throw 'done nil))
-            (when (and (= (char-after (+ position 4)) ?I)
-                       (= (char-after (+ position 5)) ?E)
-                       (= (char-after (+ position 6)) ?N)
-                       (= (char-after (+ position 7)) ?D))
-              (setq end chunk-end)
-              (throw 'done end))
-            (setq position chunk-end))))
-      end)))
-
-(defun appkit-media-png-stream-pop-latest (&optional buffer)
-  "Remove complete PNG frames from BUFFER and return only the latest.
-
-BUFFER defaults to the current buffer and must be unibyte.  Any incomplete
-trailing frame remains buffered for the next `process-filter' chunk.  Signal an
-error when complete input does not begin with a PNG signature."
-  (with-current-buffer (or buffer (current-buffer))
-    (when enable-multibyte-characters
-      (error "Appkit PNG stream buffer must be unibyte"))
-    (let ((position (point-min))
-          latest-start
-          latest-end
-          frame-end)
-      (while (setq frame-end (appkit-media--png-frame-end position))
-        (setq latest-start position
-              latest-end frame-end
-              position frame-end))
-      (when (and (< position (point-max))
-                 (>= (- (point-max) position) 8)
-                 (not (appkit-media--png-frame-end position)))
-        (unless
-            (cl-loop for byte in '(137 80 78 71 13 10 26 10)
-                     for offset from 0
-                     always (= (char-after (+ position offset)) byte))
-          (error "Appkit PNG stream contains invalid bytes")))
-      (when latest-start
-        (let ((latest
-               (buffer-substring-no-properties latest-start latest-end)))
-          (delete-region (point-min) position)
-          latest)))))
 
 (defun appkit-media-bytes-to-extension (bytes fallback-extension)
   "Infer an image extension from BYTES, else return FALLBACK-EXTENSION."

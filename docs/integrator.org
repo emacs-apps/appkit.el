@@ -402,6 +402,12 @@ after slice normalization, not from the cached POSTER's unscaled ~Nch~ size.
 Rebuild the rows and reattach after text scaling so both dimensions follow
 the new line height.  Unsliced, pixel-sized posters keep their explicit size.
 
+Cached static Canvas posters remain immutable during slice normalization.
+Each resized display copy uses ~video-canvas-copy~ to snapshot the drawn
+pixels into an independent backing store.  Copying the Lisp descriptor does
+not copy Canvas pixels.  Live playback Canvases retain their original
+identity so native frame updates still reach their displayed occurrences.
+
 For a host-owned Canvas, supply its existing display marker as ~:anchor~,
 alongside ~:visible-function~, ~:alive-function~, and ~:activate-function~.
 The marker identifies the buffer and occurrence; video.el resolves its
