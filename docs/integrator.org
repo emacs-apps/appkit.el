@@ -474,6 +474,17 @@ consult their own image cache only when the completion UI requests an
 affix.  Clients remain responsible for resource acquisition and cache
 invalidation.  Frontends may strip candidate text properties without
 discarding the independently affixed preview.
+
+For asynchronously loaded catalogs, pass ~:subscribe~ and an initially empty
+candidate list.  The reader enters the minibuffer before calling the subscription
+with a ~publish~ function.  Call ~publish~ with replacement candidates and an
+optional nonselectable status; publishing the same list refreshes lazy previews.
+The subscription returns an optional cleanup function.  Exit, error, and quit
+detach it and fence late publications from later minibuffer sessions.
+The reader owns native completion-table and frontend refresh state; the client
+owns data acquisition and resource notifications.  Do not hold a Surface render
+pass open for the lifetime of an interactive picker.
+
 Keep dynamic or large nonvisual catalogs on
 ~appkit-chat-completion-read~.  Candidate ~group~ metadata becomes the
 native completion ~group-function~, so capable frontends render sections

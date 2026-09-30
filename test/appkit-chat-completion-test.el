@@ -1,6 +1,7 @@
 ;;; appkit-chat-completion-test.el --- Tests for chat completion -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'icomplete)
 (require 'appkit-chat-completion)
 
 (ert-deftest appkit-chat-completion-token-bounds-supports-unicode ()
@@ -231,7 +232,7 @@
     (should (eq 'payload (aref candidate 6)))
     (should (equal "Unicode · Travel & Places" (aref candidate 7)))))
 
-(ert-deftest appkit-chat-completion-visual-reader-uses-native-alist-table ()
+(ert-deftest appkit-chat-completion-visual-reader-matches-aliases-and-default ()
   (let* ((preview '(image :type png :file "face.png"))
          (candidate
           (appkit-chat-completion-candidate-create
@@ -273,7 +274,6 @@
                             (funcall
                              affixation-function
                              (list (substring-no-properties title))))))
-                     (should (equal (cdr matches) 0))
                      (should
                       (equal
                        (get-text-property (1- (length title)) 'display title)
@@ -293,29 +293,211 @@
        (equal (substring-no-properties seen-default)
               (substring-no-properties seen-title))))))
 
-(ert-deftest appkit-chat-completion-visual-affixation-evaluates-prefix-function ()
+(defmacro appkit-chat-completion-test--with-minibuffer (interaction &rest body)
+  "Run BODY with a temporary reader whose INTERACTION receives its table."
+  (declare (indent 1) (debug (form body)))
+  `(cl-letf (((symbol-function 'completing-read)
+              (lambda (_prompt table predicate _require initial _history default)
+                (with-temp-buffer
+                  (setq-local minibuffer-completion-table table
+                              minibuffer-completion-predicate predicate
+                              minibuffer-default default)
+                  (when initial (insert initial))
+                  (run-hooks 'minibuffer-setup-hook)
+                  (funcall ,interaction table)))))
+     ,@body))
+
+(ert-deftest appkit-chat-completion-visual-reader-replaces-live-catalog ()
+  (let* ((old (appkit-chat-completion-candidate-create
+               :label "cat" :search-terms '("feline") :prefix "old "))
+         (new (appkit-chat-completion-candidate-create
+               :label "cat" :search-terms '("feline") :prefix "new "))
+         (dog (appkit-chat-completion-candidate-create :label "dog"))
+         publish loading-overlay
+         (detached 0))
+    (appkit-chat-completion-test--with-minibuffer
+        (lambda (table)
+          (should-not (all-completions "" table))
+          (setq loading-overlay
+                (seq-find
+                 (lambda (overlay)
+                   (string-match-p
+                    "Loading faces" (or (overlay-get overlay 'before-string) "")))
+                 (append (car (overlay-lists)) (cdr (overlay-lists)))))
+          (should loading-overlay)
+          (should-not (all-completions "Loading" table))
+          (insert "feli")
+          (goto-char (+ (point-min) 2))
+          (let ((input (buffer-string))
+                (position (point)))
+            (funcall publish (list old dog))
+            (should (equal input (buffer-string)))
+            (should (= position (point)))
+            (should-not (overlay-get loading-overlay 'before-string))
+            (let* ((metadata (completion-metadata "" table nil))
+                   (affix (completion-metadata-get metadata
+                                                   'affixation-function))
+                   (title (car (completion-all-completions "FELI" table nil 4))))
+              (should (string-prefix-p "cat" title))
+              (should (equal "old " (cadar (funcall affix (list title)))))
+              (funcall publish (list new) "Ready")
+              (should-not (all-completions "dog" table))
+              (should-not (all-completions "Ready" table))
+              ;; Metadata already handed to a frontend must see the new object.
+              (should (equal "new " (cadar (funcall affix (list title)))))
+              (should (equal input (buffer-string)))
+              (should (= position (point)))
+              (substring-no-properties title))))
+      (should
+       (eq new
+           (appkit-chat-completion-read-visual
+            "Face: " nil
+            :subscribe
+            (lambda (callback)
+              (setq publish callback)
+              (funcall callback nil "Loading faces")
+              (lambda () (cl-incf detached)))))))
+    (should (= detached 1))
+    (should-not (overlay-buffer loading-overlay))))
+
+(ert-deftest appkit-chat-completion-visual-reader-refreshes-lazy-images ()
   (let* ((calls 0)
-         (preview '(image :type png :file "face.png"))
+         (image nil)
          (candidate
           (appkit-chat-completion-candidate-create
            :label ":dance:"
-           :search-terms '("party")
-           :prefix
-           (lambda (_candidate)
-             (cl-incf calls)
-             (concat (propertize " " 'display preview) " "))))
-         (title
-          (caar
-           (appkit-chat-completion--visual-choices (list candidate))))
-         (candidate-map (make-hash-table :test #'equal)))
-    (puthash title candidate candidate-map)
-    (let* ((row
-            (car
-             (appkit-chat-completion--visual-affixation
-              (list (substring-no-properties title)) candidate-map)))
-           (prefix (cadr row)))
-      (should (= 1 calls))
-      (should (equal preview (get-text-property 0 'display prefix))))))
+           :prefix (lambda (_candidate)
+                     (cl-incf calls)
+                     (if image (propertize " " 'display image) ""))))
+         (candidates (list candidate))
+         publish)
+    (appkit-chat-completion-test--with-minibuffer
+        (lambda (table)
+          (let* ((title (car (all-completions "" table)))
+                 (affix
+                  (completion-metadata-get
+                   (completion-metadata "" table nil) 'affixation-function)))
+            (should (= calls 0))
+            (should (equal "" (cadar (funcall affix (list title)))))
+            (should (= calls 1))
+            (setq image '(image :type png :file "face.png"))
+            (funcall publish candidates)
+            (should (= calls 1))
+            (let ((prefix (cadar (funcall affix (list title)))))
+              (should (equal image (get-text-property 0 'display prefix))))
+            title))
+      (should
+       (eq candidate
+           (appkit-chat-completion-read-visual
+            "Face: " candidates
+            :subscribe (lambda (callback) (setq publish callback) nil)))))))
+
+(ert-deftest appkit-chat-completion-visual-reader-keeps-filtered-selection ()
+  (let* ((cat (appkit-chat-completion-candidate-create :label "cat"))
+         (cap (appkit-chat-completion-candidate-create :label "cap"))
+         (car (appkit-chat-completion-candidate-create :label "car"))
+         (dog (appkit-chat-completion-candidate-create :label "dog"))
+         (icomplete-mode t)
+         (icomplete--scrolled-completions nil)
+         (icomplete--scrolled-past nil)
+         publish)
+    (appkit-chat-completion-test--with-minibuffer
+        (lambda (_table)
+          (insert "ca")
+          ;; Icomplete selects the first entry of its rotated native cache.
+          (completion--cache-all-sorted-completions
+           (point-min) (point-max) '("cap" "cat" . 0))
+          (funcall publish (list car cat cap dog))
+          (appkit-chat-completion--visual-refresh)
+          (should (equal '("cap" "car" "cat" . 0)
+                         completion-all-sorted-completions))
+          (should (equal "ca" (buffer-string)))
+          (should (= (point-max) (point)))
+          (funcall publish (list cat dog))
+          (appkit-chat-completion--visual-refresh)
+          (should (equal '("cat" . 0) completion-all-sorted-completions))
+          "cat")
+      (should
+       (eq cat
+           (appkit-chat-completion-read-visual
+            "Face: " (list cat cap)
+            :subscribe (lambda (callback) (setq publish callback) nil)))))))
+
+(ert-deftest appkit-chat-completion-visual-reader-detaches-on-all-exits ()
+  (dolist (outcome '(return error quit))
+    (with-temp-buffer
+      (let* ((owner (current-buffer))
+             (candidate (appkit-chat-completion-candidate-create :label "face"))
+             (detached 0)
+             publish table status-overlay result)
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (setq table collection)
+                     (with-current-buffer owner
+                       (run-hooks 'minibuffer-setup-hook)
+                       (setq status-overlay
+                             (car (append (car (overlay-lists))
+                                          (cdr (overlay-lists)))))
+                       (pcase outcome
+                         ('return "face")
+                         ('error (error "Reader failed"))
+                         ('quit (signal 'quit nil)))))))
+          (setq result
+                (condition-case error-data
+                    (appkit-chat-completion-read-visual
+                     "Face: " (list candidate)
+                     :subscribe
+                     (lambda (callback)
+                       (setq publish callback)
+                       (funcall callback (list candidate) "Loading")
+                       (lambda ()
+                         (cl-incf detached)
+                         ;; Unsubscription itself can deliver one final event.
+                         (funcall callback nil "Too late"))))
+                  ((error quit) (car error-data)))))
+        (should (eq result (if (eq outcome 'return) candidate outcome)))
+        (should (= detached 1))
+        (should status-overlay)
+        (should-not (overlay-buffer status-overlay))
+        ;; Keep the owner alive to check lifetime fencing, not just buffer death.
+        (funcall publish nil "Late event")
+        (should (equal '("face") (all-completions "" table)))
+        (should-not (append (car (overlay-lists)) (cdr (overlay-lists))))))))
+
+(ert-deftest appkit-chat-completion-visual-reader-fences-reused-minibuffer ()
+  (with-temp-buffer
+    (let* ((owner (current-buffer))
+           (old (appkit-chat-completion-candidate-create :label "old"))
+           (new (appkit-chat-completion-candidate-create :label "new"))
+           old-publish
+           (second-reader nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt table &rest _)
+                   (with-current-buffer owner
+                     (run-hooks 'minibuffer-setup-hook)
+                     (when second-reader
+                       (funcall old-publish (list old) "Stale status")
+                       (should (equal '("new") (all-completions "" table)))
+                       (dolist (overlay
+                                (append (car (overlay-lists))
+                                        (cdr (overlay-lists))))
+                         (should-not
+                          (string-match-p
+                           "Stale" (or (overlay-get overlay 'before-string) "")))))
+                     (car (all-completions "" table))))))
+        (should
+         (eq old
+             (appkit-chat-completion-read-visual
+              "Old: " (list old)
+              :subscribe (lambda (publish) (setq old-publish publish) nil))))
+        (setq second-reader t)
+        (should
+         (eq new
+             (appkit-chat-completion-read-visual
+              "New: " nil
+              :subscribe (lambda (publish)
+                           (funcall publish (list new) "Current")
+                           nil))))))))
 
 (provide 'appkit-chat-completion-test)
 
