@@ -463,9 +463,61 @@ frontends may strip candidate properties without discarding it."
         (push (cons title candidate) choices)))
     (nreverse choices)))
 
+(defvar-local appkit-chat-completion--visual-session nil
+  "Identity of the asynchronous visual reader owning this minibuffer.")
+
+(defvar vertico--candidates-ov)
+(defvar vertico--input)
+(defvar vertico--lock-candidate)
+(declare-function vertico--exhibit "ext:vertico")
+(defvar icomplete-mode)
+(defvar icomplete--scrolled-completions)
+(defvar icomplete--scrolled-past)
+(declare-function icomplete-exhibit "icomplete")
+
+(defun appkit-chat-completion--visual-refresh ()
+  "Refresh native completion in the selected reader minibuffer.
+Keep the input, point, and current candidate rather than restarting the
+reader.  The caller must select the owning minibuffer window first."
+  (let ((selected (car completion-all-sorted-completions)))
+    (completion--flush-all-sorted-completions)
+    (cond
+     ((and (fboundp 'vertico--exhibit)
+           (bound-and-true-p vertico--candidates-ov))
+      ;; Vertico normally skips recomputation when the input has not changed.
+      ;; Its candidate lock preserves the selection across catalog updates.
+      (let ((vertico--lock-candidate t))
+        (setq vertico--input t)
+        (vertico--exhibit)))
+     ((and (bound-and-true-p icomplete-mode)
+           (fboundp 'icomplete-exhibit))
+      (let* ((completions (completion-all-sorted-completions))
+             (tail completions)
+             previous)
+        ;; Icomplete selects the head of its (possibly improper) cached list.
+        ;; Rotate only when that candidate remains in the filtered catalog.
+        (while (and (consp tail) (not (equal selected (car tail))))
+          (setq previous tail
+                tail (cdr tail)))
+        (when (and previous (consp tail))
+          (let ((last (last completions)))
+            (setcdr previous (cdr last))
+            (setcdr last completions)
+            (setq completion-all-sorted-completions tail))))
+      (setq icomplete--scrolled-completions nil
+            icomplete--scrolled-past nil)
+      (icomplete-exhibit))
+     (t
+      ;; Native *Completions* also preserves its selected candidate when
+      ;; rebuilding.  Never steal focus from the input while showing it.
+      (let ((completion-auto-select nil)
+            (completion-fail-discreetly t)
+            (inhibit-message t))
+        (minibuffer-completion-help))))))
+
 (cl-defun appkit-chat-completion-read-visual
     (prompt candidates
-            &key category history initial-input default-candidate)
+            &key category history initial-input default-candidate subscribe)
   "Read one item from a bounded visual CANDIDATES catalog.
 
 Each completion title contains its visible label and hidden search terms.
@@ -473,13 +525,24 @@ Native affixation supplies candidate prefixes independently of candidate text
 properties and maps the selected title back to its opaque candidate object.
 CATEGORY, HISTORY, and INITIAL-INPUT customize `completing-read'.
 DEFAULT-CANDIDATE, when non-nil, must be one of CANDIDATES and becomes the
-native minibuffer default."
-  (unless candidates
+native minibuffer default.
+
+When SUBSCRIBE is non-nil, CANDIDATES may initially be empty.  Call SUBSCRIBE
+once, after entering the minibuffer, with a PUBLISH function.  PUBLISH takes
+\(candidates &optional status), replaces the live catalog, and displays STATUS
+as nonselectable text (nil clears it).  Publishing the same candidates also
+refreshes lazy image prefixes without disturbing input or selection.
+SUBSCRIBE may return an unsubscribe function, called once when the reader
+exits, including error or quit.  Publications after exit are ignored."
+  (unless (or candidates subscribe)
     (user-error "No completion candidates"))
   (let* ((choices (appkit-chat-completion--visual-choices candidates))
          (candidate-map (make-hash-table :test #'equal))
          (default-entry
-          (and default-candidate (rassq default-candidate choices))))
+          (and default-candidate (rassq default-candidate choices)))
+         (session (make-symbol "appkit-visual-reader"))
+         (alive t)
+         owner status-overlay unsubscribe refresh-timer dirty)
     (dolist (entry choices)
       (puthash (car entry) (cdr entry) candidate-map))
     (when (and default-candidate (not default-entry))
@@ -487,8 +550,10 @@ native minibuffer default."
     (let* ((category (or category 'appkit-chat))
            (table
             (completion-table-with-metadata
-             choices
+             (lambda (string pred action)
+               (complete-with-action action choices string pred))
              `((category . ,category)
+               ,@(when subscribe '((eager-update . t)))
                (display-sort-function . identity)
                (cycle-sort-function . identity)
                (group-function
@@ -504,16 +569,85 @@ native minibuffer default."
              (assq-delete-all
               'appkit-chat
               (copy-tree completion-category-overrides))))
-           (completion-ignore-case appkit-chat-completion-ignore-case)
-           (choice
-            (completing-read
-             prompt table nil t initial-input history
-             (car default-entry)))
-           (entry (assoc choice choices)))
-      (if entry
-          (cdr entry)
-        (user-error
-         "Unknown visual completion candidate: %s" choice)))))
+           (completion-ignore-case appkit-chat-completion-ignore-case))
+      (cl-labels
+          ((live-p ()
+             (and alive
+                  (buffer-live-p owner)
+                  (eq session
+                      (buffer-local-value
+                       'appkit-chat-completion--visual-session owner))))
+           (refresh ()
+             (when (and dirty (live-p))
+               (when-let* ((window (active-minibuffer-window))
+                           ((eq owner (window-buffer window))))
+                 (setq dirty nil)
+                 ;; Timer callbacks need not run in the selected buffer, and
+                 ;; a recursive minibuffer must never receive this refresh.
+                 (with-selected-window window
+                   (with-current-buffer owner
+                     (save-excursion
+                       (appkit-chat-completion--visual-refresh)))))))
+           (publish (replacement &optional status)
+             (when (live-p)
+               (unless (eq replacement candidates)
+                 (let ((entries
+                        (appkit-chat-completion--visual-choices replacement)))
+                   (setq choices entries
+                         candidates replacement)
+                   (clrhash candidate-map)
+                   (dolist (entry choices)
+                     (puthash (car entry) (cdr entry) candidate-map))))
+               (with-current-buffer owner
+                 (when (and default-entry
+                            (not (assoc (car default-entry) choices)))
+                   (setq-local minibuffer-default nil))
+                 (overlay-put
+                  status-overlay 'before-string
+                  (and status
+                       (propertize (concat "[" status "] ") 'face 'shadow))))
+               (setq dirty t)
+               (unless refresh-timer
+                 (setq refresh-timer
+                       (run-at-time
+                        0 nil
+                        (lambda ()
+                          (setq refresh-timer nil)
+                          (refresh)))))))
+           (setup ()
+             (setq owner (current-buffer))
+             (setq-local appkit-chat-completion--visual-session session)
+             ;; Separate display text from both input and selectable entries.
+             (setq status-overlay (make-overlay (point-min) (point-min)))
+             ;; If a nested minibuffer was active when publication arrived,
+             ;; refresh upon returning to this one, without polling.
+             (add-hook 'post-command-hook #'refresh t t)
+             (setq unsubscribe (funcall subscribe #'publish))))
+        (unwind-protect
+            (let* ((choice
+                    (minibuffer-with-setup-hook
+                        (lambda () (when subscribe (setup)))
+                      (completing-read
+                       prompt table nil t initial-input history
+                       (car default-entry))))
+                   (entry (assoc choice choices)))
+              (if entry
+                  (cdr entry)
+                (user-error
+                 "Unknown visual completion candidate: %s" choice)))
+          ;; Fence callbacks before detaching: unsubscribe itself may publish.
+          (setq alive nil)
+          (when refresh-timer
+            (cancel-timer refresh-timer))
+          (when status-overlay
+            (delete-overlay status-overlay))
+          (when (buffer-live-p owner)
+            (with-current-buffer owner
+              (remove-hook 'post-command-hook #'refresh t)
+              (when (eq session appkit-chat-completion--visual-session)
+                (setq appkit-chat-completion--visual-session nil))))
+          (when (functionp unsubscribe)
+            (funcall unsubscribe)))))))
 
 (cl-defun appkit-chat-completion-read
     (prompt candidates &key category history initial-input)
