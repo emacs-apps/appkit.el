@@ -122,13 +122,17 @@ settlement."
   buffer
   display-function
   autoplay-p
-  setup-function)
+  setup-function
+  kind
+  source-format
+  animation-loop-policy)
 
 (cl-defun appkit-media-video-presentation-create
     (resource &key label cache-key cache-directory
               (cache-policy appkit-media-video-cache-policy)
               muted live request-headers buffer display-function (start t)
-              setup-function)
+              setup-function kind source-format
+              (animation-loop-policy video-animation-loop-policy))
   "Create owned input for a managed video RESOURCE presentation.
 SETUP-FUNCTION, when non-nil, is called with the ready session and viewer
 buffer.  It returns nil or an `appkit-cancellation' for auxiliary work,
@@ -147,7 +151,10 @@ which is cancelled when the viewer closes or the presentation is cancelled."
    :buffer buffer
    :display-function display-function
    :autoplay-p start
-   :setup-function setup-function))
+   :setup-function setup-function
+   :kind kind
+   :source-format source-format
+   :animation-loop-policy animation-loop-policy))
 
 (defun appkit-media-video-presentation-start
     (_context input _observe resolve reject)
@@ -179,6 +186,10 @@ which is cancelled when the viewer closes or the presentation is cancelled."
                   (appkit-media-video-session-create
                    (appkit-media-video-presentation-resource input)
                    (appkit-media-video-presentation-label input)
+                   :kind (appkit-media-video-presentation-kind input)
+                   :source-format (appkit-media-video-presentation-source-format input)
+                   :animation-loop-policy
+                   (appkit-media-video-presentation-animation-loop-policy input)
                    :cache-key (appkit-media-video-presentation-cache-key input)
                    :cache-directory (appkit-media-video-presentation-cache-directory input)
                    :cache-policy (appkit-media-video-presentation-cache-policy input)
