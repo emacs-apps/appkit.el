@@ -77,6 +77,29 @@
         (should (eq (get-text-property start 'display) canvas))
         (should (= (plist-get (cdr canvas) :height) 64))))))
 
+(ert-deftest appkit-media-inline-visibility-rejects-hidden-and-iconified-frames ()
+  (save-window-excursion
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (let ((poster '(image :type png :width 10 :height 10))
+            (visibility t))
+        (insert (propertize " " 'display poster))
+        (let ((host (appkit-media-inline-host-attach
+                     1 2 poster nil :kind 'video)))
+          ;; Position visibility alone does not mean its frame is displayed.
+          (cl-letf (((symbol-function 'pos-visible-in-window-p)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'frame-visible-p)
+                     (lambda (_) visibility)))
+            (should (eq (appkit-media--inline-visible-p host) (selected-window)))
+            (setq visibility nil)
+            (should-not (appkit-media--inline-visible-p host))
+            (setq visibility 'icon)
+            (should-not (appkit-media--inline-visible-p host))
+            (setq visibility t)
+            (should (eq (appkit-media--inline-visible-p host)
+                        (selected-window)))))))))
+
 (ert-deftest appkit-media-inline-target-tracks-scaled-poster-geometry ()
   "Text-scaled slices and their native viewport must retain the same aspect."
   (skip-unless (and (display-graphic-p)

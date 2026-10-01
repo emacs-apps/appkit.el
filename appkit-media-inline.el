@@ -87,22 +87,24 @@ POSITION defaults to point in the current buffer."
       host)))
 
 (defun appkit-media--inline-visible-p (host)
-  "Return a window displaying a HOST image span, or nil.
-Reject offscreen slices by buffer positions before asking Emacs for pixel
-visibility.  The returned window also owns this occurrence's background."
+  "Return a window displaying a HOST image span in a visible frame, or nil.
+Ignore hidden and iconified frames.  Reject offscreen slices by buffer positions
+before asking Emacs for pixel visibility.  The returned window also owns this
+occurrence's background."
   (and (appkit-media-inline-host-live-p host)
        (let ((buffer (appkit-media-inline-host-buffer host)))
          (cl-find-if
           (lambda (window)
-            (let ((start (window-start window))
-                  (end (window-end window)))
-              (cl-some
-               (lambda (range)
-                 (and (> (cdr range) start)
-                      (or (null end) (< (car range) end))
-                      (pos-visible-in-window-p
-                       (max start (car range)) window t)))
-               (appkit-media-inline-host-ranges host))))
+            (and (eq (frame-visible-p (window-frame window)) t)
+                 (let ((start (window-start window))
+                       (end (window-end window)))
+                   (cl-some
+                    (lambda (range)
+                      (and (> (cdr range) start)
+                           (or (null end) (< (car range) end))
+                           (pos-visible-in-window-p
+                            (max start (car range)) window t)))
+                    (appkit-media-inline-host-ranges host)))))
           (get-buffer-window-list buffer nil t)))))
 
 (defun appkit-media--inline-close (host)
