@@ -972,7 +972,7 @@ Renderer errors propagate; displays without Canvas return nil."
                          most-positive-fixnum)))
            (poster (video-source-poster
                     file (max 1 (round (* width scale)))
-                    (max 1 (round (* height scale))) :source-format 'lottie)))
+                    (max 1 (round (* height scale))))))
       (plist-put (cdr poster) :appkit-media-animated
                  (> (plist-get metadata :frames) 1))
       poster)))

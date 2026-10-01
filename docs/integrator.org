@@ -417,10 +417,12 @@ additional placement or color arguments.
 Use ~video-canvas-create~ for a standalone Canvas.  Resolve its static drawing
 background with ~video-background-color~ at the scene's display marker and
 pass it to the constructor and ~video-canvas-draw-source~ using ~:background~.
-The draw API also accepts ~:fit~ and ~:source-format 'lottie~.  Canonical
-resources retain ~application/lottie+json~ or ~application/zip+dotlottie~ MIME
-metadata through opaque cache filenames.  Use ~appkit-media-resource-poster~
-for an immutable, fully drawn first-frame Canvas without starting playback.
+The draw API also accepts ~:fit~.  Local content selects the decoder, including
+APNG and Lottie cached without their original extensions.  Canonical resources
+retain ~application/lottie+json~ or ~application/zip+dotlottie~ MIME metadata for
+routing before acquisition, not for overriding the local decoder.
+Use ~appkit-media-resource-poster~ for an immutable, fully drawn first-frame
+Canvas without starting playback.
 The host redraws its static scene when its colors change; video.el recomposes
 live or paused targets without changing their shared player.
 The activation callback publishes the Canvas over the complete image span;

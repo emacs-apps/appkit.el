@@ -269,9 +269,15 @@ applications must perform that adaptation at their protocol boundary."
                (appkit-media-resource-source-format normalized))
       (let ((name (or (alist-get 'name normalized)
                       (alist-get 'url normalized)
-                      (alist-get 'file normalized) "")))
+                      (alist-get 'file normalized) ""))
+            (file (alist-get 'file normalized)))
         (setf (alist-get 'mime-type normalized)
-              (if (string-match-p "\\.lottie\\(?:[?#].*\\)?\\'" (downcase name))
+              (if (or (string-match-p "\\.lottie\\(?:[?#].*\\)?\\'" (downcase name))
+                      (and (appkit-media-readable-file-p file)
+                           (condition-case nil
+                               (equal (appkit-media--read-file-prefix file 4)
+                                      "PK\003\004")
+                             (file-error nil))))
                   "application/zip+dotlottie"
                 "application/lottie+json"))))
     normalized))
@@ -290,10 +296,9 @@ operations that transfer or open the resource."
      (mime-type . ,mime-type))))
 
 (defun appkit-media-resource-source-format (resource)
-  "Select a native source format using canonical RESOURCE metadata.
-`application/lottie+json' and `application/zip+dotlottie' retain Lottie
-identity through opaque cache names.  Local content may also be inferred;
-an arbitrary JSON filename or application/json MIME type is not sufficient."
+  "Identify Lottie RESOURCE for acquisition and presentation routing.
+Canonical MIME and filename metadata remain useful before download.
+Once acquired, video.el selects its decoder from the local content."
   (let* ((mime (downcase (or (alist-get 'mime-type resource) "")))
          (file (alist-get 'file resource))
          (name (or (alist-get 'name resource)
@@ -304,18 +309,15 @@ an arbitrary JSON filename or application/json MIME type is not sufficient."
       'lottie)))
 
 (cl-defun appkit-media-resource-poster
-    (resource width height &key fit background source-format)
+    (resource width height &key fit background)
   "Render canonical RESOURCE's immutable first-frame Canvas poster.
-Acquire a remote resource first and retain its canonical MIME metadata when
-replacing its local FILE.  WIDTH and HEIGHT are destination pixels."
+Acquire a remote resource first.  The local content selects the decoder.
+WIDTH and HEIGHT are destination pixels."
   (let* ((resource (appkit-media-resource-normalize resource))
          (file (alist-get 'file resource)))
     (unless (appkit-media-readable-file-p file)
       (error "Media poster requires an acquired local resource"))
-    (video-source-poster
-     file width height :fit fit :background background
-     :source-format (or source-format
-                        (appkit-media-resource-source-format resource)))))
+    (video-source-poster file width height :fit fit :background background)))
 
 
 (defun appkit-media-resource-name (resource)
@@ -638,13 +640,13 @@ CLIENT-LABEL, OWNER, BUFFER, and DISPLAY-FUNCTION have the same meanings as in
     (resource &optional client-label
               &key owner cache-key cache-directory cache-update-function
               (cache-policy appkit-media-video-cache-policy) muted live
-              request-headers kind source-format
+              request-headers kind
               (animation-loop-policy video-animation-loop-policy))
   "Create one Appkit playback session for canonical RESOURCE.
 
 KIND is `video' or `image'; omitted, Lottie selects `image', otherwise `video'.
-SOURCE-FORMAT overrides canonical MIME/local inference.  ANIMATION-LOOP-POLICY
-is captured by the player; ordinary sources default to their file policy.
+The local content selects the decoder.  ANIMATION-LOOP-POLICY is captured
+by the player; ordinary sources default to their file policy.
 CLIENT-LABEL identifies errors and messages.  OWNER limits video cache callbacks
 to a live Appkit lifecycle.  CACHE-KEY and CACHE-DIRECTORY select persistent
 progressive video playback storage.  Automatic CACHE-POLICY retains only a
@@ -660,14 +662,15 @@ dedicated surface, or close the returned session."
          (resource (appkit-media-resource-normalize resource))
          (file (alist-get 'file resource))
          (url (alist-get 'url resource))
-         (source-format (or source-format
-                            (appkit-media-resource-source-format resource)))
-         (kind (or kind (if (eq source-format 'lottie) 'image 'video)))
+         (format (appkit-media-resource-source-format resource))
+         (kind (or kind (if (eq format 'lottie) 'image 'video)))
          source
          cache-file
          cache-complete-function)
     (unless (memq kind '(image video))
       (user-error "%s: invalid media player kind: %S" label kind))
+    (when (and format (not (appkit-media-file-present-p file)))
+      (user-error "%s: Lottie playback requires an acquired local file" label))
     (unless (or (null owner) (appkit-owner-live-p owner))
       (user-error "%s: media owner is no longer live" label))
     (unless (memq cache-policy '(automatic none))
@@ -710,7 +713,6 @@ dedicated surface, or close the returned session."
        (video-session-create
         source
         :kind kind
-        :source-format source-format
         :animation-loop-policy animation-loop-policy
         :muted muted
         :live live
@@ -756,16 +758,16 @@ dedicated surface, or close the returned session."
               (setq-local image-animate-loop t)
               (image-toggle-animation))))))))
 
-(defun appkit-media-open-file (file &optional source-format)
-  "Open local FILE, using Canvas for Lottie SOURCE-FORMAT when appropriate."
+(defun appkit-media-open-file (file)
+  "Open local FILE, using Canvas for native animation content."
   (unless (appkit-media-file-present-p file)
     (user-error "Media: local file does not exist: %s" file))
   (when-let* ((buffer (get-file-buffer file)))
     (with-current-buffer buffer
       (unless (buffer-modified-p)
         (set-visited-file-modtime))))
-  (if (eq (video-source-select-format file source-format) 'lottie)
-      (video-open file :source-format 'lottie :kind 'image)
+  (if (video-source-format file)
+      (video-open file :kind 'image)
     (prog1
         (funcall appkit-media-open-file-function file)
       (appkit-media--maybe-start-gif-animation file))))
