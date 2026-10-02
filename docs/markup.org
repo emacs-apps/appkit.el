@@ -234,8 +234,8 @@ The built-in codecs are:
   underline, strike, inline code, described links, quotes, lists, and
   ~#+begin_src~ blocks;
 - ~markdown~: CommonMark/GFM paragraphs, ATX and Setext headings, bold, italic,
-  strike, inline, indented, and fenced code, described links, quotes, and
-  nested lists.
+  strike, inline, indented, and fenced code, direct/reference links, quotes, and
+  nested lists.  Reference definitions are indexed, not displayed.
 
 Markdown has no underline marker.  Converting an Org underline to Markdown
 therefore returns a semantic-loss record instead of silently changing it.
@@ -256,6 +256,24 @@ produce a content-free codec error.
 Slackit may register ~slack-mrkdwn~ during its migration.  Disco's
 ~discord-markdown~ provider codec remains client-owned.  Neither provider
 grammar becomes an Appkit built-in.
+
+The built-in Org and Markdown parsers accept a client-owned context plist for
+native document presentation:
+
+- ~:image~ receives ~(URL ALT)~ and returns one inline node.  Markdown supports
+  direct and reference images; Org recognizes undescribed image-file links.
+- ~:table~ receives ~(ROWS)~ and returns one block.  Each row contains cells of
+  semantic inline nodes; a ~nil~ row marks a rule/header separator.  Markdown
+  uses GFM pipe tables, and Org uses native Org tables.
+- ~:anchor~ receives ~(ID)~ and returns one inline node for Org ~CUSTOM_ID~ and
+  ~<<target>>~ anchors.
+- Markdown's ~:link~ receives ~(URL CHILDREN)~ before its default text-label
+  conversion.  A client can retain rich labels such as linked image badges.
+
+These callbacks construct nodes only: they must not download images, follow
+links, evaluate source, or mutate application state.  Without image/table
+callbacks, the codecs retain their literal fallbacks.  Link resolution,
+resource interests, anchor naming, and presentation remain client policy.
 
 ** Parse result
 

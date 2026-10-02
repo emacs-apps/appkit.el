@@ -383,8 +383,8 @@
           (setq position finish))))
     (nreverse result)))
 
-(defun appkit-markup-codecs--org-inlines (contents)
-  "Convert Org inline CONTENTS to semantic inline nodes."
+(defun appkit-markup-codecs--org-inlines (contents context)
+  "Convert Org inline CONTENTS using presentation callbacks in CONTEXT."
   (let (result)
     (dolist (node contents (nreverse result))
       (cond
@@ -401,7 +401,7 @@
               (inline
                 (appkit-markup-codecs--add-style
                  (appkit-markup-codecs--org-inlines
-                  (org-element-contents node))
+                  (org-element-contents node) context)
                  style))
             (push inline result))))
        ((memq (org-element-type node) '(code verbatim))
@@ -412,15 +412,31 @@
         (let* ((url (or (org-element-property :raw-link node)
                         (org-element-property :path node)
                         ""))
-               (description
-                (appkit-markup-codecs--org-inlines
-                 (org-element-contents node)))
-               (description
-                (if (and description
-                         (cl-every #'appkit-markup-text-p description))
-                    description
-                  (list (appkit-markup-text url)))))
-          (push (appkit-markup-link url description) result)))
+               (image (plist-get context :image))
+               (description (org-element-contents node)))
+          (push
+           (if (and image
+                    (not description)
+                    (member (org-element-property :type node)
+                            '("file" "http" "https"))
+                    (org-file-image-p
+                     (car (split-string
+                           (org-element-property :path node) "[?#]"))))
+               (funcall image url url)
+             (let ((children
+                    (appkit-markup-codecs--org-inlines description context)))
+               (appkit-markup-link
+                url
+                (if (and children
+                         (cl-every #'appkit-markup-text-p children))
+                    children
+                  (list (appkit-markup-text url))))))
+           result)))
+       ((and (eq (org-element-type node) 'target)
+             (plist-get context :anchor))
+        (push (funcall (plist-get context :anchor)
+                       (org-element-property :value node))
+              result))
        ((eq (org-element-type node) 'line-break)
         (push (appkit-markup-line-break) result))
        (t
@@ -438,11 +454,11 @@
                (make-string (org-element-property :post-blank node) ?\s))
               result)))))
 
-(defun appkit-markup-codecs--org-paragraph (node)
-  "Convert Org paragraph NODE."
+(defun appkit-markup-codecs--org-paragraph (node context)
+  "Convert Org paragraph NODE using CONTEXT."
   (let ((children
          (appkit-markup-codecs--org-inlines
-          (org-element-contents node))))
+          (org-element-contents node) context)))
     ;; Org includes the source line terminator in paragraph strings.  The block
     ;; boundary owns one terminator; explicit internal newlines remain.
     (when (and children (appkit-markup-line-break-p (car (last children))))
@@ -459,32 +475,51 @@
     (appkit-markup-paragraph
      (appkit-markup-codecs--org-string-inlines text))))
 
-(defun appkit-markup-codecs--org-blocks (contents)
-  "Convert Org block CONTENTS to semantic blocks."
+(defun appkit-markup-codecs--org-table (node context)
+  "Convert Org table NODE to semantic rows for the CONTEXT callback."
+  (funcall
+   (plist-get context :table)
+   (mapcar
+    (lambda (row)
+      (unless (eq (org-element-property :type row) 'rule)
+        (mapcar
+         (lambda (cell)
+           (appkit-markup-codecs--org-inlines
+            (org-element-contents cell) context))
+         (org-element-contents row))))
+    (org-element-contents node))))
+
+(defun appkit-markup-codecs--org-blocks (contents context)
+  "Convert Org block CONTENTS using presentation callbacks in CONTEXT."
   (let (blocks)
     (dolist (node contents (nreverse blocks))
       (pcase (org-element-type node)
         ('section
          (dolist (block
                   (appkit-markup-codecs--org-blocks
-                   (org-element-contents node)))
+                   (org-element-contents node) context))
            (push block blocks)))
         ('headline
-         (push (appkit-markup-heading
-                (min 6 (org-element-property :level node))
+         (let ((children
                 (appkit-markup-codecs--org-inlines
-                 (org-element-property :title node)))
-               blocks)
+                 (org-element-property :title node) context))
+               (id (org-element-property :CUSTOM_ID node))
+               (anchor (plist-get context :anchor)))
+           (when (and id anchor)
+             (push (funcall anchor id) children))
+           (push (appkit-markup-heading
+                  (min 6 (org-element-property :level node)) children)
+                 blocks))
          (dolist (block
                   (appkit-markup-codecs--org-blocks
-                   (org-element-contents node)))
+                   (org-element-contents node) context))
            (push block blocks)))
         ('paragraph
-         (push (appkit-markup-codecs--org-paragraph node) blocks))
+         (push (appkit-markup-codecs--org-paragraph node context) blocks))
         ('quote-block
          (push (appkit-markup-quote
                 (appkit-markup-codecs--org-blocks
-                 (org-element-contents node)))
+                 (org-element-contents node) context))
                blocks))
         ('plain-list
          (let* ((style
@@ -496,7 +531,7 @@
                   (lambda (item)
                     (appkit-markup-list-item
                      (appkit-markup-codecs--org-blocks
-                      (org-element-contents item))))
+                      (org-element-contents item) context)))
                   (seq-filter
                    (lambda (child)
                      (and (not (stringp child))
@@ -518,6 +553,12 @@
                       (string-to-number (match-string 0 bullet)))))
            (push (appkit-markup-list style items
                                      :start start) blocks)))
+        ('table
+         (push (if (and (plist-get context :table)
+                        (eq (org-element-property :type node) 'org))
+                   (appkit-markup-codecs--org-table node context)
+                 (appkit-markup-codecs--org-literal-block node))
+               blocks))
         ('src-block
          (push (appkit-markup-preformatted
                 (string-remove-suffix
@@ -527,13 +568,13 @@
         ((or 'org-data 'item)
          (dolist (block
                   (appkit-markup-codecs--org-blocks
-                   (org-element-contents node)))
+                   (org-element-contents node) context))
            (push block blocks)))
         (_
          (push (appkit-markup-codecs--org-literal-block node) blocks))))))
 
-(defun appkit-markup-codecs--org-element-parse (source)
-  "Parse SOURCE through hook-free built-in Org Element semantics."
+(defun appkit-markup-codecs--org-element-parse (source context)
+  "Parse SOURCE through hook-free Org Element semantics using CONTEXT."
   (let (appkit-markup-codecs--org-diagnostics)
     (with-temp-buffer
       (insert (substring-no-properties source))
@@ -543,15 +584,15 @@
         (let ((document
                (appkit-markup-document
                 (appkit-markup-codecs--org-blocks
-                 (org-element-contents (org-element-parse-buffer))))))
+                 (org-element-contents (org-element-parse-buffer)) context))))
           (appkit-markup-parse-result
            document
            :diagnostics
            (nreverse appkit-markup-codecs--org-diagnostics)))))))
 
-(defun appkit-markup-codecs--org-parse (source _context)
-  "Parse Org SOURCE with hook-free built-in Org Element semantics."
-  (appkit-markup-codecs--org-element-parse source))
+(defun appkit-markup-codecs--org-parse (source context)
+  "Parse Org SOURCE with hook-free Org Element semantics using CONTEXT."
+  (appkit-markup-codecs--org-element-parse source context))
 
 (defun appkit-markup-codecs--org-print (document _context)
   "Print DOCUMENT as canonical safe Org chat source."

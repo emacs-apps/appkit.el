@@ -50,6 +50,9 @@
 (defvar appkit-markup-markdown-ts--diagnostic-count 0)
 (defvar appkit-markup-markdown-ts--node-count 0)
 (defvar appkit-markup-markdown-ts--inline-ranges nil)
+(defvar appkit-markup-markdown-ts--context nil)
+(defvar appkit-markup-markdown-ts--references nil)
+(defvar appkit-markup-markdown-ts--table-cell-p nil)
 
 (defun appkit-markup-markdown-ts-ready-p ()
   "Return non-nil when both pinned-shape Markdown grammars are available."
@@ -197,6 +200,51 @@
           (cl-incf position))))
     (apply #'string (nreverse characters))))
 
+(defun appkit-markup-markdown-ts--reference-label (label)
+  "Normalize reference LABEL using CommonMark whitespace and case folding."
+  ;; Upper-then-lower casing expands sharp S and ligatures.  Unicode's two
+  ;; Turkic I exceptions must not acquire the ASCII I equivalence class.
+  (let ((case-fold-search nil))
+    (replace-regexp-in-string
+     "[^İı]+" (lambda (text) (downcase (upcase text)))
+     (replace-regexp-in-string
+      "İ" "i̇"
+      (string-trim
+       (replace-regexp-in-string "[ \t\r\n]+" " " label) " " " ")
+      t t)
+     t t)))
+
+(defun appkit-markup-markdown-ts--destination (node)
+  "Return the unescaped destination of link destination NODE."
+  (let ((text (appkit-markup-markdown-ts--node-source node)))
+    (when (and (> (length text) 1)
+               (= (aref text 0) ?<)
+               (= (aref text (1- (length text))) ?>))
+      (setq text (substring text 1 -1)))
+    (appkit-markup-markdown-ts--unescape text)))
+
+(defun appkit-markup-markdown-ts--collect-references (node depth)
+  "Index definitions in the existing block NODE tree at DEPTH.
+Only block containers are descended, never code or inline source.  The first
+definition wins, including definitions after the links which use them."
+  (appkit-markup-markdown-ts--visit depth)
+  (pcase (treesit-node-type node)
+    ("link_reference_definition"
+     (let* ((label (appkit-markup-markdown-ts--child node "link_label"))
+            (destination
+             (appkit-markup-markdown-ts--child node "link_destination"))
+            (key (and label
+                      (appkit-markup-markdown-ts--reference-label
+                       (substring
+                        (appkit-markup-markdown-ts--node-source label) 1 -1)))))
+       (when (and key destination
+                  (not (gethash key appkit-markup-markdown-ts--references)))
+         (puthash key (appkit-markup-markdown-ts--destination destination)
+                  appkit-markup-markdown-ts--references))))
+    ((or "document" "section" "block_quote" "list" "list_item")
+     (dolist (child (appkit-markup-markdown-ts--children node))
+       (appkit-markup-markdown-ts--collect-references child (1+ depth))))))
+
 (defun appkit-markup-markdown-ts--inline-children (node depth)
   "Convert NODE's inline contents at DEPTH, preserving literal gaps."
   (let ((cursor (treesit-node-start node))
@@ -240,6 +288,8 @@
              (replace-regexp-in-string
               "[\r\n]+" " "
               (buffer-substring-no-properties start end))))
+        (when appkit-markup-markdown-ts--table-cell-p
+          (setq text (replace-regexp-in-string "\\\\|" "|" text t t)))
         (when (and (> (length text) 1)
                    (= (aref text 0) ?\s)
                    (= (aref text (1- (length text))) ?\s)
@@ -257,30 +307,57 @@
         (push (appkit-markup-text " ") label))))
     (or (nreverse label) (list (appkit-markup-text fallback)))))
 
-(defun appkit-markup-markdown-ts--inline-link (node depth)
-  "Convert described link NODE at DEPTH."
-  (let* ((label-node (appkit-markup-markdown-ts--child node "link_text"))
+(defun appkit-markup-markdown-ts--inline-link (node depth &optional image-p)
+  "Convert link or IMAGE-P image NODE at DEPTH, resolving references."
+  (let* ((label-node
+          (appkit-markup-markdown-ts--child
+           node (if image-p "image_description" "link_text")))
+         (reference-node (appkit-markup-markdown-ts--child node "link_label"))
          (destination-node
           (appkit-markup-markdown-ts--child node "link_destination"))
+         (direct-p
+          (or (string= (treesit-node-type node) "inline_link")
+              (and image-p
+                   (cl-loop for index below (treesit-node-child-count node)
+                            thereis
+                            (string= (treesit-node-type
+                                      (treesit-node-child node index)) "(")))))
          (destination
-          (if destination-node
-              (appkit-markup-markdown-ts--unescape
-               (appkit-markup-markdown-ts--node-source destination-node))
-            ""))
-         (destination
-          (if (and (> (length destination) 1)
-                   (= (aref destination 0) ?<)
-                   (= (aref destination (1- (length destination))) ?>))
-              (substring destination 1 -1)
-            destination))
-         (label
-          (and label-node
-               (appkit-markup-markdown-ts--inline-node
-                label-node (1+ depth)))))
-    (list
-     (appkit-markup-link
-      destination
-      (appkit-markup-markdown-ts--link-label label destination)))))
+          (if direct-p
+              (if destination-node
+                  (appkit-markup-markdown-ts--destination destination-node)
+                "")
+            (gethash
+             (appkit-markup-markdown-ts--reference-label
+              (cond
+               (reference-node
+                (substring
+                 (appkit-markup-markdown-ts--node-source reference-node) 1 -1))
+               (label-node
+                (appkit-markup-markdown-ts--node-source label-node))
+               (t "")))
+             appkit-markup-markdown-ts--references)))
+         (image (plist-get appkit-markup-markdown-ts--context :image)))
+    (if (or (null destination) (and image-p (null image)))
+        (progn
+          (when image-p
+            (appkit-markup-markdown-ts--diagnostic
+             'unsupported-markdown-inline node))
+          (appkit-markup-markdown-ts--text-nodes
+           (appkit-markup-markdown-ts--node-source node)))
+      (let ((label (and label-node
+                        (appkit-markup-markdown-ts--inline-node
+                         label-node (1+ depth))))
+            (link (plist-get appkit-markup-markdown-ts--context :link)))
+        (list
+         (cond
+          (image-p
+           (funcall image destination (appkit-markup--plain-inlines label)))
+          (link (funcall link destination label))
+          (t
+           (appkit-markup-link
+            destination
+            (appkit-markup-markdown-ts--link-label label destination)))))))))
 
 (defun appkit-markup-markdown-ts--autolink (node email-p)
   "Convert autolink NODE, prepending mailto when EMAIL-P."
@@ -291,14 +368,18 @@
                    (= (aref raw (1- (length raw))) ?>))
               (substring raw 1 -1)
             raw))
-         (url (if email-p (concat "mailto:" label) label)))
-    (list (appkit-markup-link url (list (appkit-markup-text label))))))
+         (url (if email-p (concat "mailto:" label) label))
+         (children (list (appkit-markup-text label)))
+         (link (plist-get appkit-markup-markdown-ts--context :link)))
+    (list (if link
+              (funcall link url children)
+            (appkit-markup-link url children)))))
 
 (defun appkit-markup-markdown-ts--inline-node (node depth)
   "Convert Markdown-inline NODE at DEPTH."
   (appkit-markup-markdown-ts--visit depth)
   (pcase (treesit-node-type node)
-    ((or "inline" "link_text")
+    ((or "inline" "link_text" "image_description")
      (appkit-markup-markdown-ts--inline-children node depth))
     ("strong_emphasis"
      (appkit-markup-markdown-ts--add-style
@@ -315,7 +396,10 @@
       (appkit-markup-markdown-ts--unescape
        (appkit-markup-markdown-ts--node-source node))))
     ("hard_line_break" (list (appkit-markup-line-break)))
-    ("inline_link" (appkit-markup-markdown-ts--inline-link node depth))
+    ((or "inline_link" "full_reference_link"
+         "collapsed_reference_link" "shortcut_link")
+     (appkit-markup-markdown-ts--inline-link node depth))
+    ("image" (appkit-markup-markdown-ts--inline-link node depth t))
     ("uri_autolink" (appkit-markup-markdown-ts--autolink node nil))
     ("email_autolink" (appkit-markup-markdown-ts--autolink node t))
     ((or "emphasis_delimiter" "code_span_delimiter") nil)
@@ -330,9 +414,19 @@
 
 (defun appkit-markup-markdown-ts--parse-inline (node depth)
   "Parse block grammar inline NODE at DEPTH through markdown-inline."
-  (let ((ranges
-         (appkit-markup-markdown-ts--ranges-excluding
-          node "block_continuation")))
+  (let* ((appkit-markup-markdown-ts--table-cell-p
+          (string= (treesit-node-type node) "pipe_table_cell"))
+         (ranges
+          (if appkit-markup-markdown-ts--table-cell-p
+              (save-excursion
+                (goto-char (treesit-node-start node))
+                (skip-chars-forward " \t" (treesit-node-end node))
+                (let ((start (point)))
+                  (goto-char (treesit-node-end node))
+                  (skip-chars-backward " \t" start)
+                  (when (< start (point)) (list (cons start (point))))))
+            (appkit-markup-markdown-ts--ranges-excluding
+             node "block_continuation"))))
     (if (null ranges)
         nil
       (let ((parser (treesit-parser-create 'markdown-inline)))
@@ -392,10 +486,8 @@
              (unless (string= (treesit-node-type child) "block_quote_marker")
                (appkit-markup-markdown-ts--blocks child (1+ depth))))
            (appkit-markup-markdown-ts--children node)))))
-    (if blocks
-        (list (appkit-markup-quote blocks))
-      (appkit-markup-markdown-ts--literal-block
-       node 'unsupported-markdown-block))))
+    (when blocks
+      (list (appkit-markup-quote blocks)))))
 
 (defun appkit-markup-markdown-ts--list-marker-p (node)
   "Return non-nil when NODE is list presentation rather than content."
@@ -498,6 +590,35 @@
      (appkit-markup-preformatted
       (string-trim-right text "\n+")))))
 
+(defun appkit-markup-markdown-ts--table (node depth)
+  "Convert pipe table NODE at DEPTH through the optional table callback."
+  (let ((table (plist-get appkit-markup-markdown-ts--context :table)))
+    (if (null table)
+        (appkit-markup-markdown-ts--literal-block
+         node 'unsupported-markdown-block)
+      (let (rows width)
+        (dolist (row (appkit-markup-markdown-ts--children node))
+          (appkit-markup-markdown-ts--visit (1+ depth))
+          (pcase (treesit-node-type row)
+            ("pipe_table_delimiter_row" (push nil rows))
+            ((or "pipe_table_header" "pipe_table_row")
+             (let ((cells (appkit-markup-markdown-ts--children-of-type
+                           row "pipe_table_cell"))
+                   converted)
+               (when (string= (treesit-node-type row) "pipe_table_header")
+                 (setq width (length cells)))
+               ;; GFM pads short rows and ignores cells beyond the header.
+               (dotimes (_ width)
+                 (let ((cell (pop cells)))
+                   (when cell
+                     (appkit-markup-markdown-ts--visit (+ depth 2)))
+                   (push (and cell
+                              (appkit-markup-markdown-ts--parse-inline
+                               cell (+ depth 3)))
+                         converted)))
+               (push (nreverse converted) rows)))))
+        (list (funcall table (nreverse rows)))))))
+
 (defun appkit-markup-markdown-ts--blocks (node depth)
   "Convert block grammar NODE at DEPTH to a block list."
   (appkit-markup-markdown-ts--visit depth)
@@ -528,6 +649,8 @@
      (appkit-markup-markdown-ts--fenced-code node))
     ("indented_code_block"
      (appkit-markup-markdown-ts--indented-code node))
+    ("pipe_table" (appkit-markup-markdown-ts--table node depth))
+    ("link_reference_definition" nil)
     ((or "block_quote_marker" "block_continuation"
          "list_marker_dot" "list_marker_parenthesis"
          "list_marker_minus" "list_marker_plus" "list_marker_star")
@@ -536,17 +659,25 @@
      (appkit-markup-markdown-ts--literal-block
       node 'unsupported-markdown-block))))
 
-(defun appkit-markup-markdown-ts--parse (source _context)
-  "Parse property-free protected Markdown SOURCE into an Appkit result."
+(defun appkit-markup-markdown-ts--parse (source context)
+  "Parse property-free protected Markdown SOURCE into an Appkit result.
+CONTEXT may supply :image (URL ALT) and :table (ROWS) callbacks returning one
+semantic inline node or block respectively.  Table cells contain inline nodes;
+a nil row denotes the header separator.  Missing callbacks preserve literals.
+An optional :link (URL CHILDREN) callback receives semantic inline children
+before the default text-only link-label conversion, preserving linked images."
   (appkit-markup-markdown-ts--ensure-ready)
   (let ((appkit-markup-markdown-ts--diagnostics nil)
         (appkit-markup-markdown-ts--diagnostic-count 0)
-        (appkit-markup-markdown-ts--node-count 0))
+        (appkit-markup-markdown-ts--node-count 0)
+        (appkit-markup-markdown-ts--context context)
+        (appkit-markup-markdown-ts--references (make-hash-table :test #'equal)))
     (with-temp-buffer
       (insert source)
       (let ((parser (treesit-parser-create 'markdown)))
         (unwind-protect
             (let ((root (treesit-parser-root-node parser)))
+              (appkit-markup-markdown-ts--collect-references root 0)
               (when (treesit-node-check root 'has-error)
                 (appkit-markup-markdown-ts--diagnostic
                  'markdown-syntax-error root))
