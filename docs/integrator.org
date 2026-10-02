@@ -619,6 +619,13 @@ editable selections.  ~appkit-ui-vbar-string~ supplies a GUI/terminal vertical
 marker; ~appkit-ui-tinted-background-face~ derives a subtle background from an
 existing accent face without changing the text foreground.
 
+Cards have no implicit outer indentation: ~appkit-ui-card-prefix-state~ adds
+only the border by default.  Bind ~appkit-ui-card-indent-prefix-state~ (or
+~appkit-ui-card-indent-prefix~) when a chat card must reuse an existing body
+gutter; its border replaces the gutter's last column.  A discussion renderer
+that applies its body prefix after insertion should leave the card indent
+empty, so the parent prefix is applied only once.
+
 * Task queues
 
 The shared task queue deduplicates equal keys across active and

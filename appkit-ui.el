@@ -401,8 +401,9 @@ DEFAULT is used when PREFIX yields nil."
      ((null (cdr values)) (car values))
      (t values))))
 
-(defvar appkit-ui-card-indent-prefix "    "
-  "Dynamic base indent prefix used by `appkit-ui-card-line-prefix'.")
+(defvar appkit-ui-card-indent-prefix ""
+  "Dynamic base indent prefix used by `appkit-ui-card-line-prefix'.
+Empty by default: cards add only their border; callers own outer indentation.")
 
 (defvar appkit-ui-card-indent-prefix-state nil
   "Dynamic `line-prefix' state used by card renderers in insertion scope.")
@@ -412,8 +413,9 @@ DEFAULT is used when PREFIX yields nil."
 
 FACE colours the vertical bar marker; INDENT is kept plain.  In GUI frames
 the marker is an SVG image that fills the full line height so consecutive
-lines produce a seamless vertical bar.  The marker replaces INDENT's last
-column so card content stays column-aligned with normal lines."
+lines produce a seamless vertical bar.  With a nonempty INDENT, the marker
+replaces its last column so card content stays aligned with normal lines.
+Without indentation, the prefix contains only the marker."
   (let* ((base (or indent ""))
          (mark (appkit-ui-vbar-string face))
          (base-len (length base)))
