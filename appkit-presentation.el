@@ -334,10 +334,10 @@ context delimiters, defaulting to two columns."
 
 ROW is an `appkit-presentation-one-line-row' object.  INDENT is left padding in spaces.
 WIDTH sets the total row width.  ICON-SLOT-WIDTH reserves columns for the
-icon slot; zero suppresses the slot entirely.  CONTEXT-WIDTH-SPEC controls
-context width using
-`appkit-presentation-canonicalize-number' semantics.  TIME-SLOT-WIDTH reserves a stable
-right-aligned timestamp column.  PREVIEW is an
+icon slot; zero suppresses the slot entirely.  The symbol `auto' inserts the
+icon at its natural width without padding or a separator.  CONTEXT-WIDTH-SPEC
+controls context width using `appkit-presentation-canonicalize-number' semantics.
+TIME-SLOT-WIDTH reserves a stable right-aligned timestamp column.  PREVIEW is an
 `appkit-ui-one-line-preview'.  CONTEXT-OPEN and CONTEXT-CLOSE default to
 square brackets; Appkit measures their actual display widths.  A non-empty
 context trail is kept inside those delimiters and aligned to their right edge;
@@ -368,17 +368,21 @@ its width is reserved before the context is elided."
                  (max 6 (string-width time-text)))))
          (line-start (point)))
     (insert padding)
-    (let* ((icon-start (appkit-geometry-current-column))
-           (slot-width (max 0 (if (null icon-slot-width)
-                                  2
-                                icon-slot-width))))
-      (when (> slot-width 0)
+    (if (eq icon-slot-width 'auto)
         (when-let* ((icon-inserter
                      (appkit-presentation-one-line-row-icon-inserter row)))
           (funcall icon-inserter))
-        (appkit-geometry-insert-alignment-space
-         (max icon-start (1- (+ icon-start slot-width))))
-        (insert " ")))
+      (let* ((icon-start (appkit-geometry-current-column))
+             (slot-width (max 0 (if (null icon-slot-width)
+                                    2
+                                  icon-slot-width))))
+        (when (> slot-width 0)
+          (when-let* ((icon-inserter
+                       (appkit-presentation-one-line-row-icon-inserter row)))
+            (funcall icon-inserter))
+          (appkit-geometry-insert-alignment-space
+           (max icon-start (1- (+ icon-start slot-width))))
+          (insert " "))))
     (let* ((content-start (appkit-geometry-current-column))
            (time-gap (if (> time-width 0) 1 0))
            (content-width (max 20 (- (max 20 (or width 20))

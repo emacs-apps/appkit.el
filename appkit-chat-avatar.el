@@ -1,4 +1,4 @@
-;;; appkit-chat-avatar.el --- Shared two-line chat avatars  -*- lexical-binding: t; -*-
+;;; appkit-chat-avatar.el --- Shared one- and two-line chat avatars  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 0WD0
 
@@ -13,6 +13,8 @@
 ;; the sender heading and the lower slice prefixes the first content row.  This
 ;; module exposes that geometry as protocol-neutral prefix strings so chat
 ;; clients can share the same layout through `appkit-ui' prefix states.
+;; Single-line identity images use character-relative sizing for lists, prompts,
+;; and annotations, independently of their cached acquisition geometry.
 
 ;;; Code:
 
@@ -136,6 +138,35 @@ malformed non-square sources cannot destabilize two-line layout geometry."
              (if (numberp width-pixels)
                  (ceiling (/ (float width-pixels) (float char-width)))
                1)))))
+
+(defun appkit-chat-avatar-one-line-string (image fallback)
+  "Return avatar IMAGE displayed at one current text line, or FALLBACK.
+
+Character-relative sizing follows text zoom without changing the cached
+descriptor.  Preserve the source aspect ratio and fit the underlying text
+to the rendered width; add no visible padding or separator."
+  (if (not (appkit-media-image-object-valid-p image))
+      fallback
+    (let* ((render-image
+            (appkit-media--image-with-height
+             image (appkit-media-ch-height-spec 1)))
+           (properties (cdr render-image)))
+      (dolist (property '(:width :max-width :max-height
+                         :appkit-chat-avatar-char-width))
+        (cl-remf properties property))
+      (setq properties (plist-put properties :scale 1.0))
+      (setcdr render-image properties)
+      (let* ((size (image-size render-image t
+                               (appkit-chat-avatar--render-frame)))
+             ;; `image-size' measures ch units at frame scale, not text zoom.
+             (columns
+              (max 1 (ceiling
+                      (/ (* (car size)
+                            (float (appkit-media--char-pixel-height)))
+                         (* (cdr size)
+                            (appkit-chat-avatar-column-pixel-width)))))))
+        (appkit-media-image-display-string
+         render-image (appkit-chat-avatar--fit-text fallback columns))))))
 
 (cl-defun appkit-chat-avatar--prepare-image
     (image fallback &key pixel-size resize slice-height)

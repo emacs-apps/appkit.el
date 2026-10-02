@@ -235,6 +235,19 @@ display widths and owns their geometry while the client selects their
 presentation meaning.  Clients retain protocol objects, media selection and
 acquisition, labels, identity faces, and resource invalidation.
 
+Use ~appkit-chat-avatar-one-line-string~ for identity icons in rows, prompts,
+compact messages, and annotations.  It preserves the source aspect ratio,
+sizes the image to one current text line with character-relative units, and
+adds no visible padding.  Set row ~:icon-slot-width~ to ~auto~ to insert the
+icon at its natural width without a reserved slot or separator; keep numeric
+slots for deliberately aligned text glyphs.
+
+Build compact media with ~appkit-media-one-line-preview-image-from-file~ and
+display it with ~appkit-media-one-line-image-display-string~.  The default
+thumbnail budget is two unscaled character columns by one text line; its
+displayed width and height follow text zoom together.  Cached source geometry
+does not depend on the zoom level at acquisition.
+
 ** Discussion
 
 Derive read-only note, topic, and reply-tree modes from

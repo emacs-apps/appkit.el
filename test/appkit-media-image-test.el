@@ -367,25 +367,6 @@
                (121.875 . 22.0))
               :fill "#ffffff" :fill-opacity 0.65)))))
 
-(ert-deftest appkit-media-one-line-preview-defaults-to-two-character-columns ()
-  "The default thumbnail must not expand to the full media preview width."
-  (let ((appkit-media-preview-max-width 460)
-        geometry)
-    (cl-letf
-        (((symbol-function 'appkit-media--char-pixel-width)
-          (lambda () 9))
-         ((symbol-function 'appkit-media--base-char-pixel-height)
-          (lambda () 21))
-         ((symbol-function 'appkit-media--one-line-thumbnail-from-file)
-          (lambda (file width height)
-            (setq geometry (list file width height))
-            'thumbnail)))
-      (should
-       (eq 'thumbnail
-           (appkit-media-one-line-preview-image-from-file
-            "/tmp/source.png")))
-      (should (equal geometry '("/tmp/source.png" 18 21))))))
-
 (ert-deftest appkit-media-marks-only-bounded-multi-frame-previews ()
   (let ((appkit-media-inline-animation-enabled t)
         (appkit-media-inline-animation-max-duration 10)
@@ -854,19 +835,6 @@
         (should-not (plist-member created-properties :disco-nslices))
         (should-not (plist-member created-properties :telega-nslices))))))
 
-(ert-deftest appkit-media-one-line-preview-uses-fixed-box-geometry ()
-  (let (arguments)
-    (cl-letf (((symbol-function 'appkit-media--base-char-pixel-height)
-               (lambda () 21))
-              ((symbol-function 'appkit-media--one-line-thumbnail-from-file)
-               (lambda (&rest args)
-                 (setq arguments args)
-                 :image)))
-      (should (eq :image
-                  (appkit-media-one-line-preview-image-from-file
-                   "/tmp/example.png" 300)))
-      (should (equal '("/tmp/example.png" 300 21) arguments)))))
-
 (ert-deftest appkit-media-image-display-string-keeps-fallback-and-display ()
   (let* ((image '(image :type png :data "bytes"))
          (rendered (appkit-media-image-display-string image "[image]")))
@@ -875,24 +843,43 @@
     (should (equal "[image]"
                    (appkit-media-image-display-string nil "[image]")))))
 
-(ert-deftest appkit-media-one-line-display-projects-current-line-slice ()
-  (let* ((image '(image :type png :data "bytes"
-                  :height (1 . ch) :appkit-media-nslices 1))
-         (original (copy-tree image)))
-    (cl-letf (((symbol-function 'appkit-media--line-slice-geometry)
-               (lambda (_image)
-                 '((image :type png :data "bytes" :height 19) 1 19))))
-      (let* ((rendered
-              (appkit-media-one-line-image-display-string image "[image]"))
-             (display (get-text-property 0 'display rendered)))
-        (should (equal "[image]" (substring-no-properties rendered)))
-        (should (equal '(slice 0 0 1.0 19) (car display)))
-        (should (= 19 (plist-get (cdr (cadr display)) :height)))
-        (should (equal original image))
-        (should
-         (equal "[image]"
-                (appkit-media-one-line-image-display-string
-                 nil "[image]")))))))
+(ert-deftest appkit-media-one-line-thumbnail-scales-both-axes-on-cold-and-warm-load ()
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)))
+  (let ((file (make-temp-file "appkit-one-line-zoom-" nil ".svg"))
+        (buffer (generate-new-buffer " *appkit-thumbnail-zoom-test*"))
+        image previous-width)
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-file file
+            (insert "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><rect width=\"64\" height=\"64\" fill=\"orange\"/></svg>"))
+          (switch-to-buffer buffer)
+          (dolist (amount '(-2 0 2))
+            (text-scale-set amount)
+            (let ((cold-image
+                   (appkit-media-one-line-preview-image-from-file file)))
+              (unless image (setq image cold-image))
+              (dolist (source (if (eq image cold-image)
+                                 (list image)
+                               (list image cold-image)))
+                (erase-buffer)
+                (insert (appkit-media-one-line-image-display-string source "▧"))
+                (goto-char (point-min))
+                (redisplay t)
+                (let* ((window (selected-window))
+                       (pixels (posn-object-width-height
+                                (posn-at-point (point-min) window))))
+                  (should (= (cdr pixels)
+                             (window-font-height window 'default)))
+                  (should (<= (abs (- (car pixels)
+                                     (* 2 (window-font-width window 'default))))
+                              1))
+                  (when (and previous-width (eq source image))
+                    (should (> (car pixels) previous-width)))))
+              (setq previous-width
+                    (car (posn-object-width-height
+                          (posn-at-point (point-min) (selected-window))))))))
+      (kill-buffer buffer)
+      (delete-file file))))
 
 (ert-deftest appkit-media-normalizes-known-image-leading-newline ()
   (let* ((png (concat (unibyte-string 137 80 78 71 13 10 26 10) "data"))

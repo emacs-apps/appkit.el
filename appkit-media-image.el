@@ -582,29 +582,29 @@ registry functions."
   "Return FALLBACK displayed as a current-line thumbnail for IMAGE.
 
 IMAGE should come from `appkit-media-one-line-preview-image-from-file'.
-Pre-sized static Canvas thumbnails retain their drawn pixels and identity.
-Other cached descriptors are copied and sized to the current line in pixels.
-FALLBACK remains the underlying terminal text; nil IMAGE returns it unchanged."
-  (if (or (not image)
-          (and (plist-get (cdr image) :video-static-poster)
-               (eq (plist-get (cdr image) :appkit-media-nslices) 1)))
-      (appkit-media-image-display-string image fallback)
-    (let* ((animated-p (appkit-media-inline-animation-image-p image))
-           (source-image
-            (if animated-p
-                (appkit-media--make-inline-animation-occurrence image)
-              image)))
-      (pcase-let ((`(,render-image ,_slice-count ,slice-height)
-                   (appkit-media--line-slice-geometry source-image)))
-        (when animated-p
-          (appkit-media--register-inline-animation-occurrence render-image)
-          (appkit-media--install-inline-animation-discovery))
-        (propertize
-         (or fallback " ")
-         'display
-         (list (list 'slice 0 0 1.0 slice-height)
-               render-image)
-         'rear-nonsticky '(display))))))
+Cached descriptors are copied and sized in character-relative units, so both
+axes follow text zoom.  Numeric maximum widths are converted from their
+default-scale pixel budget.  FALLBACK remains the underlying terminal text;
+nil IMAGE returns it unchanged."
+  (if (not image)
+      fallback
+    (let* ((render-image
+            (appkit-media--image-with-height
+             image (appkit-media-ch-height-spec 1)))
+           (properties (cdr render-image))
+           (max-width (plist-get properties :max-width)))
+      (cl-remf properties :width)
+      (cl-remf properties :max-height)
+      (when (numberp max-width)
+        (setq properties
+              (plist-put
+               properties :max-width
+               (cons (/ (float max-width)
+                        (appkit-media--base-char-pixel-width))
+                     'cw))))
+      (setq properties (plist-put properties :scale 1.0))
+      (setcdr render-image properties)
+      (appkit-media-image-display-string render-image fallback))))
 
 (defun appkit-media-stop-inline-animation (image)
   "Stop bounded inline playback for IMAGE and reset it to frame zero."
@@ -739,8 +739,8 @@ FALLBACK remains the underlying terminal text; nil IMAGE returns it unchanged."
   (dolist (window (get-buffer-window-list (current-buffer) nil t))
     (appkit-media--start-window-inline-animations window)))
 
-(defun appkit-media--image-with-pixel-height (image pixel-height)
-  "Return IMAGE displayed at PIXEL-HEIGHT.
+(defun appkit-media--image-with-height (image height)
+  "Return IMAGE displayed at pixel or character-relative HEIGHT.
 
 Static Canvas posters copy their actual pixels before display sizing.
 Live Canvas descriptors retain the identity of their externally updated
@@ -750,10 +750,10 @@ pixel buffers.  Other image descriptors are copied as before."
              (if (plist-get (cdr image) :video-static-poster)
                  (video-canvas-copy image)
                image)))
-        (plist-put (cdr render-image) :height pixel-height)
+        (plist-put (cdr render-image) :height height)
         render-image)
     (let ((properties (copy-sequence (cdr-safe image))))
-      (cons 'image (plist-put properties :height pixel-height)))))
+      (cons 'image (plist-put properties :height height)))))
 
 (defun appkit-media--line-slice-geometry (image)
   "Return (RENDER-IMAGE SLICE-COUNT SLICE-HEIGHT) for displaying IMAGE.
@@ -762,7 +762,7 @@ RENDER-IMAGE is a copy sized to SLICE-COUNT current text lines.
 IMAGE is not mutated."
   (let* ((slice-count (appkit-media-image-slice-count image))
          (slice-height (appkit-media--char-pixel-height)))
-    (list (appkit-media--image-with-pixel-height
+    (list (appkit-media--image-with-height
            image (* slice-count slice-height))
           slice-count
           slice-height)))
@@ -857,6 +857,15 @@ return the source image height instead of a character height."
                (ignore-errors (default-line-height))
                (frame-char-height)
                16)))))
+
+(defun appkit-media--base-char-pixel-width ()
+  "Return unscaled default-face width for the current render target."
+  (let ((window (appkit-geometry-display-window)))
+    (max 1
+         (or (and window
+                  (frame-char-width (window-frame window)))
+             (frame-char-width)
+             1))))
 
 (defun appkit-media--base-char-pixel-height ()
   "Return unscaled default-face height for the current render target."
@@ -1031,11 +1040,11 @@ Display is a separate step: call `appkit-media-insert-image-slices' or
 (defun appkit-media-one-line-preview-image-from-file (file &optional max-width)
   "Create a compact one-row thumbnail for local FILE.
 
-MAX-WIDTH is the rendered pixel width.  It defaults to two current character
-columns, capped by `appkit-media-preview-max-width', following Telega's
-two-column, one-line thumbnail geometry.  A graphical display uses a fixed-size
+MAX-WIDTH is the default-scale pixel budget.  It defaults to two unscaled
+character columns, capped by `appkit-media-preview-max-width', following
+Telega's two-column, one-line geometry.  A graphical display uses a
 center-cropped SVG thumbnail.  Displays without SVG support retain the ordinary
-image decoder with explicit one-line height and maximum-width constraints.
+image decoder with one-line height and maximum-width constraints.
 
 Display with `appkit-media-one-line-image-display-string'."
   (let* ((safe-max-width
@@ -1043,7 +1052,7 @@ Display with `appkit-media-one-line-image-display-string'."
                (if (numberp max-width)
                    max-width
                  (min appkit-media-preview-max-width
-                      (* 2 (appkit-media--char-pixel-width))))))
+                      (* 2 (appkit-media--base-char-pixel-width))))))
          (line-height (appkit-media--base-char-pixel-height)))
     (or (appkit-media--one-line-thumbnail-from-file
          file safe-max-width line-height)

@@ -106,5 +106,42 @@
       (should (= 32 (plist-get (cdr image) :width)))
       (should (= 32 (plist-get (cdr image) :height))))))
 
+(ert-deftest appkit-chat-avatar-one-line-follows-text-zoom-without-resizing-cache ()
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)))
+  (let* ((image
+          (create-image
+           "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\"><circle cx=\"10\" cy=\"10\" r=\"10\" fill=\"green\"/></svg>"
+           'svg t :width 20 :height 20 :max-width 20 :max-height 20))
+         (buffer (generate-new-buffer " *appkit-avatar-zoom-test*"))
+         previous-width)
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (dolist (amount '(-2 0 2))
+            (text-scale-set amount)
+            (erase-buffer)
+            (insert (appkit-chat-avatar-one-line-string image "@") "[Title]")
+            (goto-char (point-min))
+            (redisplay t)
+            (let* ((window (selected-window))
+                   (position (posn-at-point (point-min) window))
+                   (pixels (posn-object-width-height position))
+                   (end (next-single-property-change
+                         (point-min) 'display nil (point-max))))
+              (should (= (car pixels) (cdr pixels)))
+              (should (= (cdr pixels) (window-font-height window 'default)))
+              (should (eq (char-after end) ?\[))
+              (should (= (- end (point-min))
+                         (ceiling (/ (float (car pixels))
+                                     (window-font-width window 'default)))))
+              (when previous-width
+                (should (> (car pixels) previous-width)))
+              (setq previous-width (car pixels)))))
+      (kill-buffer buffer))
+    (should (= 20 (plist-get (cdr image) :width)))
+    (should (= 20 (plist-get (cdr image) :height)))
+    (should (= 20 (plist-get (cdr image) :max-width)))
+    (should (= 20 (plist-get (cdr image) :max-height)))))
+
 (provide 'appkit-chat-avatar-test)
 ;;; appkit-chat-avatar-test.el ends here
