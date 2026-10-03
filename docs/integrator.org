@@ -248,6 +248,13 @@ thumbnail budget is two unscaled character columns by one text line; its
 displayed width and height follow text zoom together.  Cached source geometry
 does not depend on the zoom level at acquisition.
 
+Use ~appkit-media-image-display-string~ for inline image occurrences.  Each
+occurrence has its own full-image display slice while retaining the source
+image resource, so adjacent identical images remain separate and Canvas pixels
+and live updates remain intact.  Treat the ~display~ property as a display
+specification, not necessarily a bare image descriptor.  Animated image.el
+playback state remains occurrence-owned.
+
 ** Discussion
 
 Derive read-only note, topic, and reply-tree modes from

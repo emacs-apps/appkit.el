@@ -835,13 +835,52 @@
         (should-not (plist-member created-properties :disco-nslices))
         (should-not (plist-member created-properties :telega-nslices))))))
 
-(ert-deftest appkit-media-image-display-string-keeps-fallback-and-display ()
-  (let* ((image '(image :type png :data "bytes"))
-         (rendered (appkit-media-image-display-string image "[image]")))
-    (should (equal "[image]" (substring-no-properties rendered)))
-    (should (eq image (get-text-property 0 'display rendered)))
-    (should (equal "[image]"
-                   (appkit-media-image-display-string nil "[image]")))))
+(ert-deftest appkit-media-adjacent-cached-images-remain-separate-glyphs ()
+  "Repeated images must occupy three glyphs, not one replacement span."
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)))
+  (let ((buffer (generate-new-buffer " *appkit-adjacent-images-test*"))
+        (image
+         (create-image
+          "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16' fill='orange'/></svg>"
+          'svg t :scale 1.0)))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (dotimes (_ 3)
+            (insert (appkit-media-image-display-string image "[face]")))
+          (redisplay t)
+          (should (= (car (window-text-pixel-size
+                           nil (point-min) (point-max)))
+                     (* 3 (car (image-size image t)))))
+          (should (equal (buffer-substring-no-properties
+                          (point-min) (point-max))
+                         "[face][face][face]")))
+      (kill-buffer buffer))))
+
+(ert-deftest appkit-media-canvas-occurrences-display-the-live-pixel-store ()
+  "Native pixel updates must reach every adjacent Canvas glyph."
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'canvas)))
+  (require 'video-runtime)
+  (skip-unless (featurep 'video-module))
+  (let ((buffer (generate-new-buffer " *appkit-canvas-occurrences-test*"))
+        (canvas (video-canvas-create 16 16 "#ffaa00")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (dotimes (_ 3)
+            (insert (appkit-media-image-display-string canvas "[face]")))
+          (video-native-canvas-fill canvas 16 16 0 0 16 16 #x00aaff)
+          (canvas-refresh canvas)
+          (goto-char (point-min))
+          (redisplay t)
+          (should (= (car (window-text-pixel-size
+                           nil (point-min) (point-max)))
+                     48))
+          (dolist (position '(1 7 13))
+            ;; The glyph must refer to the image native drawing updates, not
+            ;; an equal Lisp descriptor with a different, empty backing store.
+            (should (eq (posn-image (posn-at-point position)) canvas))))
+      (kill-buffer buffer))))
 
 (ert-deftest appkit-media-one-line-thumbnail-scales-both-axes-on-cold-and-warm-load ()
   (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)))

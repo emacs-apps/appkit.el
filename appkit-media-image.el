@@ -562,20 +562,22 @@ players use capability independently of the legacy image.el playback limits."
 (defun appkit-media-image-display-string (image fallback)
   "Return FALLBACK displayed as IMAGE, or FALLBACK when IMAGE is nil.
 
-Animated cache descriptors are copied into buffer-owned playback occurrences
-before display, so callers do not need to invoke Appkit's private animation
-registry functions."
+Each occurrence has its own full-image display slice, so adjacent uses of a
+cached image stay separate without copying the image resource.  This preserves
+Canvas pixels and live updates.  Animated descriptors additionally own their
+playback state."
   (if (not image)
       fallback
-    (let ((render-image
-           (if (appkit-media-inline-animation-image-p image)
-               (appkit-media--make-inline-animation-occurrence image)
-             image)))
-      (when (not (eq render-image image))
+    (let* ((animated-p (appkit-media-inline-animation-image-p image))
+           (render-image
+            (if animated-p
+                (appkit-media--make-inline-animation-occurrence image)
+              image)))
+      (when animated-p
         (appkit-media--register-inline-animation-occurrence render-image)
         (appkit-media--install-inline-animation-discovery))
       (propertize (or fallback " ")
-                  'display render-image
+                  'display (list '(slice 0 0 1.0 1.0) render-image)
                   'rear-nonsticky '(display)))))
 
 (defun appkit-media-one-line-image-display-string (image fallback)
