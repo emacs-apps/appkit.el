@@ -1139,6 +1139,25 @@
         #'ignore))
       (should (equal resolved "/tmp/appkit-media-image.webp")))))
 
+(ert-deftest appkit-media-open-file-routes-animation-by-content ()
+  (let ((file (make-temp-file "appkit-direct-image-"))
+        (header (concat "GIF89a"
+                        (unibyte-string 1 0 1 0 128 0 0 0 0 0 255 255 255)))
+        (frame (unibyte-string 44 0 0 0 0 1 0 1 0 0 2 2 68 1 0))
+        (appkit-media-open-file-function (lambda (_) 'ordinary-file)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'video-open) (lambda (&rest _) 'native-viewer)))
+          ;; Extensionless cache files use native playback only when animated.
+          (dolist (frames '(2 1))
+            (with-temp-file file
+              (set-buffer-multibyte nil)
+              (insert header)
+              (dotimes (_ frames) (insert frame))
+              (insert (unibyte-string 59)))
+            (should (eq (appkit-media-open-file file)
+                        (if (= frames 2) 'native-viewer 'ordinary-file)))))
+      (delete-file file))))
+
 (ert-deftest appkit-media-file-presentation-settles-after-local-open ()
   (let (opened resolved rejected)
     (cl-letf (((symbol-function 'appkit-media-open-file)

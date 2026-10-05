@@ -10,7 +10,7 @@
 ;;; Commentary:
 
 ;; Protocol-neutral image primitives for stateful chat applications.  This
-;; module owns preview sizing, vertical image slices, bounded inline animation,
+;; module owns preview sizing, vertical image slices, prepared playback data,
 ;; and image-byte format detection.  Cacheable previews come from
 ;; `appkit-media-preview-image-from-file'; display goes through
 ;; `appkit-media-insert-image-slices' or `appkit-media-image-slice-rows'.
@@ -32,6 +32,22 @@
 (declare-function video-canvas-copy "video-runtime" (image))
 (declare-function video-source-poster
                   "video-runtime" (source width height &rest args))
+(declare-function appkit-media--inline-prune "appkit-media-inline" (&optional force))
+
+(autoload 'appkit-media-inline-mount "appkit-media-inline"
+  "Mount prepared media between START and END." nil)
+
+(defun appkit-media--render-complete (owner start end success)
+  "Reconcile OWNER's final prepared image spans after a content update.
+Do not load the playback adapter for text-only buffers.  Failed updates only
+retire stale hosts; they never start presentation of partial output."
+  (cond
+   ((not success)
+    (when (featurep 'appkit-media-inline)
+      (appkit-media--inline-prune t)))
+   ((or (featurep 'appkit-media-inline)
+        (text-property-not-all start end 'appkit-media-occurrence nil))
+    (appkit-media-inline-mount start end owner))))
 
 (defgroup appkit-media nil
   "Media rendering primitives for Appkit applications."
@@ -53,18 +69,8 @@
   :group 'appkit-media)
 
 (defcustom appkit-media-inline-animation-enabled t
-  "When non-nil, play bounded animated images inside rendered buffers."
+  "When non-nil, autoplay visible eligible images through video.el Canvas."
   :type 'boolean
-  :group 'appkit-media)
-
-(defcustom appkit-media-inline-animation-max-duration 10.0
-  "Maximum duration in seconds for automatic inline image playback."
-  :type 'number
-  :group 'appkit-media)
-
-(defcustom appkit-media-inline-animation-max-file-size (* 8 1024 1024)
-  "Maximum source size in bytes eligible for inline image playback."
-  :type 'integer
   :group 'appkit-media)
 
 (defcustom appkit-media-preview-max-width 460
@@ -76,67 +82,6 @@
   "Default maximum pixel height for inline image previews."
   :type 'integer
   :group 'appkit-media)
-
-(defvar-local appkit-media--inline-animation-window-starts nil
-  "Last scanned window starts for inline animation discovery.")
-
-(defvar-local appkit-media--inline-animation-occurrences nil
-  "Weak registry of mutable inline animation occurrences in this buffer.
-
-Cached image descriptors must never be registered here.  Each key is the
-occurrence-specific copy created by `appkit-media-insert-image-slices'.")
-
-(defun appkit-media--inline-animation-occurrence-p (image)
-  "Return non-nil when IMAGE is a mutable inline animation occurrence."
-  (and (appkit-media-inline-animation-image-p image)
-       (plist-get
-        (cdr image) :appkit-media-inline-animation-occurrence)))
-
-(defun appkit-media--make-inline-animation-occurrence (image)
-  "Return a mutable occurrence copy of animated image descriptor IMAGE.
-
-Eligibility metadata is copied, while playback state belongs exclusively to
-the returned image spec.  IMAGE remains suitable for immutable caches."
-  (let ((occurrence (copy-tree image)))
-    (plist-put (cdr occurrence)
-               :appkit-media-inline-animation-occurrence t)
-    (plist-put (cdr occurrence)
-               :appkit-media-inline-animation-played nil)
-    (plist-put (cdr occurrence)
-               :appkit-media-inline-animation-reset-timer nil)
-    occurrence))
-
-(defun appkit-media--inline-animation-occurrence-registry ()
-  "Return the current buffer's weak animation occurrence registry."
-  (or appkit-media--inline-animation-occurrences
-      (setq appkit-media--inline-animation-occurrences
-            (make-hash-table :test #'eq :weakness 'key))))
-
-(defun appkit-media--register-inline-animation-occurrence (image)
-  "Track mutable animation occurrence IMAGE in the current buffer."
-  (puthash image t
-           (appkit-media--inline-animation-occurrence-registry))
-  (add-hook 'kill-buffer-hook
-            #'appkit-media--teardown-inline-animation-occurrences nil t)
-  image)
-
-(defun appkit-media--teardown-inline-animation-occurrences ()
-  "Stop and forget every inline animation occurrence in this buffer."
-  (when (hash-table-p appkit-media--inline-animation-occurrences)
-    (maphash (lambda (image _present)
-               (appkit-media-stop-inline-animation image))
-             appkit-media--inline-animation-occurrences)
-    (clrhash appkit-media--inline-animation-occurrences))
-  (setq appkit-media--inline-animation-occurrences nil
-        appkit-media--inline-animation-window-starts nil))
-
-(defun appkit-media-stop-buffer-inline-animations (&optional buffer)
-  "Stop and forget inline animation occurrences owned by BUFFER.
-
-BUFFER defaults to the current buffer.  This is safe when no animated images
-have been displayed."
-  (with-current-buffer (or buffer (current-buffer))
-    (appkit-media--teardown-inline-animation-occurrences)))
 
 (defun appkit-media-inline-image-rendering-available-p (&optional frame)
   "Return non-nil when FRAME can render inline images.
@@ -513,72 +458,112 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
                     (puthash (copy-tree key) image cache))))))
       (error nil))))
 
-(defun appkit-media--file-size (file)
-  "Return FILE size in bytes, or nil when it is unavailable."
-  (when (and (stringp file) (file-exists-p file))
-    (file-attribute-size (file-attributes file))))
+(cl-defstruct (appkit-media--playback
+               (:constructor appkit-media--playback-create)
+               (:copier nil))
+  "Immutable source playback plan, independent of mounted runtime state."
+  (resource nil :read-only t)
+  (kind nil :read-only t)
+  (label nil :read-only t)
+  (interaction nil :read-only t)
+  (autoplay nil :read-only t)
+  (animation nil :read-only t)
+  (animated-p nil :read-only t)
+  (resolve-function nil :read-only t)
+  (cache-key nil :read-only t)
+  (cache-directory nil :read-only t)
+  (animation-loop-policy nil :read-only t)
+  (fit nil :read-only t))
 
-(defun appkit-media--inline-animation-frame-data (image)
-  "Return (FRAME-COUNT . DURATION) for multi-frame IMAGE, or nil."
-  (when-let* ((multi (ignore-errors (image-multi-frame-p image))))
-    (let* ((count (car multi))
-           (delay (or (and (numberp (cdr multi)) (cdr multi))
-                      image-default-frame-delay))
-           (duration (* count delay)))
-      (and (> count 1)
-           (> duration 0)
-           (cons count duration)))))
+(cl-defstruct (appkit-media--occurrence
+               (:constructor appkit-media--occurrence-create)
+               (:copier nil))
+  "Immutable image occurrence and its authored span geometry."
+  (image nil :read-only t)
+  (span-length nil :read-only t)
+  (slices nil :read-only t))
 
-(defun appkit-media--mark-inline-animation-image (image file &optional validated)
-  "Record animation capability and bounded playback eligibility for IMAGE.
-VALIDATED means the caller has already validated IMAGE's decoder.  Canvas
-players use capability independently of the legacy image.el playback limits."
-  (when (or validated (appkit-media-image-object-valid-p image))
-    (when-let* ((frame-data
-                 (appkit-media--inline-animation-frame-data image)))
-      (plist-put (cdr image) :appkit-media-animated t)
-      (when (and appkit-media-inline-animation-enabled
-                 (let ((size (appkit-media--file-size file)))
-                   (and size
-                        (<= size appkit-media-inline-animation-max-file-size)))
-                 (<= (cdr frame-data)
-                     appkit-media-inline-animation-max-duration))
-        (plist-put (cdr image) :appkit-media-inline-animation t)
-        (plist-put (cdr image)
-                   :appkit-media-inline-animation-duration
-                   (cdr frame-data)))))
-  image)
+(defun appkit-media--file-animated-p (file)
+  "Return non-nil when local FILE contains multiple native animation frames."
+  (when (and (stringp file) (not (file-remote-p file))
+             (file-readable-p file) (file-regular-p file))
+    (let ((metadata
+           (pcase (video-source-format file)
+             ('apng (video-source-apng-metadata file))
+             ('webp (video-source-webp-metadata file))
+             ('lottie (video-source-lottie-metadata file))
+             (_ (video-source-gif-metadata file)))))
+      (> (or (plist-get metadata :frames) 0) 1))))
 
 (defun appkit-media-animated-image-p (image)
-  "Return non-nil when IMAGE is known to contain multiple frames."
-  (and (eq (car-safe image) 'image)
-       (plist-get (cdr image) :appkit-media-animated)))
+  "Return non-nil when IMAGE has known animation capability."
+  (when (eq (car-safe image) 'image)
+    (when-let* ((playback (plist-get (cdr image) :appkit-media-playback)))
+      (appkit-media--playback-animated-p playback))))
 
-(defun appkit-media-inline-animation-image-p (image)
-  "Return non-nil when IMAGE is marked for bounded inline animation."
-  (and (eq (car-safe image) 'image)
-       (plist-get (cdr image) :appkit-media-inline-animation)))
+(cl-defun appkit-media-image-with-resource
+    (image resource &key (kind 'image) label (interaction 'media)
+           (autoplay t) (animated 'auto) resolve-function cache-key
+           cache-directory animation-loop-policy (fit 'contain))
+  "Return a poster copy of IMAGE prepared to display RESOURCE.
+Ordinary image descriptors are shallow-copied.  Native Canvas images are
+explicitly snapshotted with their pixels into a static poster; a Lisp-only
+copy would lose the backing store.  IMAGE, including a live Canvas, is not
+reconfigured.
+
+Playback metadata replaces any previous plan, including a previous resource.
+ANIMATED defaults to local source metadata, or IMAGE's known capability when
+RESOURCE has no local file.  Its `auto', t or nil directive is retained for
+later resource resolution.  No acquisition or playback occurs here.
+INTERACTION nil preserves enclosing actions; `media' supplies normal media
+actions and `open' always opens the viewer.  AUTOPLAY is eligibility, not a
+request to start playback.  RESOLVE-FUNCTION may acquire RESOURCE on demand."
+  (when image
+    (unless (memq kind '(image video))
+      (error "Inline media kind must be image or video"))
+    (unless (memq interaction '(nil media open))
+      (error "Inline media interaction must be nil, media, or open"))
+    (let* ((copy (if (eq (plist-get (cdr image) :type) 'canvas)
+                     (video-canvas-copy image)
+                   (cons 'image (copy-sequence (cdr image)))))
+           (file (alist-get 'file resource))
+           (animated-p
+            (if (eq animated 'auto)
+                (if file
+                    (appkit-media--file-animated-p file)
+                  (appkit-media-animated-image-p image))
+              (and animated t))))
+      (setcdr copy
+              (plist-put
+               (cdr copy) :appkit-media-playback
+               (appkit-media--playback-create
+                :resource resource :kind kind :label label
+                :interaction interaction :autoplay autoplay
+                :animation animated :animated-p (and animated-p t)
+                :resolve-function resolve-function :cache-key cache-key
+                :cache-directory cache-directory
+                :animation-loop-policy animation-loop-policy :fit fit)))
+      copy)))
 
 (defun appkit-media-image-display-string (image fallback)
   "Return FALLBACK displayed as IMAGE, or FALLBACK when IMAGE is nil.
 
 Each occurrence has its own full-image display slice, so adjacent uses of a
-cached image stay separate without copying the image resource.  This preserves
-Canvas pixels and live updates.  Animated descriptors additionally own their
-playback state."
+cached image stay separate without copying its pixels.  Playback annotations
+are inert until the containing text is mounted."
   (if (not image)
       fallback
-    (let* ((animated-p (appkit-media-inline-animation-image-p image))
-           (render-image
-            (if animated-p
-                (appkit-media--make-inline-animation-occurrence image)
-              image)))
-      (when animated-p
-        (appkit-media--register-inline-animation-occurrence render-image)
-        (appkit-media--install-inline-animation-discovery))
-      (propertize (or fallback " ")
-                  'display (list '(slice 0 0 1.0 1.0) render-image)
-                  'rear-nonsticky '(display)))))
+    (let* ((playback (plist-get (cdr image) :appkit-media-playback))
+           (string
+            (propertize (or fallback " ")
+                        'display (list '(slice 0 0 1.0 1.0) image)
+                        'rear-nonsticky '(display appkit-media-occurrence))))
+      (when playback
+        (put-text-property 0 (length string) 'appkit-media-occurrence
+                           (appkit-media--occurrence-create
+                            :image image :span-length (length string) :slices 1)
+                           string))
+      string)))
 
 (defun appkit-media-one-line-image-display-string (image fallback)
   "Return FALLBACK displayed as a current-line thumbnail for IMAGE.
@@ -608,52 +593,6 @@ nil IMAGE returns it unchanged."
       (setcdr render-image properties)
       (appkit-media-image-display-string render-image fallback))))
 
-(defun appkit-media-stop-inline-animation (image)
-  "Stop bounded inline playback for IMAGE and reset it to frame zero."
-  (when (appkit-media--inline-animation-occurrence-p image)
-    (when-let* ((timer (image-animate-timer image)))
-      (cancel-timer timer))
-    (when-let* ((timer
-                 (plist-get
-                  (cdr image)
-                  :appkit-media-inline-animation-reset-timer)))
-      (when (timerp timer)
-        (cancel-timer timer)))
-    (ignore-errors (image-show-frame image 0 t))
-    (plist-put (cdr image)
-               :appkit-media-inline-animation-reset-timer nil)
-    (plist-put (cdr image) :appkit-media-inline-animation-played nil)))
-
-(defun appkit-media--finish-inline-animation (image)
-  "Finish one inline playback cycle for IMAGE."
-  (when (appkit-media--inline-animation-occurrence-p image)
-    (when-let* ((timer (image-animate-timer image)))
-      (cancel-timer timer))
-    (ignore-errors (image-show-frame image 0 t))
-    (plist-put (cdr image)
-               :appkit-media-inline-animation-reset-timer nil)
-    (plist-put (cdr image) :appkit-media-inline-animation-played nil)))
-
-(defun appkit-media-start-inline-animation (image)
-  "Play marked IMAGE once when its current buffer is visible."
-  (when (and appkit-media-inline-animation-enabled
-             (appkit-media--inline-animation-occurrence-p image)
-             (not (plist-get
-                   (cdr image) :appkit-media-inline-animation-played))
-             (get-buffer-window (current-buffer) t))
-    (let ((duration
-           (plist-get
-            (cdr image) :appkit-media-inline-animation-duration)))
-      (when (and (numberp duration) (> duration 0))
-        (plist-put (cdr image) :appkit-media-inline-animation-played t)
-        (image-animate image 0 nil)
-        (plist-put
-         (cdr image)
-         :appkit-media-inline-animation-reset-timer
-         (run-at-time (+ duration 0.4) nil
-                      #'appkit-media--finish-inline-animation image))
-        t))))
-
 (defun appkit-media--display-image-spec (display)
   "Return an image spec nested in DISPLAY, including sliced displays."
   (cond
@@ -664,53 +603,6 @@ nil IMAGE returns it unchanged."
          (consp (cadr display))
          (eq (car (cadr display)) 'image))
     (cadr display))))
-
-(defun appkit-media--start-window-inline-animations
-    (window &optional start end)
-  "Start animations visible in WINDOW between START and END."
-  (when (and (window-live-p window)
-             (eq (window-buffer window) (current-buffer)))
-    (let ((position (or start (window-start window)))
-          (end (or end (window-end window t) (point-max))))
-      (while (< position end)
-        (when-let* ((image
-                     (appkit-media--display-image-spec
-                      (get-text-property position 'display))))
-          (appkit-media-start-inline-animation image))
-        (setq position
-              (or (next-single-property-change
-                   position 'display nil end)
-                  end)))
-      (setf (alist-get window
-                       appkit-media--inline-animation-window-starts
-                       nil nil #'eq)
-            (window-start window)))))
-
-(defun appkit-media--start-window-inline-animations-after-scroll
-    (window display-start)
-  "Start animations after WINDOW has scrolled to DISPLAY-START."
-  (when (and (window-live-p window)
-             (eq (window-buffer window) (current-buffer)))
-    (let ((display-end
-           (save-excursion
-             (goto-char display-start)
-             (vertical-motion (1+ (window-body-height window)) window)
-             (point))))
-      (appkit-media--start-window-inline-animations
-       window display-start display-end))))
-
-(defun appkit-media--start-buffer-inline-animations-after-command ()
-  "Discover animations when a displayed window moves after a command."
-  (setq appkit-media--inline-animation-window-starts
-        (seq-filter (lambda (entry) (window-live-p (car entry)))
-                    appkit-media--inline-animation-window-starts))
-  (dolist (window (get-buffer-window-list (current-buffer) nil t))
-    (unless (equal
-             (alist-get window
-                        appkit-media--inline-animation-window-starts
-                        nil nil #'eq)
-             (window-start window))
-      (appkit-media--start-window-inline-animations window))))
 
 (defun appkit-media-image-slice-count (image)
   "Return the line count used to render IMAGE as vertical slices."
@@ -729,17 +621,6 @@ nil IMAGE returns it unchanged."
     (add-text-properties newline-start (point)
                          '(line-height t
                            rear-nonsticky (line-height)))))
-
-(defun appkit-media--install-inline-animation-discovery ()
-  "Install buffer-local hooks that discover visible inline animations."
-  (add-hook 'window-state-change-functions
-            #'appkit-media--start-window-inline-animations nil t)
-  (add-hook 'window-scroll-functions
-            #'appkit-media--start-window-inline-animations-after-scroll nil t)
-  (add-hook 'post-command-hook
-            #'appkit-media--start-buffer-inline-animations-after-command nil t)
-  (dolist (window (get-buffer-window-list (current-buffer) nil t))
-    (appkit-media--start-window-inline-animations window)))
 
 (defun appkit-media--image-with-height (image height)
   "Return IMAGE displayed at pixel or character-relative HEIGHT.
@@ -777,19 +658,28 @@ This is the non-inserting counterpart of
 whose `display' is one row of a copy sized to N current text lines.
 IMAGE is not mutated.  After `text-scale-mode', rebuild and call this
 again so the rows follow the new line height."
-  (pcase-let ((`(,render-image ,slice-count ,slice-height)
-               (appkit-media--line-slice-geometry image)))
+  (pcase-let* ((`(,render-image ,slice-count ,slice-height)
+                (appkit-media--line-slice-geometry image))
+               (playback (plist-get (cdr render-image) :appkit-media-playback))
+               (occurrence
+                (and playback
+                     (appkit-media--occurrence-create
+                      :image render-image :span-length 1 :slices slice-count))))
     (cl-loop for slice-index below slice-count
              collect
-             (propertize
-              " "
-              'display (list (list 'slice
-                                   0
-                                   (* slice-index slice-height)
-                                   1.0
-                                   slice-height)
-                             render-image)
-              'rear-nonsticky '(display)))))
+             (let ((row
+                    (propertize
+                     " "
+                     'display (list (list 'slice
+                                          0
+                                          (* slice-index slice-height)
+                                          1.0
+                                          slice-height)
+                                    render-image)
+                     'rear-nonsticky '(display appkit-media-occurrence))))
+               (when occurrence
+                 (put-text-property 0 1 'appkit-media-occurrence occurrence row))
+               row))))
 
 (defun appkit-media-insert-image-slices
     (image &optional action prefix-string fallback help-echo)
@@ -802,15 +692,17 @@ times the current line, and inserts one slice per line.  After
 
 Insert PREFIX-STRING before every slice after the first.  FALLBACK is
 the image's protocol alt text.  HELP-ECHO describes ACTION."
-  (let* ((animated-p (appkit-media-inline-animation-image-p image))
-         (source-image
-          (if animated-p
-              (appkit-media--make-inline-animation-occurrence image)
-            image)))
-    (pcase-let
+  (let ((start (point)))
+    (pcase-let*
         ((`(,render-image ,slice-count ,slice-height)
-          (appkit-media--line-slice-geometry source-image))
-         (label (or fallback "[image]")))
+          (appkit-media--line-slice-geometry image))
+         (playback (plist-get (cdr render-image) :appkit-media-playback))
+         (label (or fallback "[image]"))
+         (occurrence
+          (and playback
+               (appkit-media--occurrence-create
+                :image render-image :span-length (length label)
+                :slices slice-count))))
       (dotimes (slice-index slice-count)
         (when (> slice-index 0)
           (appkit-media-insert-slice-newline)
@@ -822,11 +714,15 @@ the image's protocol alt text.  HELP-ECHO describes ACTION."
                            1.0
                            slice-height)))
           (insert-image render-image label nil slice)
+          (when occurrence
+            (add-text-properties
+             slice-start (point)
+             (list 'appkit-media-occurrence occurrence
+                   'rear-nonsticky '(display appkit-media-occurrence))))
           (appkit-media-add-action-properties
            slice-start (point) action (or help-echo "Open media"))))
-      (when animated-p
-        (appkit-media--register-inline-animation-occurrence render-image)
-        (appkit-media--install-inline-animation-discovery)))))
+      (when occurrence
+        (appkit-media-inline-mount start (point))))))
 
 (defun appkit-media--char-pixel-width ()
   "Return one default-face column width for the current render target."
@@ -984,8 +880,6 @@ Renderer errors propagate; displays without Canvas return nil."
            (poster (video-source-poster
                     file (max 1 (round (* width scale)))
                     (max 1 (round (* height scale))))))
-      (plist-put (cdr poster) :appkit-media-animated
-                 (> (plist-get metadata :frames) 1))
       poster)))
 
 (defun appkit-media-preview-image-from-file
@@ -996,7 +890,8 @@ MAX-WIDTH and MAX-HEIGHT are a default-scale pixel budget and default
 to `appkit-media-preview-max-width' and `appkit-media-preview-max-height'.
 The returned image uses `:height (N . ch)' and `:appkit-media-nslices
 N'.  N uses unscaled face metrics so `text-scale-mode' does not change
-the cached descriptor.  Do not mutate the returned image.
+the cached descriptor.  Do not mutate the returned image.  The original local
+resource and its animation capability are retained with passive interaction.
 
 Display is a separate step: call `appkit-media-insert-image-slices' or
 `appkit-media-image-slice-rows' so a copy is sized to N current lines."
@@ -1036,8 +931,8 @@ Display is a separate step: call `appkit-media-insert-image-slices' or
                              :ascent 'center))
              when (appkit-media-image-object-valid-p candidate)
              return candidate))))
-    (when image
-      (appkit-media--mark-inline-animation-image image file t))))
+    (appkit-media-image-with-resource
+     image `((file . ,file)) :interaction nil)))
 
 (defun appkit-media-one-line-preview-image-from-file (file &optional max-width)
   "Create a compact one-row thumbnail for local FILE.
@@ -1046,7 +941,9 @@ MAX-WIDTH is the default-scale pixel budget.  It defaults to two unscaled
 character columns, capped by `appkit-media-preview-max-width', following
 Telega's two-column, one-line geometry.  A graphical display uses a
 center-cropped SVG thumbnail.  Displays without SVG support retain the ordinary
-image decoder with one-line height and maximum-width constraints.
+image decoder with one-line height and maximum-width constraints.  Original
+source playback data survives SVG wrapping, with passive interaction and
+`cover' fitting for the center crop.
 
 Display with `appkit-media-one-line-image-display-string'."
   (let* ((safe-max-width
@@ -1056,8 +953,10 @@ Display with `appkit-media-one-line-image-display-string'."
                  (min appkit-media-preview-max-width
                       (* 2 (appkit-media--base-char-pixel-width))))))
          (line-height (appkit-media--base-char-pixel-height)))
-    (or (appkit-media--one-line-thumbnail-from-file
-         file safe-max-width line-height)
+    (or (when-let* ((image (appkit-media--one-line-thumbnail-from-file
+                           file safe-max-width line-height)))
+          (appkit-media-image-with-resource
+           image `((file . ,file)) :interaction nil :fit 'cover))
         (let ((image
                (appkit-media-preview-image-from-file
                 file safe-max-width line-height)))

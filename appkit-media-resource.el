@@ -19,7 +19,6 @@
 
 (require 'browse-url)
 (require 'cl-lib)
-(require 'image-mode)
 (require 'plz)
 (require 'seq)
 (require 'subr-x)
@@ -51,11 +50,6 @@ when it becomes complete.  `none' keeps playback buffering session-local."
 
 The function receives one local filename."
   :type 'function
-  :group 'appkit-media)
-
-(defcustom appkit-media-animate-gifs t
-  "When non-nil, start GIF animation after opening it in `image-mode'."
-  :type 'boolean
   :group 'appkit-media)
 
 (defcustom appkit-media-transfer-concurrency 6
@@ -229,13 +223,6 @@ graphical file dialogs do not enforce `read-file-name' acceptance functions."
        (string-match-p
         (rx "." (or "mp4" "mov" "mkv" "webm" "avi" "flv" "m4v")
             string-end)
-        (downcase (car (split-string filename "[?#]"))))))
-
-(defun appkit-media-gif-file-name-p (filename)
-  "Return non-nil when FILENAME looks like a GIF image."
-  (and (stringp filename)
-       (string-match-p
-        (rx ".gif" string-end)
         (downcase (car (split-string filename "[?#]"))))))
 
 (defun appkit-media-resource-normalize (resource)
@@ -419,12 +406,13 @@ The only valid results are `image', `video', and `file'."
              canvas canvas-width canvas-height
              (destination-x 0) (destination-y 0)
              visible-function alive-function
-             activate-function close-function)
+             activate-function close-function (controls-p t))
   "Create an inline surface borrowing SESSION at WIDTH by HEIGHT.
 
 POSTER, FIT, BUFFER, ANCHOR, CANVAS, CANVAS-WIDTH, CANVAS-HEIGHT,
 DESTINATION-X, DESTINATION-Y, VISIBLE-FUNCTION, ALIVE-FUNCTION, and
-ACTIVATE-FUNCTION carry video.el's presentation contracts.
+ACTIVATE-FUNCTION carry video.el's presentation contracts.  CONTROLS-P nil
+leaves Canvas pointer interaction to the host rather than transport controls.
 Audio state remains on SESSION's player.
 CLOSE-FUNCTION is called once with the returned surface after it closes."
   (unless (appkit-media-video-session-live-p session)
@@ -441,6 +429,7 @@ CLOSE-FUNCTION is called once with the returned surface after it closes."
                  video-session width height
                  :poster poster
                  :fit fit
+                 :controls-p controls-p
                  :buffer buffer
                  :anchor anchor
                  :canvas canvas
@@ -744,20 +733,6 @@ dedicated surface, or close the returned session."
       (unless opened-p
         (appkit-media-video-session-close session)))))
 
-(defun appkit-media--maybe-start-gif-animation (file)
-  "Start GIF animation for FILE when its `image-mode' buffer is idle."
-  (when (and appkit-media-animate-gifs
-             (appkit-media-gif-file-name-p file))
-    (when-let* ((buffer (get-file-buffer file)))
-      (with-current-buffer buffer
-        (when (derived-mode-p 'image-mode)
-          (let ((image (image-get-display-property)))
-            (when (and image
-                       (image-multi-frame-p image)
-                       (not (image-animate-timer image)))
-              (setq-local image-animate-loop t)
-              (image-toggle-animation))))))))
-
 (defun appkit-media-open-file (file)
   "Open local FILE, using Canvas for native animation content."
   (unless (appkit-media-file-present-p file)
@@ -766,11 +741,10 @@ dedicated surface, or close the returned session."
     (with-current-buffer buffer
       (unless (buffer-modified-p)
         (set-visited-file-modtime))))
-  (if (video-source-format file)
+  (if (or (video-source-format file)
+          (appkit-media--file-animated-p file))
       (video-open file :kind 'image)
-    (prog1
-        (funcall appkit-media-open-file-function file)
-      (appkit-media--maybe-start-gif-animation file))))
+    (funcall appkit-media-open-file-function file)))
 
 (defun appkit-media-add-open-url-properties (start end url)
   "Attach mouse and keyboard handlers to open URL between START and END."

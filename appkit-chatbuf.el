@@ -25,6 +25,8 @@
 (require 'appkit-transaction)
 (require 'appkit-ui)
 
+(autoload 'appkit-media-inline-mount "appkit-media-inline")
+
 (declare-function appkit-evil-normalize-keymaps "appkit-evil" ())
 (declare-function visual-fill-column-mode "visual-fill-column" (&optional arg))
 
@@ -224,16 +226,9 @@ A nil value disables automatic canonical input synchronization.")
 (defmacro appkit-chatbuf-with-generated-update (&rest body)
   "Run BODY as one generated Surface structural update."
   (declare (indent 0) (debug t))
-  `(let ((appkit-generated-surface (appkit-current-surface))
-         (appkit-chatbuf--rendering t))
-     (unless (appkit-surface-p appkit-generated-surface)
-       (error "Appkit generated chat update requires a live Surface"))
-     (let ((inhibit-read-only t)
-           (buffer-undo-list t)
-           (appkit-old-modified-p (buffer-modified-p)))
-       (unwind-protect
-           (progn ,@body)
-         (set-buffer-modified-p appkit-old-modified-p)))))
+  `(let ((appkit-chatbuf--rendering t))
+     (appkit-with-content-update (appkit-current-surface)
+       ,@body)))
 
 (define-button-type 'appkit-chatbuf-prompt
   :supertype 'button
@@ -579,7 +574,7 @@ properties, are preserved."
     (< input-start (point-max))))
 
 (defun appkit-chatbuf-input-string ()
-  "Return the current editable input string, preserving text properties."
+  "Return editable input with its prepared source properties."
   (when-let* ((bounds (appkit-chatbuf-input-region-bounds)))
     (buffer-substring (car bounds) (cdr bounds))))
 
@@ -609,6 +604,8 @@ text intact.  Authorized generated updates may bind `inhibit-read-only'."
           (goto-char input-start)
           (insert (or text "")))))
     (goto-char (point-max)))
+  (when-let* ((input-start (appkit-chatbuf-input-start-position)))
+    (appkit-media-inline-mount input-start (point-max)))
   (unless (appkit-chatbuf-rendering-p)
     (appkit-chatbuf-input-state-sync
      :reset-history-p (not preserve-history-navigation-p))))
@@ -845,7 +842,8 @@ would otherwise glue it into the attachment."
     (when-let* ((bounds (appkit-chatbuf-input-object-bounds-at-point (point))))
       (unless (= (point) (car bounds))
         (goto-char (cdr bounds)))))
-  (if (not object)
+  (let ((start (point)))
+    (if (not object)
       (let ((start (point)))
         (insert content)
         (when (and properties (< start (point)))
@@ -860,6 +858,7 @@ would otherwise glue it into the attachment."
       (insert (appkit-chatbuf-input-object-string
                content object
                :properties properties))))
+    (appkit-media-inline-mount start (point)))
   (unless (appkit-chatbuf-rendering-p)
     (appkit-chatbuf-input-state-sync)))
 

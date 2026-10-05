@@ -161,7 +161,7 @@ Omitting the boundary cleans the entire copied region."
     (remove-list-of-text-properties
      0 presentation-length
      '(display line-prefix wrap-prefix appkit-ui-source-line-marker
-       rear-nonsticky)
+       rear-nonsticky appkit-media-occurrence)
      text)
     text))
 

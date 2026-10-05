@@ -68,6 +68,12 @@
 (defvar-local appkit--current-surface nil
   "Generated Appkit Surface attached to the current buffer.")
 
+(defvar appkit-surface--rendering nil
+  "Surface whose generated content mutation is awaiting final presentation.")
+
+(declare-function appkit-media--render-complete "appkit-media-image"
+                  (owner start end success))
+
 (defun appkit-current-surface ()
   "Return the generated Surface owned by the current buffer, or nil."
   (and (appkit-surface-p appkit--current-surface)
@@ -214,12 +220,24 @@
           source-model source-input))
        model message))))
 
+(defun appkit-surface--complete-content-update (surface success)
+  "Finalize SURFACE presentation once its outer content update has finished.
+On failure, retire stale presentation only; never mount partial output.
+The optional media companion is present only after media helpers were loaded."
+  (when (and (not (eq surface appkit-surface--rendering))
+             (appkit-surface--owns-host-p surface)
+             (or (not success) (appkit-surface-live-p surface))
+             (fboundp 'appkit-media--render-complete))
+    (with-current-buffer (appkit-surface-buffer surface)
+      (appkit-media--render-complete surface (point-min) (point-max) success))))
+
 (defun appkit-surface--render-request
     (surface app-read-view model request)
   "Render REQUEST from MODEL and APP-READ-VIEW, recovering once on error.
 
 Return the successful Renderer's closed companion result."
   (let ((renderer (appkit-surface-renderer surface))
+        (appkit-surface--rendering surface)
         render-result
         render-condition)
     (unless (appkit-surface--owns-host-p surface)
@@ -281,7 +299,8 @@ Return the successful Renderer's closed companion result."
              (with-current-buffer (appkit-surface-buffer surface)
                (appkit-surface--render-request
                 surface app-read-view model request))))
-        (appkit-resource-commit-render-result surface result)))
+        (appkit-resource-commit-render-result surface result)
+        (appkit-surface--complete-content-update surface t)))
     (let ((loop (appkit-surface-loop surface)))
       (appkit-command--post-messages
        loop (appkit-loop-revision loop) posts))
@@ -356,6 +375,7 @@ Return the successful Renderer's closed companion result."
           (when owns-stop-p
             (setf (appkit-surface-alive-p surface) nil)
             (appkit--run-cleanup-forms conditions
+              (appkit-cancel-handles surface)
               (when-let* ((runtime
                            (appkit-surface-effect-runtime surface)))
                 (appkit-effect-runtime-stop runtime))
@@ -486,25 +506,27 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                      (funcall (appkit-surface-type-init type)
                               context input)))
                    (model (appkit-surface--stage-next surface initial)))
-              (setf (appkit-loop--model (appkit-surface-loop surface)) model
-                    (appkit-surface-renderer surface)
-                    (funcall
-                     (appkit-surface-type-renderer-factory type) surface)
-                    renderer-created-p t)
-              (funcall
-               (appkit-generated-renderer-mount
-                (appkit-surface-renderer surface))
-               surface app-read-view model)
-              (setf (appkit-surface-renderer-valid-p surface) t)
-              (appkit-surface--commit-pending
-               surface app-read-view model t)
+              (let ((appkit-surface--rendering surface))
+                (setf (appkit-loop--model (appkit-surface-loop surface)) model
+                      (appkit-surface-renderer surface)
+                      (funcall
+                       (appkit-surface-type-renderer-factory type) surface)
+                      renderer-created-p t)
+                (funcall
+                 (appkit-generated-renderer-mount
+                  (appkit-surface-renderer surface))
+                 surface app-read-view model)
+                (setf (appkit-surface-renderer-valid-p surface) t)
+                (appkit-surface--commit-pending
+                 surface app-read-view model t))
               (unless (and (appkit-surface-alive-p surface)
                            (eq appkit--current-surface surface)
                            (eq (appkit-loop-status
                                 (appkit-surface-loop surface))
                                'running))
                 (error "Surface stopped during startup"))
-              (setf (appkit-surface-ready-p surface) t)))
+              (setf (appkit-surface-ready-p surface) t)
+              (appkit-surface--complete-content-update surface t)))
           (when select
             (pop-to-buffer host))
           (setq completed-p t)

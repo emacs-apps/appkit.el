@@ -10,8 +10,8 @@
 ;;; Commentary:
 
 ;; Protocol-neutral video preview extraction and static preview decoration.
-;; Callers provide explicit source metadata; this module never inspects a
-;; Discord attachment or OneBot segment.
+;; Callers provide playable sources and optional poster inputs; this module
+;; extracts JPG posters only and never inspects application protocol payloads.
 
 ;;; Code:
 
@@ -20,11 +20,6 @@
 (require 'svg nil t)
 (require 'appkit-media-image)
 (require 'appkit-media-resource)
-
-(defcustom appkit-media-inline-animation-frame-rate 8
-  "Frames per second used for bounded inline video previews."
-  :type 'integer
-  :group 'appkit-media)
 
 (cl-defstruct (appkit-media--video-preview-job
                (:constructor appkit-media--video-preview-job-create))
@@ -43,58 +38,11 @@
 (defconst appkit-media--video-input-protocols "file,https,tls,tcp"
   "FFmpeg protocols allowed while extracting media previews.")
 
-(defun appkit-media--finite-number (value)
-  "Return finite numeric VALUE, accepting decimal strings, or nil."
-  (cond
-   ((and (numberp value)
-         (not (and (floatp value) (isnan value))))
-    value)
-   ((and (stringp value)
-         (string-match-p
-          "\\`[[:space:]]*[0-9]+\\(?:\\.[0-9]+\\)?[[:space:]]*\\'"
-          value))
-    (string-to-number value))))
-
 (defun appkit-media-video-preview-policy-key ()
   "Return a cache-key fragment for the current video preview policy."
-  (format "video-v3:%s:%s:%s:%s:%s:%s"
-          (if appkit-media-inline-animation-enabled "animated" "static")
-          appkit-media-inline-animation-max-duration
-          appkit-media-inline-animation-max-file-size
-          appkit-media-inline-animation-frame-rate
+  (format "video-v4:static:%s:%s"
           appkit-media-preview-max-width
           appkit-media-preview-max-height))
-
-(defun appkit-media--video-source-size (source source-size)
-  "Return explicit SOURCE-SIZE or the local SOURCE file size."
-  (or (appkit-media--finite-number source-size)
-      (and (appkit-media-file-present-p source)
-           (file-attribute-size (file-attributes source)))))
-
-(defun appkit-media--video-animation-eligible-p
-    (source source-size duration)
-  "Return non-nil when SOURCE of SOURCE-SIZE and DURATION may animate."
-  (let ((size (appkit-media--video-source-size source source-size))
-        (duration (appkit-media--finite-number duration)))
-    (and appkit-media-inline-animation-enabled
-         (numberp size)
-         (> size 0)
-         (<= size appkit-media-inline-animation-max-file-size)
-         (numberp duration)
-         (> duration 0)
-         (<= duration appkit-media-inline-animation-max-duration))))
-
-(defun appkit-media--video-animation-filter ()
-  "Return the ffmpeg filter graph for bounded inline video previews."
-  (format
-   (concat "[0:v]fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease:"
-           "flags=lanczos,setsar=1,split[frames][palette-source];"
-           "[palette-source]palettegen=max_colors=128:stats_mode=diff[palette];"
-           "[frames][palette]paletteuse=dither=bayer:bayer_scale=5:"
-           "diff_mode=rectangle")
-   (max 1 appkit-media-inline-animation-frame-rate)
-   (max 64 appkit-media-preview-max-width)
-   (max 64 appkit-media-preview-max-height)))
 
 (defun appkit-media-cancel-video-preview (key)
   "Cancel the active video preview owned by opaque KEY, if any."
@@ -114,19 +62,16 @@
 
 (defun appkit-media--delete-video-preview-files (cache-base)
   "Delete generated video preview files rooted at CACHE-BASE."
-  (dolist (extension '("gif" "jpg"))
-    (let ((file (format "%s.%s" cache-base extension)))
-      (when (file-exists-p file)
-        (ignore-errors (delete-file file))))))
+  (let ((file (concat cache-base ".jpg")))
+    (when (file-exists-p file)
+      (ignore-errors (delete-file file)))))
 
 (cl-defun appkit-media-start-video-preview
-    (&key key source preview-source source-size duration cache-base callback)
-  "Create a static or animated video preview asynchronously.
+    (&key key source preview-source cache-base callback)
+  "Create a static JPG video poster asynchronously.
 
 KEY is an application-namespaced opaque job identity.  SOURCE is the playable
-file or URL.  PREVIEW-SOURCE optionally supplies a cheaper poster input for a
-static preview.  SOURCE-SIZE and DURATION are explicit metadata; absent or
-out-of-policy metadata selects a static preview without probing SOURCE.
+file or URL.  PREVIEW-SOURCE optionally supplies a cheaper poster input.
 CACHE-BASE is the output path without an extension.  CALLBACK receives IMAGE
 and its TARGET-FILE, or two nil values when extraction fails."
   (unless (functionp callback)
@@ -135,42 +80,24 @@ and its TARGET-FILE, or two nil values when extraction fails."
     (error "Video preview requires key and cache-base"))
   (appkit-media-cancel-video-preview key)
   (let* ((ffmpeg (executable-find "ffmpeg"))
-         (known-duration (appkit-media--finite-number duration))
-         (source-size (appkit-media--video-source-size source source-size))
          (static-source
           (if (appkit-media--local-or-https-source-p preview-source)
               preview-source
-            source))
-         (animated-p
-          (and (appkit-media--local-or-https-source-p source)
-               (appkit-media--video-animation-eligible-p
-                source source-size known-duration))))
+            source)))
     (if (or (not ffmpeg)
             (not (appkit-media--local-or-https-source-p static-source)))
         (funcall callback nil nil)
-      (let* ((extension (if animated-p "gif" "jpg"))
-             (target-file (format "%s.%s" cache-base extension))
-             (input-source (if animated-p source static-source))
+      (let* ((target-file (concat cache-base ".jpg"))
              (command
-              (if animated-p
-                  (list ffmpeg
-                        "-nostdin" "-y" "-loglevel" "error"
-                        "-protocol_whitelist"
-                        appkit-media--video-input-protocols
-                        "-i" input-source
-                        "-t" (format "%.3f" known-duration)
-                        "-filter_complex"
-                        (appkit-media--video-animation-filter)
-                        "-an" "-loop" "0" target-file)
-                (list ffmpeg
-                      "-nostdin" "-y" "-loglevel" "error"
-                      "-protocol_whitelist"
-                      appkit-media--video-input-protocols
-                      "-i" input-source
-                      "-vf"
-                      (concat "thumbnail=24,scale=960:-2:"
-                              "force_original_aspect_ratio=decrease")
-                      "-frames:v" "1" target-file)))
+              (list ffmpeg
+                    "-nostdin" "-y" "-loglevel" "error"
+                    "-protocol_whitelist"
+                    appkit-media--video-input-protocols
+                    "-i" static-source
+                    "-vf"
+                    (concat "thumbnail=24,scale=960:-2:"
+                            "force_original_aspect_ratio=decrease")
+                    "-frames:v" "1" target-file))
              (buffer (generate-new-buffer " *appkit-media-video-preview*"))
              (job (appkit-media--video-preview-job-create
                    :target-file target-file)))
@@ -260,7 +187,8 @@ and its TARGET-FILE, or two nil values when extraction fails."
          (slices (or (plist-get properties :appkit-media-nslices)
                      (appkit-media-image-slice-count image)))
          result)
-    (dolist (property '(:height :width :scale :ascent :mask))
+    (dolist (property '(:height :width :scale :ascent :mask
+                       :appkit-media-playback))
       (when-let* ((value (plist-get properties property)))
         (setq result (plist-put result property value))))
     (plist-put result :appkit-media-nslices slices)))
@@ -301,11 +229,9 @@ When NAMESPACE is nil, clear every decorated preview."
 (defun appkit-media-video-preview-display-image (image &optional namespace)
   "Return static IMAGE decorated with a play marker.
 
-Animated previews are returned unchanged.  NAMESPACE owns the cached
-decoration and supports targeted eviction.  Cache lookup precedes image
-decoding and SVG source embedding."
-  (if (appkit-media-inline-animation-image-p image)
-      image
+NAMESPACE owns the cached decoration and supports targeted eviction.
+Cache lookup precedes image decoding and SVG source embedding.
+Original-resource playback metadata survives this poster-only decoration."
     (when (and image
                (image-type-available-p 'svg)
                (fboundp 'svg-create)
@@ -345,7 +271,7 @@ decoding and SVG source embedding."
                   (when (appkit-media-image-object-valid-p decorated)
                     (puthash (copy-tree cache-key) decorated
                              appkit-media--video-decoration-cache)
-                    decorated)))))))))
+                    decorated))))))))
 
 (provide 'appkit-media-video)
 

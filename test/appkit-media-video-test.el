@@ -13,107 +13,19 @@
           preview-buffer
         (funcall original name inhibit-buffer-hooks)))))
 
-(ert-deftest appkit-media-video-preview-policy-covers-rendering-limits ()
+(ert-deftest appkit-media-video-poster-cache-follows-size-not-autoplay ()
   (let ((appkit-media-inline-animation-enabled t)
-        (appkit-media-inline-animation-max-duration 10)
-        (appkit-media-inline-animation-max-file-size 4096)
-        (appkit-media-inline-animation-frame-rate 8)
         (appkit-media-preview-max-width 460)
         (appkit-media-preview-max-height 360))
-    (let ((animated-key (appkit-media-video-preview-policy-key)))
-      (should (string-prefix-p "video-v3:animated:" animated-key))
+    (let ((poster-key (appkit-media-video-preview-policy-key)))
       (let ((appkit-media-inline-animation-enabled nil))
-        (should-not
-         (equal animated-key (appkit-media-video-preview-policy-key))))
+        (should (equal poster-key (appkit-media-video-preview-policy-key))))
       (let ((appkit-media-preview-max-width 320))
         (should-not
-         (equal animated-key (appkit-media-video-preview-policy-key)))))))
+         (equal poster-key (appkit-media-video-preview-policy-key)))))))
 
-(ert-deftest appkit-media-video-animation-policy-requires-bounded-metadata ()
-  (let ((appkit-media-inline-animation-enabled t)
-        (appkit-media-inline-animation-max-duration 10)
-        (appkit-media-inline-animation-max-file-size 4096))
-    (should
-     (appkit-media--video-animation-eligible-p
-      "https://example.invalid/clip.mp4" "2048" "2.5"))
-    (should
-     (appkit-media--video-animation-eligible-p
-      "https://example.invalid/clip.mp4" 4096 10))
-    (should-not
-     (appkit-media--video-animation-eligible-p
-      "https://example.invalid/clip.mp4" nil 2.5))
-    (should-not
-     (appkit-media--video-animation-eligible-p
-      "https://example.invalid/clip.mp4" 4097 2.5))
-    (should-not
-     (appkit-media--video-animation-eligible-p
-      "https://example.invalid/clip.mp4" 2048 10.1))
-    (let ((appkit-media-inline-animation-enabled nil))
-      (should-not
-       (appkit-media--video-animation-eligible-p
-        "https://example.invalid/clip.mp4" 2048 2.5)))))
-
-(ert-deftest appkit-media-video-preview-explicit-metadata-selects-animated-command ()
-  (let ((appkit-media-inline-animation-enabled t)
-        (appkit-media-inline-animation-max-duration 10)
-        (appkit-media-inline-animation-max-file-size 4096)
-        (appkit-media-inline-animation-frame-rate 8)
-        (appkit-media--video-preview-processes
-         (make-hash-table :test #'equal))
-        (buffer (generate-new-buffer " *appkit-video-animated-test*"))
-        command
-        sentinel
-        executable-queries)
-    (unwind-protect
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (program)
-                     (push program executable-queries)
-                     (and (equal program "ffmpeg") "/usr/bin/ffmpeg")))
-                  ((symbol-function 'generate-new-buffer)
-                   (appkit-media-video-test--buffer-generator buffer))
-                  ((symbol-function 'make-process)
-                   (lambda (&rest properties)
-                     (setq command (plist-get properties :command)
-                           sentinel (plist-get properties :sentinel))
-                     :animated-process))
-                  ((symbol-function 'process-status)
-                   (lambda (_process) 'run)))
-          (appkit-media-start-video-preview
-           :key '(qq . "message-1")
-           :source "https://example.invalid/clip.mp4"
-           :source-size "2048"
-           :duration "2.5"
-           :cache-base "/tmp/appkit-animated-preview"
-           :callback #'ignore)
-          (should (functionp sentinel))
-          (should (equal "/usr/bin/ffmpeg" (car command)))
-          (should (member "https://example.invalid/clip.mp4" command))
-          (should
-           (equal appkit-media--video-input-protocols
-                  (cadr (member "-protocol_whitelist" command))))
-          (should (member "-filter_complex" command))
-          (should (member "-loop" command))
-          (should (member "2.500" command))
-          (should (string-suffix-p ".gif" (car (last command))))
-          (should-not
-           (seq-some
-            (lambda (argument)
-              (and (stringp argument)
-                   (string-prefix-p "thumbnail=" argument)))
-            command))
-          (should
-           (eq :animated-process
-               (appkit-media--video-preview-job-process
-                (gethash '(qq . "message-1")
-                         appkit-media--video-preview-processes))))
-          (should (equal '("ffmpeg") executable-queries)))
-      (when (buffer-live-p buffer) (kill-buffer buffer)))))
-
-(ert-deftest appkit-media-video-preview-explicit-metadata-selects-static-poster-command ()
-  (let ((appkit-media-inline-animation-enabled t)
-        (appkit-media-inline-animation-max-duration 10)
-        (appkit-media-inline-animation-max-file-size 4096)
-        (appkit-media--video-preview-processes
+(ert-deftest appkit-media-video-preview-uses-static-poster-source ()
+  (let ((appkit-media--video-preview-processes
          (make-hash-table :test #'equal))
         (buffer (generate-new-buffer " *appkit-video-static-test*"))
         command
@@ -135,8 +47,6 @@
            :key '(disco . "attachment-1")
            :source "https://cdn.example.invalid/long.mp4"
            :preview-source "https://media.example.invalid/poster.jpg"
-           :source-size 2048
-           :duration 30
            :cache-base "/tmp/appkit-static-preview"
            :callback #'ignore)
           (should (equal "/usr/bin/ffmpeg" (car command)))
@@ -184,10 +94,10 @@
          (gethash '(qq . "preview")
                   appkit-media--video-preview-processes))))))
 
-(ert-deftest appkit-media-video-preview-missing-duration-is-static-without-probe ()
+(ert-deftest appkit-media-video-preview-extracts-one-frame-without-probe ()
   (let ((appkit-media--video-preview-processes
          (make-hash-table :test #'equal))
-        (buffer (generate-new-buffer " *appkit-video-no-duration-test*"))
+        (buffer (generate-new-buffer " *appkit-video-poster-test*"))
         executable-queries
         command)
     (unwind-protect
@@ -204,14 +114,13 @@
                   ((symbol-function 'process-status)
                    (lambda (_process) 'run)))
           (appkit-media-start-video-preview
-           :key '(qq . "no-duration")
+           :key '(qq . "poster")
            :source "https://example.invalid/clip.mp4"
-           :source-size 2048
-           :duration nil
-           :cache-base "/tmp/appkit-no-duration-preview"
+           :cache-base "/tmp/appkit-poster-preview"
            :callback #'ignore)
           (should (equal '("ffmpeg") executable-queries))
           (should (member "-frames:v" command))
+          (should (string-suffix-p ".jpg" (car (last command))))
           (should-not (member "-filter_complex" command)))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
@@ -248,8 +157,6 @@
           (appkit-media-start-video-preview
            :key '(disco . "instant")
            :source "https://example.invalid/poster.jpg"
-           :source-size nil
-           :duration nil
            :cache-base cache-base
            :callback
            (lambda (image _file)
@@ -275,21 +182,6 @@
                 (gethash '(disco source)
                          appkit-media--video-decoration-cache)))))
 
-(ert-deftest appkit-media-animated-video-preview-display-is-passthrough ()
-  (let ((image '(image :type gif
-                 :appkit-media-inline-animation t
-                 :appkit-media-inline-animation-duration 2.5)))
-    (cl-letf (((symbol-function 'appkit-media-image-object-valid-p)
-               (lambda (&rest _)
-                 (ert-fail
-                  "animated previews must bypass static decoration")))
-              ((symbol-function 'image-type-available-p)
-               (lambda (&rest _)
-                 (ert-fail
-                  "animated previews must not probe SVG support"))))
-      (should (eq image
-                  (appkit-media-video-preview-display-image image))))))
-
 (ert-deftest appkit-media-video-preview-rejects-unsafe-input-protocols ()
   (let ((appkit-media--video-preview-processes
          (make-hash-table :test #'equal))
@@ -312,8 +204,6 @@
         (appkit-media-start-video-preview
          :key '(test . unsafe)
          :source source
-         :source-size 100
-         :duration 1
          :cache-base "/tmp/appkit-unsafe-preview"
          :callback (lambda (&rest arguments)
                      (setq callback-arguments arguments)))

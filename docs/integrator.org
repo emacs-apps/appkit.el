@@ -396,6 +396,11 @@ Closing either surface does not interrupt the other; video.el closes the player
 after its last inline or dedicated lease disappears.  A client's optional
 ~:close-function~ runs exactly once after video.el retires the inline surface.
 
+Expert inline hosts can pass ~:controls-p nil~ to omit video.el's transport
+hot spots and retain their own pointer policy.  Standard media occurrences
+derive this from their interaction policy; passive images, open-only images,
+and still-image viewer links do not acquire a play/pause hot spot.
+
 Use ~appkit-media-image-with-resource~ when a poster represents a different
 original resource, needs media controls, or must resolve an original on demand.
 It returns an immutable poster copy and replaces any previous playback plan;
@@ -424,15 +429,23 @@ When RESOURCE is nil, ~:resolve-function~ receives (SUCCESS FAILURE) on
 activation.  SUCCESS accepts a canonical resource alist; FAILURE accepts a
 reason string.  Return a cancellation function or nil.  Retirement cancels
 pending resolution, and late callbacks cannot resurrect the occurrence.
-The resolved local source supplies animation capability.  Clients retain
-authority over protocol acquisition, account credentials, grants, decryption,
-and concealed-content policy; Appkit must not bypass these with a poster URL.
+With ~:animated 'auto~, the resolved local source supplies animation capability;
+explicit t or nil survives resolution.  Clients retain authority over protocol
+acquisition, account credentials, grants, decryption, and concealed-content
+policy; Appkit must not bypass these with a poster URL.
 
-Display the prepared image with the image-string or slice helpers.
-Projection rows and header/footer frames, directories, discussion entries,
-reaction lines, media cards, one-line presentation rows, and chatbuf insertion
-mount prepared occurrences automatically after their final property writes.
-For arbitrary buffer insertion, call ~appkit-media-inline-mount~:
+Display the prepared image with the image-string or slice helpers.  Their
+source metadata is opaque: clients do not unpack it or attach runtime state.
+A Generated Surface mounts prepared media once after a successful render
+commit, including header/footer-only and custom renderer output.  Initial
+presentation completes after the Surface becomes ready.  Nested
+~appkit-with-content-update~ scopes coalesce; failed updates only retire stale
+hosts, without mounting partial output.  Completed chatbuf input insertion
+also mounts its inserted region.
+
+Leaf printers and reaction/discussion/card helpers only prepare content; they
+do not own a second mounting lifecycle.  Outside these completion boundaries,
+call ~appkit-media-inline-mount~ after insertion and final property writes:
 
 #+begin_src emacs-lisp
 (let* ((image (appkit-media-image-with-resource
@@ -444,20 +457,23 @@ For arbitrary buffer insertion, call ~appkit-media-inline-mount~:
 
 Mounting is idempotent.  Each insertion, including repeated insertion of the
 same prepared string, has independent runtime state; all slices of one image
-share one host.  The owner defaults to the exact current Surface, or the
-buffer outside a Surface.  Initial rendering mounts after the Surface becomes
-ready, without weakening its ownership fence.  Styling preserves a host;
-text replacement, silent EWOC deletion, mode change, buffer death, or owner
-retirement releases its lease.  Clients do not scan for their own emoji hosts.
+share one host.  Runtime display, keymaps, and ownership live in overlays,
+never in the prepared string.  The owner defaults to the exact current
+Surface, or the buffer outside a Surface.  Styling preserves a host; replacing
+its source plan or text, silent EWOC deletion, mode change, buffer death, or
+owner retirement releases its lease.  Initial mounting preserves the normal
+live-owner fence.  Clients do not scan for their own emoji hosts.
 
 ~appkit-media-inline-host-at-point~ and ~appkit-media-inline-host-live-p~
 identify a still-owned occurrence.  ~appkit-media-inline-host-activate~ with
 nil follows its interaction policy; ~dedicated~ or ~frame~ promotes the exact
 session.  Passive autoplay never opens a viewer or replaces surrounding keys.
-Before retaining a freshly copied rich string, call
-~appkit-media-inline-source-text~ to restore its prepared posters and remove
-runtime handles and media-owned keymaps.  Chatbuf source snapshots and the
-shared copy filter already do this; copying never closes the original host.
+Ordinary rich-text copying retains the prepared poster and source plan.
+Playback and retirement leave all source text properties unchanged; no
+sanitizer, player handle stripping, or restoration pass is needed.  Reinserting
+that string creates a new occurrence and never borrows the original player's
+state.  The generated-content copy filter still removes presentation metadata
+when producing plain copied content.
 
 Completion affixations, header-line strings, and display-only prefixes are not
 buffer insertion boundaries and remain posters.  Circular avatars, inset
@@ -480,11 +496,11 @@ pixels into an independent backing store.  Copying the Lisp descriptor does
 not copy Canvas pixels.  Live playback Canvases retain their original
 identity so native frame updates still reach their displayed occurrences.
 
-For a host-owned Canvas, supply its existing display marker as ~:anchor~,
-alongside ~:visible-function~, ~:alive-function~, and ~:activate-function~.
-The marker identifies the buffer and occurrence; video.el resolves its
-background automatically, without a host color callback.  Standard
-~appkit-media-inline-mount~ already knows its spans and requires no
+For a host-owned Canvas, supply its existing display marker or overlay as
+~:anchor~, alongside ~:visible-function~, ~:alive-function~, and
+~:activate-function~.  The anchor identifies the buffer and occurrence;
+video.el resolves its background automatically, without a host color callback.
+Standard ~appkit-media-inline-mount~ uses its owned overlay and requires no
 additional placement or color arguments.
 Use ~video-canvas-create~ for a standalone Canvas.  Resolve its static drawing
 background with ~video-background-color~ at the scene's display marker and
@@ -516,6 +532,8 @@ when it becomes complete.  Existing complete entries are opened locally.
 Use ~:cache-policy 'none~ for streams that must keep buffering session-local.
 Already-local files can use ~appkit-media-open-file~ or
 ~appkit-media-play-video-file~ without remote acquisition orchestration.
+Animated content, including extensionless GIFs, uses the native viewer;
+ordinary files retain the configured file opener.
 
 Clients provide a stable ~:cache-key~ based on protocol resource identity so
 rotating signed URLs address the same complete cache.  A cache is transparent

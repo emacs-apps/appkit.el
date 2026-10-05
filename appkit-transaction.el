@@ -26,10 +26,15 @@
      (with-current-buffer (appkit-surface-buffer appkit-transaction-surface)
        (let ((inhibit-read-only t)
              (buffer-undo-list t)
-             (appkit-old-modified-p (buffer-modified-p)))
+             (appkit-old-modified-p (buffer-modified-p))
+             appkit-content-completed-p)
          (unwind-protect
-             (progn ,@body)
-           (set-buffer-modified-p appkit-old-modified-p))))))
+             (let ((appkit-surface--rendering appkit-transaction-surface))
+               (prog1 (progn ,@body)
+                 (setq appkit-content-completed-p t)))
+           (set-buffer-modified-p appkit-old-modified-p)
+           (appkit-surface--complete-content-update
+            appkit-transaction-surface appkit-content-completed-p))))))
 
 (defmacro appkit-with-property-update (surface &rest body)
   "Run BODY as a property-only update for SURFACE."

@@ -3,8 +3,8 @@
 ;; Copyright (C) 2026 0WD0
 
 ;;; Commentary:
-;; Own the exact image display spans inserted by an application, while video.el
-;; owns playback, Canvas targets, and the shared presentation leases.
+;; Prepared text contains immutable posters and resource plans.  Overlays own
+;; the displayed Canvas and interaction; video.el owns playback and leases.
 
 ;;; Code:
 
@@ -16,9 +16,8 @@
 
 (cl-defstruct (appkit-media-inline-host
                (:constructor appkit-media--inline-host-create))
-  buffer ranges token owner kind resource poster label cache-key cache-directory
-  autoplay toggle-p resolve-function pending cancel inline map owner-handle
-  animation-loop-policy)
+  buffer overlays owner occurrence plan resource animated
+  pending cancel inline map owner-handle autoplay-disabled-p)
 
 (defvar-local appkit-media--inline-hosts nil
   "Live media occurrences in this buffer.")
@@ -29,141 +28,131 @@
 (defvar-local appkit-media--inline-start-timer nil
   "Coalesced post-render autoplay timer for this buffer.")
 
-(defun appkit-media-inline-static-poster (image)
-  "Return IMAGE's static poster without changing its descriptor or pixels.
-Already static Canvas posters retain their backing-store identity; live
-Canvases are snapshotted.  Other images are copied without the GIF-animation
-flag and remain normal static images on non-Canvas displays."
-  (if (eq (plist-get (cdr-safe image) :type) 'canvas)
-      (if (plist-get (cdr image) :video-static-poster)
-          image
-        (video-canvas-copy image))
-    (if (eq (car-safe image) 'image)
-        (let ((copy (cons 'image (copy-sequence (cdr image)))))
-          (plist-put (cdr copy) :appkit-media-inline-animation nil)
-          copy)
-      image)))
+(defvar-local appkit-media--inline-prune-tick nil
+  "Last character tick accounted for by normal modification hooks.")
 
 (defun appkit-media-inline-host-live-p (host)
-  "Return non-nil while HOST owns every original image display span."
+  "Return non-nil while HOST owns all its original prepared image spans."
   (and (appkit-media-inline-host-p host)
        (buffer-live-p (appkit-media-inline-host-buffer host))
-       (appkit-media-inline-host-ranges host)
+       (appkit-media-inline-host-overlays host)
        (let ((buffer (appkit-media-inline-host-buffer host))
              (owner (appkit-media-inline-host-owner host))
-             (token (appkit-media-inline-host-token host)))
+             (occurrence (appkit-media-inline-host-occurrence host)))
          (with-current-buffer buffer
            (and (or (null owner)
                     (and (appkit-surface-live-p owner)
                          (eq owner (appkit-current-surface))))
                 (cl-every
-                 (lambda (range)
-                   (let ((start (marker-position (car range)))
-                         (end (marker-position (cdr range))))
-                     (and (eq (marker-buffer (car range)) buffer)
-                          (eq (marker-buffer (cdr range)) buffer)
-                          start end (< start end)
-                          (eq (get-text-property start 'appkit-media-inline-token)
-                              token)
-                          (eq (get-text-property (1- end)
-                                                 'appkit-media-inline-token)
-                              token)
-                          (let ((change
-                                 (next-single-property-change
-                                  start 'appkit-media-inline-token nil end)))
-                            (or (null change) (>= change end))))))
-                 (appkit-media-inline-host-ranges host)))))))
+                 (lambda (overlay)
+                   (and (eq (overlay-buffer overlay) buffer)
+                        (eq (overlay-get overlay 'appkit-media-inline-host) host)
+                        (< (overlay-start overlay) (overlay-end overlay))
+                        (not (text-property-not-all
+                              (overlay-start overlay) (overlay-end overlay)
+                              'appkit-media-occurrence occurrence))))
+                 (appkit-media-inline-host-overlays host)))))))
 
 (defun appkit-media-inline-host-at-point (&optional position)
-  "Return the live inline media host whose exact image span contains POSITION.
-POSITION defaults to point in the current buffer."
-  (let* ((position (or position (point)))
-         (host (get-text-property position 'appkit-media-inline-host)))
-    (when (and (appkit-media-inline-host-live-p host)
-               (cl-some (lambda (range)
-                          (and (<= (car range) position)
-                               (< position (cdr range))))
-                        (appkit-media-inline-host-ranges host)))
-      host)))
+  "Return the live media occurrence containing POSITION in this buffer."
+  (cl-loop for overlay in (overlays-at (or position (point)))
+           for host = (overlay-get overlay 'appkit-media-inline-host)
+           when (and (appkit-media-inline-host-live-p host)
+                     (eq (current-buffer) (appkit-media-inline-host-buffer host))
+                     (memq overlay (appkit-media-inline-host-overlays host)))
+           return host))
 
 (defun appkit-media--inline-visible-p (host)
-  "Return a window displaying a HOST image span in a visible frame, or nil.
-Ignore hidden and iconified frames.  Reject offscreen slices by buffer positions
-before asking Emacs for pixel visibility.  The returned window also owns this
-occurrence's background."
+  "Return a visible graphical window displaying one of HOST's spans."
   (and (appkit-media-inline-host-live-p host)
-       (let ((buffer (appkit-media-inline-host-buffer host)))
-         (cl-find-if
-          (lambda (window)
-            (and (eq (frame-visible-p (window-frame window)) t)
-                 (let ((start (window-start window))
-                       (end (window-end window)))
-                   (cl-some
-                    (lambda (range)
-                      (and (> (cdr range) start)
-                           (or (null end) (< (car range) end))
-                           (pos-visible-in-window-p
-                            (max start (car range)) window t)))
-                    (appkit-media-inline-host-ranges host)))))
-          (get-buffer-window-list buffer nil t)))))
+       (cl-find-if
+        (lambda (window)
+          (and (display-graphic-p (window-frame window))
+               (eq (frame-visible-p (window-frame window)) t)
+               (let ((start (window-start window))
+                     (end (window-end window)))
+                 (cl-some
+                  (lambda (overlay)
+                    (and (> (overlay-end overlay) start)
+                         (or (null end) (< (overlay-start overlay) end))
+                         (pos-visible-in-window-p
+                          (max start (overlay-start overlay)) window t)))
+                  (appkit-media-inline-host-overlays host)))))
+        (get-buffer-window-list (appkit-media-inline-host-buffer host) nil t))))
 
 (defun appkit-media--inline-close (host)
-  "Cancel HOST work and release its exact inline lease."
-  (when-let* ((handle (appkit-media-inline-host-owner-handle host)))
-    (setf (appkit-media-inline-host-owner-handle host) nil)
-    (when (appkit-handle-alive-p handle)
-      (appkit-retire-handle handle)))
-  (let ((cancel (appkit-media-inline-host-cancel host))
-        (ranges (appkit-media-inline-host-ranges host)))
-    (setf (appkit-media-inline-host-pending host) nil
+  "Cancel HOST work, remove its overlays, and release its exact lease."
+  (let ((overlays (appkit-media-inline-host-overlays host))
+        (handle (appkit-media-inline-host-owner-handle host))
+        (cancel (appkit-media-inline-host-cancel host))
+        (inline (appkit-media-inline-host-inline host)))
+    ;; Detach before callbacks: retiring the owner handle calls us again.
+    (setf (appkit-media-inline-host-overlays host) nil
+          (appkit-media-inline-host-owner-handle host) nil
+          (appkit-media-inline-host-pending host) nil
           (appkit-media-inline-host-cancel host) nil
-          (appkit-media-inline-host-ranges host) nil)
-    (dolist (range ranges)
-      (set-marker (car range) nil)
-      (set-marker (cdr range) nil))
-    (when cancel (funcall cancel)))
-  (when-let* ((inline (appkit-media-inline-host-inline host)))
-    (setf (appkit-media-inline-host-inline host) nil)
-    (appkit-media-video-inline-close inline))
-  (when (buffer-live-p (appkit-media-inline-host-buffer host))
-    (with-current-buffer (appkit-media-inline-host-buffer host)
-      (setq appkit-media--inline-hosts
-            (delq host appkit-media--inline-hosts)))))
+          (appkit-media-inline-host-inline host) nil)
+    (mapc #'delete-overlay overlays)
+    (unwind-protect
+        (unwind-protect
+            (when (and handle (appkit-handle-alive-p handle))
+              (appkit-retire-handle handle))
+          (unwind-protect
+              (when cancel (funcall cancel))
+            (when inline (appkit-media-video-inline-close inline))))
+      (when (buffer-live-p (appkit-media-inline-host-buffer host))
+        (with-current-buffer (appkit-media-inline-host-buffer host)
+          (setq appkit-media--inline-hosts
+                (delq host appkit-media--inline-hosts)))))))
 
 (defun appkit-media--inline-hosts-in-region (start end)
-  "Return distinct hosts attached to text in START..END."
+  "Return distinct owned hosts whose overlays intersect START..END."
   (let (hosts)
-    (while (< start end)
-      (when-let* ((host (get-text-property start 'appkit-media-inline-host)))
-        (unless (memq host hosts)
-          (push host hosts)))
-      (setq start
-            (next-single-property-change start 'appkit-media-inline-host nil end)))
+    (dolist (overlay (overlays-in start end))
+      (when-let* ((host (overlay-get overlay 'appkit-media-inline-host))
+                  ((appkit-media-inline-host-p host))
+                  ((memq overlay (appkit-media-inline-host-overlays host)))
+                  ((< (overlay-start overlay) end))
+                  ((> (overlay-end overlay) start)))
+        (unless (memq host hosts) (push host hosts))))
     hosts))
 
+(defun appkit-media--inline-prune (&optional force)
+  "Retire invalid spans after suppressed modification hooks.
+FORCE also checks property-only changes and externally removed overlays."
+  (when (or force
+            (not (eql appkit-media--inline-prune-tick
+                      (buffer-chars-modified-tick))))
+    (setq appkit-media--inline-prune-tick (buffer-chars-modified-tick))
+    (dolist (host appkit-media--inline-hosts)
+      (unless (appkit-media-inline-host-live-p host)
+        (appkit-media--inline-close host)))))
+
 (defun appkit-media--inline-before-change (start end)
-  "Remember hosts whose exact spans overlap a change at START..END.
-Character ticks distinguish row replacement from harmless property styling."
+  "Remember owned spans intersecting the pending buffer change."
+  (appkit-media--inline-prune)
   (setq appkit-media--inline-change
         (cons
          (buffer-chars-modified-tick)
          (if (< start end)
              (appkit-media--inline-hosts-in-region start end)
-           (when-let* ((host (get-text-property start 'appkit-media-inline-host)))
+           (when-let* ((host (appkit-media-inline-host-at-point start)))
              (when (cl-some
-                    (lambda (range)
-                      (and (< (car range) start) (< start (cdr range))))
-                    (appkit-media-inline-host-ranges host))
+                    (lambda (overlay)
+                      (and (< (overlay-start overlay) start)
+                           (< start (overlay-end overlay))))
+                    (appkit-media-inline-host-overlays host))
                (list host)))))))
 
 (defun appkit-media--inline-reap (&rest _ignored)
-  "Retire replaced text spans, but preserve hosts across property styling."
+  "Retire character replacements, preserving hosts across property styling."
   (let ((change appkit-media--inline-change))
     (setq appkit-media--inline-change nil)
     (dolist (host (cdr change))
       (when (or (/= (car change) (buffer-chars-modified-tick))
                 (not (appkit-media-inline-host-live-p host)))
-        (appkit-media--inline-close host)))))
+        (appkit-media--inline-close host))))
+  (setq appkit-media--inline-prune-tick (buffer-chars-modified-tick)))
 
 (defun appkit-media--inline-release-all ()
   "Retire all hosts before this buffer changes mode or dies."
@@ -174,62 +163,53 @@ Character ticks distinguish row replacement from harmless property styling."
     (appkit-media--inline-close host)))
 
 (defun appkit-media--inline-canvas-p (host)
-  "Return non-nil if HOST can display a Canvas in a graphical window."
+  "Return non-nil if HOST's buffer has a Canvas-capable graphical window."
   (and (image-type-available-p 'canvas)
        (cl-some (lambda (window) (display-graphic-p (window-frame window)))
                 (get-buffer-window-list
                  (appkit-media-inline-host-buffer host) nil t))))
 
 (defun appkit-media--inline-show-canvas (host _inline canvas)
-  "Replace HOST's image spans with CANVAS, preserving unsliced image height."
+  "Display CANVAS through HOST's overlays without changing source text."
   (when (appkit-media-inline-host-live-p host)
     (with-current-buffer (appkit-media-inline-host-buffer host)
-      (let* ((ranges (appkit-media-inline-host-ranges host))
-             (count (length ranges))
-             (inhibit-read-only t))
-        (with-silent-modifications
-          (if (= count 1)
-              (put-text-property (caar ranges) (cdar ranges) 'display canvas)
-            (plist-put (cdr canvas) :appkit-media-nslices count)
-            (let ((rows (appkit-media-image-slice-rows canvas)))
-              (unless (= count (length rows))
-                (error "Inline Canvas changed its image slice geometry"))
-              (cl-mapc (lambda (range row)
-                         (put-text-property
-                          (car range) (cdr range) 'display
-                          (get-text-property 0 'display row)))
-                       ranges rows))))))))
+      (dolist (overlay (appkit-media-inline-host-overlays host))
+        (let ((display (get-text-property (overlay-start overlay) 'display)))
+          (overlay-put
+           overlay 'display
+           (list (if (eq (car-safe (car-safe display)) 'slice)
+                     (car display)
+                   '(slice 0 0 1.0 1.0))
+                 canvas)))))))
 
 (defun appkit-media--inline-ensure (host)
-  "Create HOST's video.el lease lazily, or return the existing one."
+  "Create HOST's video.el lease lazily, or return its existing lease."
   (or (and (appkit-media-inline-host-inline host)
            (not (appkit-media-video-inline-closed-p
                  (appkit-media-inline-host-inline host)))
            (appkit-media-inline-host-inline host))
       (with-current-buffer (appkit-media-inline-host-buffer host)
-        (let* ((kind (appkit-media-inline-host-kind host))
-               (poster (appkit-media-inline-host-poster host))
-               ;; Slice insertion has already resolved cached Nch geometry.
-               ;; Measure that displayed image, not the unscaled source poster.
+        (let* ((plan (appkit-media-inline-host-plan host))
+               (kind (appkit-media--playback-kind plan))
+               (poster (appkit-media--occurrence-image
+                        (appkit-media-inline-host-occurrence host)))
+               (start (overlay-start (car (appkit-media-inline-host-overlays host))))
                (size (ignore-errors
                        (image-size
                         (appkit-media--display-image-spec
-                         (get-text-property
-                          (caar (appkit-media-inline-host-ranges host))
-                          'display))
-                        t)))
+                         (get-text-property start 'display)) t)))
                (session
                 (appkit-media-video-session-create
                  (appkit-media-inline-host-resource host)
-                 (appkit-media-inline-host-label host)
-                 :kind kind
-                 :owner (appkit-media-inline-host-owner host)
-                 :cache-key (appkit-media-inline-host-cache-key host)
-                 :cache-directory (appkit-media-inline-host-cache-directory host)
+                 (or (appkit-media--playback-label plan) "media")
+                 :kind kind :owner (appkit-media-inline-host-owner host)
+                 :cache-key (appkit-media--playback-cache-key plan)
+                 :cache-directory (appkit-media--playback-cache-directory plan)
                  :cache-policy (if (eq kind 'image) 'none 'automatic)
                  :muted (eq kind 'image)
                  :animation-loop-policy
-                 (appkit-media-inline-host-animation-loop-policy host)))
+                 (or (appkit-media--playback-animation-loop-policy plan)
+                     video-animation-loop-policy)))
                inline opened)
           (unwind-protect
               (progn
@@ -238,140 +218,144 @@ Character ticks distinguish row replacement from harmless property styling."
                        session (max 1 (round (or (car-safe size) 320)))
                        (max 1 (round
                                (or (cdr-safe size)
-                                   (* (length (appkit-media-inline-host-ranges host))
+                                   (* (length (appkit-media-inline-host-overlays host))
                                       (appkit-media--char-pixel-height)))))
-                       :poster poster
-                       :visible-function
-                       (lambda (_inline)
-                         (appkit-media--inline-visible-p host))
-                       :alive-function
-                       (lambda (_inline)
-                         (appkit-media-inline-host-live-p host))
-                       :anchor (copy-marker
-                                (caar (appkit-media-inline-host-ranges host)) t)
+                       :poster poster :fit (appkit-media--playback-fit plan)
+                       :controls-p (appkit-media--inline-toggle-p host)
+                       :visible-function (lambda (_) (appkit-media--inline-visible-p host))
+                       :alive-function (lambda (_) (appkit-media-inline-host-live-p host))
+                       :anchor (car (appkit-media-inline-host-overlays host))
                        :activate-function
                        (lambda (surface canvas)
                          (appkit-media--inline-show-canvas host surface canvas))
                        :close-function
                        (lambda (surface)
-                         (when (eq surface
-                                   (appkit-media-inline-host-inline host))
+                         (when (eq surface (appkit-media-inline-host-inline host))
                            (setf (appkit-media-inline-host-inline host) nil)
-                           (appkit-media--inline-show-canvas
-                            host surface
-                            (appkit-media-inline-host-poster host))))))
+                           (appkit-media--inline-show-canvas host surface poster)))))
                 (setf (appkit-media-inline-host-inline host) inline)
-                (when-let* ((map (appkit-media-inline-host-map host)))
-                  (appkit-media-video-inline-bind-controls inline map))
+                (when (appkit-media--inline-toggle-p host)
+                  (appkit-media-video-inline-bind-controls
+                   inline (appkit-media-inline-host-map host)))
                 (setq opened t)
                 inline)
             (unless opened
               (when inline (appkit-media-video-inline-close inline))
               (appkit-media-video-session-close session)))))))
 
+(defun appkit-media--inline-toggle-p (host)
+  "Whether HOST's normal action controls inline playback."
+  (let ((plan (appkit-media-inline-host-plan host)))
+    (and (eq (appkit-media--playback-interaction plan) 'media)
+         (or (eq (appkit-media--playback-kind plan) 'video)
+             (appkit-media-inline-host-animated host)))))
+
 (defun appkit-media--inline-use (host presentation)
   "Activate HOST with resolved resource using PRESENTATION."
-  (if (not (appkit-media-inline-host-resource host))
-      (unless (appkit-media-inline-host-pending host)
-        (let ((resolver (appkit-media-inline-host-resolve-function host))
-              (request (cons nil nil)))
-          (unless resolver
-            (user-error "Inline media resource is not available"))
-          (setf (appkit-media-inline-host-pending host) request)
-          (condition-case err
-              (let ((cancel
-                     (funcall
-                      resolver
-                      (lambda (resource)
-                        (when (and (eq request
-                                       (appkit-media-inline-host-pending host))
-                                   (appkit-media-inline-host-live-p host))
-                          (setf (appkit-media-inline-host-pending host) nil
-                                (appkit-media-inline-host-cancel host) nil
-                                (appkit-media-inline-host-resource host)
-                                (appkit-media-resource-normalize resource))
-                          (appkit-media-inline-host-activate host presentation)))
-                      (lambda (reason)
-                        (when (and (eq request
-                                       (appkit-media-inline-host-pending host))
-                                   (appkit-media-inline-host-live-p host))
-                          (setf (appkit-media-inline-host-pending host) nil
-                                (appkit-media-inline-host-cancel host) nil)
-                          (message "%s: %s"
-                                   (appkit-media-inline-host-label host)
-                                   reason))))))
-                ;; Synchronous resolution may already have completed.
-                (if (eq request (appkit-media-inline-host-pending host))
-                    (setf (appkit-media-inline-host-cancel host) cancel)
-                  (when (and cancel
-                             (not (appkit-media-inline-host-live-p host)))
-                    (funcall cancel))))
-            ((error quit)
-             (setf (appkit-media-inline-host-pending host) nil)
-             (signal (car err) (cdr err))))))
-    (let ((inline (appkit-media--inline-ensure host)))
-      (pcase presentation
-        ('dedicated
-         (appkit-media-present-video-inline
-          inline (appkit-media-inline-host-label host)
-          :owner (appkit-media-inline-host-owner host)))
-        ('frame
-         (appkit-media-present-video-inline
-          inline (appkit-media-inline-host-label host)
-          :owner (appkit-media-inline-host-owner host)
-          :display-function #'video-display-buffer-other-frame))
-        (_
-         (if (and (appkit-media-inline-host-toggle-p host)
-                  (video-inline-target
-                   (appkit-media-video-inline-inline inline)))
-             (appkit-media-video-inline-toggle inline)
-           (appkit-media-video-inline-play inline)))))))
+  (let ((plan (appkit-media-inline-host-plan host)))
+    (if (not (appkit-media-inline-host-resource host))
+        (unless (appkit-media-inline-host-pending host)
+          (let ((resolver (appkit-media--playback-resolve-function plan))
+                (request (cons nil nil)))
+            (unless resolver
+              (user-error "Inline media resource is not available"))
+            (setf (appkit-media-inline-host-pending host) request)
+            (condition-case err
+                (let ((cancel
+                       (funcall
+                        resolver
+                        (lambda (resource)
+                          (when (and (eq request (appkit-media-inline-host-pending host))
+                                     (appkit-media-inline-host-live-p host))
+                            (setf (appkit-media-inline-host-pending host) nil
+                                  (appkit-media-inline-host-cancel host) nil
+                                  (appkit-media-inline-host-resource host)
+                                  (appkit-media-resource-normalize resource))
+                            (when (eq (appkit-media--playback-animation plan) 'auto)
+                              (when-let* ((file (alist-get
+                                                'file
+                                                (appkit-media-inline-host-resource host))))
+                                (setf (appkit-media-inline-host-animated host)
+                                      (appkit-media--file-animated-p file))))
+                            (appkit-media--inline-use host presentation)))
+                        (lambda (reason)
+                          (when (and (eq request (appkit-media-inline-host-pending host))
+                                     (appkit-media-inline-host-live-p host))
+                            (setf (appkit-media-inline-host-pending host) nil
+                                  (appkit-media-inline-host-cancel host) nil)
+                            (message "%s: %s"
+                                     (or (appkit-media--playback-label plan) "media")
+                                     reason))))))
+                  ;; Resolution may settle or retire its host synchronously.
+                  (if (eq request (appkit-media-inline-host-pending host))
+                      (setf (appkit-media-inline-host-cancel host) cancel)
+                    (when (and cancel (not (appkit-media-inline-host-live-p host)))
+                      (funcall cancel))))
+              ((error quit)
+               (setf (appkit-media-inline-host-pending host) nil)
+               (signal (car err) (cdr err))))))
+      (let ((inline (appkit-media--inline-ensure host)))
+        (pcase (or presentation
+                   (unless (appkit-media--inline-toggle-p host) 'dedicated))
+          ('dedicated
+           (appkit-media-present-video-inline
+            inline (appkit-media--playback-label plan)
+            :owner (appkit-media-inline-host-owner host)))
+          ('frame
+           (appkit-media-present-video-inline
+            inline (appkit-media--playback-label plan)
+            :owner (appkit-media-inline-host-owner host)
+            :display-function #'video-display-buffer-other-frame))
+          (_
+           (if (and (appkit-media--inline-toggle-p host)
+                    (video-inline-target (appkit-media-video-inline-inline inline)))
+               (appkit-media-video-inline-toggle inline)
+             (appkit-media-video-inline-play inline))))))))
 
 (defun appkit-media-inline-host-activate (host &optional presentation)
-  "Activate HOST inline, or promote its exact session to PRESENTATION.
-PRESENTATION is nil, `dedicated', or `frame'.  Static images whose
-TOGGLE-P is nil open a dedicated viewer on ordinary activation."
+  "Activate HOST using its interaction policy, or promote to PRESENTATION.
+PRESENTATION is nil, `dedicated', or `frame'.  A media interaction toggles
+animated images and videos; still images and open interactions use a viewer."
   (unless (appkit-media-inline-host-live-p host)
     (user-error "Inline media belongs to a retired buffer span"))
   (unless (memq presentation '(nil dedicated frame))
     (error "Unknown inline media presentation: %S" presentation))
   (unless (appkit-media--inline-canvas-p host)
     (user-error "Canvas inline media is unavailable"))
-  (appkit-media--inline-use
-   host (or presentation
-            (unless (appkit-media-inline-host-toggle-p host) 'dedicated))))
+  (appkit-media--inline-use host presentation))
 
 (defun appkit-media--inline-start-visible (&rest _ignored)
-  "Start Canvas-capable, visible images after committed buffer changes."
-  ;; Inspect displayed text, not every media occurrence in retained history.
-  ;; In particular, typing in the composer must not validate all image slices.
+  "Start eligible visible images after committed buffer changes."
+  (appkit-media--inline-prune)
+  ;; Inspect visible overlays, not every image retained in chat history.
   (let (hosts)
     (when (image-type-available-p 'canvas)
       (dolist (window (get-buffer-window-list (current-buffer) nil t))
         (when (display-graphic-p (window-frame window))
           (dolist (host (appkit-media--inline-hosts-in-region
-                         (window-start window)
-                         (window-end window t)))
-            (unless (memq host hosts)
-              (push host hosts))))))
+                         (window-start window) (window-end window t)))
+            (unless (memq host hosts) (push host hosts))))))
     (dolist (host hosts)
-      (cond
-       ((not (appkit-media-inline-host-live-p host))
-        (appkit-media--inline-close host))
-       ((and (eq (appkit-media-inline-host-kind host) 'image)
-             (appkit-media-inline-host-autoplay host)
-             (appkit-media-inline-host-resource host)
-             (not (appkit-media-inline-host-inline host))
-             (appkit-media--inline-visible-p host))
-        (condition-case err
-            (appkit-media--inline-use host nil)
-          (error
-           (setf (appkit-media-inline-host-autoplay host) nil)
-           (message "Inline media unavailable: %s"
-                    (error-message-string err)))))))))
+      (let ((plan (appkit-media-inline-host-plan host)))
+        (cond
+         ((not (appkit-media-inline-host-live-p host))
+          (appkit-media--inline-close host))
+         ((and (eq (appkit-media--playback-kind plan) 'image)
+               appkit-media-inline-animation-enabled
+               (appkit-media--playback-autoplay plan)
+               (appkit-media-inline-host-animated host)
+               (not (appkit-media-inline-host-autoplay-disabled-p host))
+               (appkit-media-inline-host-resource host)
+               (not (appkit-media-inline-host-inline host))
+               (appkit-media--inline-visible-p host))
+          (condition-case err
+              (appkit-media--inline-use host 'inline)
+            (error
+             (setf (appkit-media-inline-host-autoplay-disabled-p host) t)
+             (message "Inline media unavailable: %s" (error-message-string err))))))))))
 
 (defun appkit-media--inline-schedule-start ()
-  "Discover visible images after this render, even without another command."
+  "Start visible images after the renderer yields, coalescing insertions."
   (unless (timerp appkit-media--inline-start-timer)
     (let ((buffer (current-buffer)))
       (setq appkit-media--inline-start-timer
@@ -383,119 +367,152 @@ TOGGLE-P is nil open a dedicated viewer on ordinary activation."
                    (setq appkit-media--inline-start-timer nil)
                    (appkit-media--inline-start-visible)))))))))
 
-(cl-defun appkit-media-inline-host-attach
-    (start end poster resource &key (kind 'image) owner label cache-key
-           cache-directory autoplay toggle-p resolve-function (controls-p t)
-           (animation-loop-policy video-animation-loop-policy))
-  "Own all image display spans in START..END; return a host or nil.
-Call after inserting POSTER, before or after line-prefix properties change.
-POSTER must be an immutable static image spec; use
-`appkit-media-inline-static-poster' to copy an animated source first.
-RESOURCE is a canonical Appkit media alist or nil; KIND is `image' or
-`video'.  OWNER, if non-nil, must be the exact live Appkit Surface.
-ANIMATION-LOOP-POLICY is captured on first activation; ordinary images use
-their file policy.  A host such as a repeating face may select `forever'.
-AUTOPLAY starts only visible Canvas-capable images after rendering or
-scrolling, never videos.  TOGGLE-P selects inline RET/click playback rather than a
-viewer.  CONTROLS-P nil leaves existing text actions and keymaps untouched, for
-decorative images such as emoji inside links or reaction buttons.
-RESOLVE-FUNCTION, if RESOURCE is nil, is invoked only on activation with
-(SUCCESS FAILURE).  SUCCESS receives a canonical resource alist;
-FAILURE receives a human-readable reason string.  It returns a cancellation
-function or nil; this function is called on retirement while pending.
-Callbacks after retirement or replacement are ignored."
-  (unless (memq kind '(image video))
-    (error "Inline media kind must be image or video"))
-  (unless (eq (car-safe poster) 'image)
-    (error "Inline media poster must be an image spec"))
+(defun appkit-media--inline-attach (ranges occurrence owner)
+  "Create overlay-owned playback for exact RANGES of OCCURRENCE under OWNER."
+  (let* ((poster (appkit-media--occurrence-image occurrence))
+         (plan (plist-get (cdr poster) :appkit-media-playback))
+         (interaction (appkit-media--playback-interaction plan))
+         (resource (appkit-media--playback-resource plan))
+         (host (appkit-media--inline-host-create
+                :buffer (current-buffer) :owner owner :occurrence occurrence
+                :plan plan
+                :resource (and resource (appkit-media-resource-normalize resource))
+                :animated (appkit-media--playback-animated-p plan)))
+         (map (and interaction (make-sparse-keymap)))
+         completed)
+    (unwind-protect
+        (progn
+          (setf (appkit-media-inline-host-map host) map)
+          (when map
+            (dolist (key '("RET" "<return>" "<mouse-1>"))
+              (define-key map (kbd key)
+                          (lambda () (interactive)
+                            (appkit-media-inline-host-activate host))))
+            (dolist (key '("C-RET" "C-<return>"))
+              (define-key map (kbd key)
+                          (lambda () (interactive)
+                            (appkit-media-inline-host-activate host 'dedicated))))
+            (define-key map (kbd "F")
+                        (lambda () (interactive)
+                          (appkit-media-inline-host-activate host 'frame)))
+            (when (eq interaction 'media)
+              (define-key map (kbd "m")
+                          (lambda () (interactive)
+                            (unless (and (appkit-media-inline-host-live-p host)
+                                         (appkit-media-inline-host-resource host))
+                              (user-error "Activate this media before using controls"))
+                            (appkit-media-video-inline-toggle-muted
+                             (appkit-media--inline-ensure host))))
+              (define-key map (kbd "L")
+                          (lambda () (interactive)
+                            (unless (and (appkit-media-inline-host-live-p host)
+                                         (appkit-media-inline-host-resource host))
+                              (user-error "Activate this media before using controls"))
+                            (appkit-media-video-inline-toggle-loop
+                             (appkit-media--inline-ensure host))))))
+          (dolist (range ranges)
+            (let* ((overlay (make-overlay (car range) (cdr range) nil t nil))
+                   (display (get-text-property (car range) 'display)))
+              (push overlay (appkit-media-inline-host-overlays host))
+              (overlay-put overlay 'evaporate t)
+              (overlay-put overlay 'appkit-media-inline-host host)
+              ;; Distinct overlay boundaries preserve adjacent copies of the
+              ;; same prepared string, even before a player has been created.
+              (overlay-put overlay 'display
+                           (list (if (eq (car-safe (car-safe display)) 'slice)
+                                     (car display)
+                                   '(slice 0 0 1.0 1.0))
+                                 poster))
+              (when map
+                (overlay-put overlay 'keymap map)
+                (overlay-put overlay 'mouse-face 'highlight)
+                (overlay-put overlay 'follow-link t)
+                (overlay-put overlay 'help-echo
+                             (if (appkit-media--inline-toggle-p host)
+                                 "RET: play/pause; C-RET: open viewer"
+                               "RET: open viewer")))))
+          (setf (appkit-media-inline-host-overlays host)
+                (nreverse (appkit-media-inline-host-overlays host)))
+          (push host appkit-media--inline-hosts)
+          (add-hook 'before-change-functions #'appkit-media--inline-before-change nil t)
+          (add-hook 'after-change-functions #'appkit-media--inline-reap nil t)
+          (add-hook 'post-command-hook #'appkit-media--inline-start-visible nil t)
+          (add-hook 'window-scroll-functions #'appkit-media--inline-start-visible nil t)
+          (add-hook 'window-configuration-change-hook
+                    #'appkit-media--inline-start-visible nil t)
+          (add-hook 'kill-buffer-hook #'appkit-media--inline-release-all nil t)
+          (add-hook 'change-major-mode-hook #'appkit-media--inline-release-all nil t)
+          (when owner
+            (setf (appkit-media-inline-host-owner-handle host)
+                  (appkit-register-handle
+                   owner 'function (lambda () (appkit-media--inline-close host)))))
+          (when (and (appkit-media--playback-autoplay plan)
+                     (appkit-media-inline-host-animated host))
+            (appkit-media--inline-schedule-start))
+          (setq completed t)
+          host)
+      (unless completed (appkit-media--inline-close host)))))
+
+(cl-defun appkit-media-inline-mount (start end &optional owner)
+  "Reconcile prepared media in START..END with buffer-owned overlays.
+OWNER defaults to the exact current Surface; otherwise the buffer owns media.
+During a Surface render, defer to its final commit boundary.  Mounting does not
+modify source text, display properties, undo history, or enclosing action maps.
+Each repeated insertion has independent runtime state; slices share one host.
+Return newly created hosts in order."
+  (setq owner (or owner (appkit-current-surface)))
+  (when (and owner (eq owner appkit-surface--rendering))
+    (cl-return-from appkit-media-inline-mount nil))
   (when (and owner
-             (or (not (appkit-surface-live-p owner))
-                 (not (eq owner (appkit-current-surface)))))
-    (error "Inline media owner must own this buffer"))
-  (when (and resolve-function (not (functionp resolve-function)))
-    (error "Inline media resolver must be callable"))
-  (let ((position start) ranges)
+             (not (and (eq owner (appkit-current-surface))
+                       (appkit-surface-live-p owner))))
+    (error "Inline media owner must be the live Surface owning this buffer"))
+  (appkit-media--inline-prune (and (= start (point-min)) (= end (point-max))))
+  ;; Property-only replacement can make a previously interactive span inert.
+  ;; Retire it before deciding whether its replacement needs an overlay.
+  (dolist (host (appkit-media--inline-hosts-in-region start end))
+    (unless (appkit-media-inline-host-live-p host)
+      (appkit-media--inline-close host)))
+  (unless (text-property-not-all start end 'appkit-media-occurrence nil)
+    (cl-return-from appkit-media-inline-mount nil))
+  (let ((position start)
+        (groups (make-hash-table :test #'eq))
+        order hosts)
     (while (< position end)
-      (let* ((display (get-text-property position 'display))
-             (next (or (next-single-property-change position 'display nil end)
-                       end)))
-        (when (appkit-media--display-image-spec display)
-          (push (cons (copy-marker position t) (copy-marker next)) ranges))
+      (let* ((occurrence (get-text-property position 'appkit-media-occurrence))
+             (next (next-single-property-change
+                    position 'appkit-media-occurrence nil end))
+             (plan (and occurrence
+                        (plist-get (cdr (appkit-media--occurrence-image occurrence))
+                                   :appkit-media-playback))))
+        (when (and plan
+                   (or (appkit-media--playback-interaction plan)
+                       (and appkit-media-inline-animation-enabled
+                            (eq (appkit-media--playback-kind plan) 'image)
+                            (appkit-media--playback-autoplay plan)
+                            (appkit-media--playback-animated-p plan))))
+          (let ((span position))
+            (while (< span next)
+              (let ((limit (min (next-single-property-change span 'display nil next)
+                                (+ span (appkit-media--occurrence-span-length occurrence)))))
+                (when (and (not (appkit-media-inline-host-at-point span))
+                           (appkit-media--display-image-spec
+                            (get-text-property span 'display)))
+                  (let ((group (gethash occurrence groups)))
+                    (when (or (null group)
+                              (= (length (cdr group))
+                                 (appkit-media--occurrence-slices occurrence)))
+                      (setq group (list occurrence))
+                      (puthash occurrence group groups)
+                      (push group order))
+                    (push (cons span limit) (cdr group))))
+                (setq span limit)))))
         (setq position next)))
-    (when ranges
-      (setq ranges (nreverse ranges))
-      (let* ((host (appkit-media--inline-host-create
-                    :buffer (current-buffer) :ranges ranges
-                    :token (cons 'appkit-inline nil) :owner owner :kind kind
-                    :resource (and resource
-                                   (appkit-media-resource-normalize resource))
-                    :poster (appkit-media-inline-static-poster poster)
-                    :label (or label "media") :cache-key cache-key
-                    :cache-directory cache-directory
-                    :autoplay (and autoplay (eq kind 'image))
-                    :toggle-p (or (eq kind 'video) toggle-p)
-                    :animation-loop-policy animation-loop-policy
-                    :resolve-function resolve-function))
-             (map (and controls-p (make-sparse-keymap))))
-        (setf (appkit-media-inline-host-map host) map)
-        (when map
-          (dolist (key '("RET" "<return>" "<mouse-1>"))
-            (define-key map (kbd key)
-                        (lambda () (interactive)
-                          (appkit-media-inline-host-activate host))))
-          (dolist (key '("C-RET" "C-<return>"))
-            (define-key map (kbd key)
-                        (lambda () (interactive)
-                          (appkit-media-inline-host-activate host 'dedicated))))
-          (define-key map (kbd "F")
-                      (lambda () (interactive)
-                        (appkit-media-inline-host-activate host 'frame)))
-          (define-key map (kbd "m")
-                      (lambda () (interactive)
-                        (unless (and (appkit-media-inline-host-live-p host)
-                                     (appkit-media-inline-host-resource host))
-                          (user-error "Activate this media before using controls"))
-                        (appkit-media-video-inline-toggle-muted
-                         (appkit-media--inline-ensure host))))
-          (define-key map (kbd "L")
-                      (lambda () (interactive)
-                        (unless (and (appkit-media-inline-host-live-p host)
-                                     (appkit-media-inline-host-resource host))
-                          (user-error "Activate this media before using controls"))
-                        (appkit-media-video-inline-toggle-loop
-                         (appkit-media--inline-ensure host)))))
-        (dolist (range ranges)
-          (add-text-properties
-           (car range) (cdr range)
-           (nconc
-            (list 'appkit-media-inline-token (appkit-media-inline-host-token host)
-                  'appkit-media-inline-host host)
-            (when map
-              (list 'keymap map
-                    'help-echo (if (eq kind 'video)
-                                   "RET: play/pause; C-RET: view video"
-                                 "RET: open or replay; C-RET: view image")
-                    'mouse-face 'highlight 'follow-link t)))))
-        (push host appkit-media--inline-hosts)
-        (add-hook 'before-change-functions
-                  #'appkit-media--inline-before-change nil t)
-        (add-hook 'after-change-functions #'appkit-media--inline-reap nil t)
-        (add-hook 'post-command-hook #'appkit-media--inline-start-visible nil t)
-        (add-hook 'window-scroll-functions
-                  #'appkit-media--inline-start-visible nil t)
-        (add-hook 'window-configuration-change-hook
-                  #'appkit-media--inline-start-visible nil t)
-        (add-hook 'kill-buffer-hook #'appkit-media--inline-release-all nil t)
-        (add-hook 'change-major-mode-hook
-                  #'appkit-media--inline-release-all nil t)
-        (when owner
-          (setf (appkit-media-inline-host-owner-handle host)
-                (appkit-register-handle
-                 owner 'function
-                 (lambda () (appkit-media--inline-close host)))))
-        (when (appkit-media-inline-host-autoplay host)
-          (appkit-media--inline-schedule-start))
-        host))))
+    (dolist (group (nreverse order))
+      (push (appkit-media--inline-attach
+             (nreverse (cdr group)) (car group) owner)
+            hosts))
+    (nreverse hosts)))
 
 (provide 'appkit-media-inline)
 ;;; appkit-media-inline.el ends here
