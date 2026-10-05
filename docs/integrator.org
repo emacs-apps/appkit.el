@@ -252,8 +252,8 @@ Use ~appkit-media-image-display-string~ for inline image occurrences.  Each
 occurrence has its own full-image display slice while retaining the source
 image resource, so adjacent identical images remain separate and Canvas pixels
 and live updates remain intact.  Treat the ~display~ property as a display
-specification, not necessarily a bare image descriptor.  Animated image.el
-playback state remains occurrence-owned.
+specification, not necessarily a bare image descriptor.  Preparing strings is
+inert; insertion boundaries mount independently owned video.el occurrences.
 
 ** Discussion
 
@@ -344,10 +344,14 @@ image and file transfers, byte-level image cache finalization, lifecycle-bound
 video sessions and presentation surfaces, and protocol-restricted preview and
 audio-player processes.
 
+Normal renderers prepare source-backed images, not players.
+~appkit-media-preview-image-from-file~ and
+~appkit-media-one-line-preview-image-from-file~ retain the original local
+resource with passive interaction.  ~appkit-media-animated-image-p~ reports
+source capability independently of the autoplay preference.  Local GIF, APNG,
+WebP, and Lottie capability is determined centrally from content, including
+extensionless cache files.  There is no separate image.el animation lifecycle.
 Frame-specific image capability queries do not select the frame or move point.
-~appkit-media-animated-image-p~ reports source animation capability independently
-of the size/duration limits on legacy Emacs image-animation playback.  Canvas
-hosts use that capability to distinguish animated sources from static previews.
 
 A media attachment view is one item's preview, label, description, transfer
 state, and actions.  It is presentation, not the readable or displayable media
@@ -392,39 +396,82 @@ Closing either surface does not interrupt the other; video.el closes the player
 after its last inline or dedicated lease disappears.  A client's optional
 ~:close-function~ runs exactly once after video.el retires the inline surface.
 
-Applications rendering an image poster into a buffer can delegate its full
-inline lifecycle to ~appkit-media-inline-host-attach~.  Call it after inserting
-the poster, before or after card/context/line-prefix property writes.  Text
-replacement retires the host; styling preserves it.  Pass START, END, an
-immutable static POSTER, a canonical Appkit RESOURCE or nil, and
-~:kind image~ or ~:kind video~.  Use ~appkit-media-inline-static-poster~ to
-copy an animated GIF descriptor without its Appkit animation flag.  Attach
-returns nil if no image display spans exist.  ~:owner~ is the exact live
-Generated Surface; deletion, replacement, mode change, buffer death, or
-Surface retirement cancels work and releases the inline video.el lease.
-~appkit-media-inline-host-live-p~ and ~appkit-media-inline-host-at-point~
-identify a still-owned occurrence; ~appkit-media-inline-host-activate~ promotes
-the same session with nil (inline), ~dedicated~, or ~frame~ presentation.
-~:autoplay~ starts visible Canvas-capable images only after the buffer has
-committed; videos never autoplay.  ~:toggle-p~ makes RET/click toggle inline
-playback rather than open the image in a viewer.  When RESOURCE is nil,
-~:resolve-function~ receives (SUCCESS FAILURE) only on user activation;
-SUCCESS accepts a canonical resource alist and FAILURE a human-readable
-reason string.  The resolver returns a cancellation function or nil; it is
-called while pending if the host retires.  Stale callbacks cannot start media.
-Initial display and autoplay do not reveal transport controls.  The inline
-host supplies its actual image-span position for background resolution, so
-transparent images respect message faces and buffer-local face remapping even
-when activation runs while point is elsewhere.
+Use ~appkit-media-image-with-resource~ when a poster represents a different
+original resource, needs media controls, or must resolve an original on demand.
+It returns an immutable poster copy and replaces any previous playback plan;
+it does not acquire resources, register owners, or start playback.  RESOURCE
+is a canonical resource alist or nil.  ~:kind~ is ~image~ or ~video~.
+Interaction is explicit:
 
-Decorative emoji use ~:controls-p nil~ so playback does not replace a surrounding
-link or reaction button's keymap and actions.  One-line preview helpers create
-posters, not video.el players; attach the original animated resource to its
-inserted span to obtain Canvas playback and the same ownership lifecycle.
+- ~:interaction nil~ preserves enclosing links, navigation, and reaction
+  buttons.  This is the default of source-file preview factories.
+- ~:interaction 'media~ supplies RET/click to play/pause animated images and
+  videos, or open a still image in the viewer.  This is the default of
+  ~appkit-media-image-with-resource~.
+- ~:interaction 'open~ always opens the viewer.
+
+~:autoplay~ permits visible animated images to start after insertion when
+~appkit-media-inline-animation-enabled~ and Canvas are available.  It never
+autoplays videos or reveals transport controls.  Static passive posters need
+no runtime host.  ~:animated 'auto~ uses local content or known poster
+capability; use ~:animated t~ for protocol-semantic animated images such as
+GIFV backed by MP4.  Disabling autoplay does not change the acquired resource.
+~:animation-loop-policy~ accepts ~file~, ~forever~, or ~once~; nil inherits
+~video-animation-loop-policy~ at activation.  ~:fit~ controls the live viewport;
+one-line center-cropped previews use ~cover~, ordinary previews ~contain~.
+
+When RESOURCE is nil, ~:resolve-function~ receives (SUCCESS FAILURE) on
+activation.  SUCCESS accepts a canonical resource alist; FAILURE accepts a
+reason string.  Return a cancellation function or nil.  Retirement cancels
+pending resolution, and late callbacks cannot resurrect the occurrence.
+The resolved local source supplies animation capability.  Clients retain
+authority over protocol acquisition, account credentials, grants, decryption,
+and concealed-content policy; Appkit must not bypass these with a poster URL.
+
+Display the prepared image with the image-string or slice helpers.
+Projection rows and header/footer frames, directories, discussion entries,
+reaction lines, media cards, one-line presentation rows, and chatbuf insertion
+mount prepared occurrences automatically after their final property writes.
+For arbitrary buffer insertion, call ~appkit-media-inline-mount~:
+
+#+begin_src emacs-lisp
+(let* ((image (appkit-media-image-with-resource
+               poster original-resource :interaction 'media))
+       (start (point)))
+  (insert (appkit-media-image-display-string image "[image]"))
+  (appkit-media-inline-mount start (point)))
+#+end_src
+
+Mounting is idempotent.  Each insertion, including repeated insertion of the
+same prepared string, has independent runtime state; all slices of one image
+share one host.  The owner defaults to the exact current Surface, or the
+buffer outside a Surface.  Initial rendering mounts after the Surface becomes
+ready, without weakening its ownership fence.  Styling preserves a host;
+text replacement, silent EWOC deletion, mode change, buffer death, or owner
+retirement releases its lease.  Clients do not scan for their own emoji hosts.
+
+~appkit-media-inline-host-at-point~ and ~appkit-media-inline-host-live-p~
+identify a still-owned occurrence.  ~appkit-media-inline-host-activate~ with
+nil follows its interaction policy; ~dedicated~ or ~frame~ promotes the exact
+session.  Passive autoplay never opens a viewer or replaces surrounding keys.
+Before retaining a freshly copied rich string, call
+~appkit-media-inline-source-text~ to restore its prepared posters and remove
+runtime handles and media-owned keymaps.  Chatbuf source snapshots and the
+shared copy filter already do this; copying never closes the original host.
+
+Completion affixations, header-line strings, and display-only prefixes are not
+buffer insertion boundaries and remain posters.  Circular avatars, inset
+crops, composite scenes, and navigation covers also remain static unless their
+owner deliberately supplies an appropriate playback plan.  A composite or
+live/danmaku renderer can keep the lower-level session/Canvas APIs; it must not
+replace an entire scene with one item's uncropped source.
+
+~appkit-media-start-video-preview~ extracts only a static JPG.  Playback uses
+the original resource, not a generated GIF or bounded preview movie.
 
 Inline Canvas width and height are measured from the inserted image display,
 after slice normalization, not from the cached POSTER's unscaled ~Nch~ size.
-Rebuild the rows and reattach after text scaling so both dimensions follow
+Rebuild the rows and remount after text scaling so both dimensions follow
 the new line height.  Unsliced, pixel-sized posters keep their explicit size.
 
 Cached static Canvas posters remain immutable during slice normalization.
@@ -437,7 +484,7 @@ For a host-owned Canvas, supply its existing display marker as ~:anchor~,
 alongside ~:visible-function~, ~:alive-function~, and ~:activate-function~.
 The marker identifies the buffer and occurrence; video.el resolves its
 background automatically, without a host color callback.  Standard
-~appkit-media-inline-host-attach~ already knows its spans and requires no
+~appkit-media-inline-mount~ already knows its spans and requires no
 additional placement or color arguments.
 Use ~video-canvas-create~ for a standalone Canvas.  Resolve its static drawing
 background with ~video-background-color~ at the scene's display marker and
@@ -720,12 +767,36 @@ Presentation and interaction helpers retain their focused namespaces:
 
 * Development
 
+Run from the monorepo root with source directories from the existing package
+registry.  ~dev-with-source-loads~ prevents stale project bytecode from hiding
+source changes; no package-manager cache is used.  Initialize dependencies
+before the ERT interaction guard:
+
 #+begin_src sh
-eask recompile
-scripts/eask-ert-brief test/*.el
+systemd-run --user --wait --pipe \
+  -p "WorkingDirectory=$PWD" -p MemoryMax=768M -p MemorySwapMax=0 \
+  -p RuntimeMaxSec=120s -p TasksMax=32 \
+  emacs -Q --batch -L emacs-dev -l dev --eval '
+(let* ((repository (expand-file-name "."))
+       (directories
+        (cl-loop for (_ . entry) in dev-jjosh-package-registry
+                 append
+                 (let ((root (expand-file-name (plist-get entry :path)
+                                               repository)))
+                   (mapcar (lambda (path) (expand-file-name path root))
+                           (plist-get entry :load-paths))))))
+  (dev-with-source-loads directories
+    (require (quote appkit))
+    (require (quote org))
+    (require (quote notifications))
+    (let ((result
+           (dev-run-test-files
+            (directory-files "appkit-apps/appkit.el/test" t "-test\\.el$"))))
+      (prin1 result)
+      (kill-emacs (if (zerop (plist-get result :unexpected)) 0 1)))))'
 #+end_src
 
-The brief runner recompiles immediately before testing, preserves
-compiler diagnostics or ERT failure backtraces, and forwards its
-arguments to ~eask test ert~.  Sibling clients can invoke it from
-their own package directory.
+Replace the test-file list for a client package and preload that client before
+the guard.  Use a separate graphical Emacs for Canvas geometry, actual native
+playback, and input interaction; skipped batch tests are not graphical proof.
+Never run account-resetting client suites in a logged-in daily session.
