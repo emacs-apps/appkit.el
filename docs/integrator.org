@@ -417,6 +417,11 @@ host supplies its actual image-span position for background resolution, so
 transparent images respect message faces and buffer-local face remapping even
 when activation runs while point is elsewhere.
 
+Decorative emoji use ~:controls-p nil~ so playback does not replace a surrounding
+link or reaction button's keymap and actions.  One-line preview helpers create
+posters, not video.el players; attach the original animated resource to its
+inserted span to obtain Canvas playback and the same ownership lifecycle.
+
 Inline Canvas width and height are measured from the inserted image display,
 after slice normalization, not from the cached POSTER's unscaled ~Nch~ size.
 Rebuild the rows and reattach after text scaling so both dimensions follow
@@ -580,8 +585,10 @@ pass.  A ~quiescent-transport~ Source delays replacement until its concrete
 cancellation capability reports physical quiescence.
 
 Projection rows may return ~appkit-resource-demand~ values bounded by the App
-coordinator's entry capacity, not an independent per-render limit.  The standard
-projection renderer commits their interests only after successful buffer
+coordinator's entry capacity, not an independent per-render limit.
+Include each demand's key in the row's ~dependencies~ as well as supplying
+~resource-demands~: acquisition interests do not populate the redraw index.
+The standard projection renderer commits interests only after successful buffer
 mutation.  Resource completion passes through the App coordinator and exact
 Surface incarnation, then redraws only retained dependency rows without calling
 the projector or advancing a domain revision.  Each owner coalesces completion

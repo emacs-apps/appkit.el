@@ -261,8 +261,8 @@ Character ticks distinguish row replacement from harmless property styling."
                             host surface
                             (appkit-media-inline-host-poster host))))))
                 (setf (appkit-media-inline-host-inline host) inline)
-                (appkit-media-video-inline-bind-controls
-                 inline (appkit-media-inline-host-map host))
+                (when-let* ((map (appkit-media-inline-host-map host)))
+                  (appkit-media-video-inline-bind-controls inline map))
                 (setq opened t)
                 inline)
             (unless opened
@@ -385,7 +385,7 @@ TOGGLE-P is nil open a dedicated viewer on ordinary activation."
 
 (cl-defun appkit-media-inline-host-attach
     (start end poster resource &key (kind 'image) owner label cache-key
-           cache-directory autoplay toggle-p resolve-function
+           cache-directory autoplay toggle-p resolve-function (controls-p t)
            (animation-loop-policy video-animation-loop-policy))
   "Own all image display spans in START..END; return a host or nil.
 Call after inserting POSTER, before or after line-prefix properties change.
@@ -397,8 +397,10 @@ ANIMATION-LOOP-POLICY is captured on first activation; ordinary images use
 their file policy.  A host such as a repeating face may select `forever'.
 AUTOPLAY starts only visible Canvas-capable images after rendering or
 scrolling, never videos.  TOGGLE-P selects inline RET/click playback rather than a
-viewer.  RESOLVE-FUNCTION, if RESOURCE is nil, is invoked only on activation
-with (SUCCESS FAILURE).  SUCCESS receives a canonical resource alist;
+viewer.  CONTROLS-P nil leaves existing text actions and keymaps untouched, for
+decorative images such as emoji inside links or reaction buttons.
+RESOLVE-FUNCTION, if RESOURCE is nil, is invoked only on activation with
+(SUCCESS FAILURE).  SUCCESS receives a canonical resource alist;
 FAILURE receives a human-readable reason string.  It returns a cancellation
 function or nil; this function is called on retirement while pending.
 Callbacks after retirement or replacement are ignored."
@@ -434,42 +436,46 @@ Callbacks after retirement or replacement are ignored."
                     :toggle-p (or (eq kind 'video) toggle-p)
                     :animation-loop-policy animation-loop-policy
                     :resolve-function resolve-function))
-             (map (make-sparse-keymap)))
+             (map (and controls-p (make-sparse-keymap))))
         (setf (appkit-media-inline-host-map host) map)
-        (dolist (key '("RET" "<return>" "<mouse-1>"))
-          (define-key map (kbd key)
+        (when map
+          (dolist (key '("RET" "<return>" "<mouse-1>"))
+            (define-key map (kbd key)
+                        (lambda () (interactive)
+                          (appkit-media-inline-host-activate host))))
+          (dolist (key '("C-RET" "C-<return>"))
+            (define-key map (kbd key)
+                        (lambda () (interactive)
+                          (appkit-media-inline-host-activate host 'dedicated))))
+          (define-key map (kbd "F")
                       (lambda () (interactive)
-                        (appkit-media-inline-host-activate host))))
-        (dolist (key '("C-RET" "C-<return>"))
-          (define-key map (kbd key)
+                        (appkit-media-inline-host-activate host 'frame)))
+          (define-key map (kbd "m")
                       (lambda () (interactive)
-                        (appkit-media-inline-host-activate host 'dedicated))))
-        (define-key map (kbd "F")
-                    (lambda () (interactive)
-                      (appkit-media-inline-host-activate host 'frame)))
-        (define-key map (kbd "m")
-                    (lambda () (interactive)
-                      (unless (and (appkit-media-inline-host-live-p host)
-                                   (appkit-media-inline-host-resource host))
-                        (user-error "Activate this media before using controls"))
-                      (appkit-media-video-inline-toggle-muted
-                       (appkit-media--inline-ensure host))))
-        (define-key map (kbd "L")
-                    (lambda () (interactive)
-                      (unless (and (appkit-media-inline-host-live-p host)
-                                   (appkit-media-inline-host-resource host))
-                        (user-error "Activate this media before using controls"))
-                      (appkit-media-video-inline-toggle-loop
-                       (appkit-media--inline-ensure host))))
+                        (unless (and (appkit-media-inline-host-live-p host)
+                                     (appkit-media-inline-host-resource host))
+                          (user-error "Activate this media before using controls"))
+                        (appkit-media-video-inline-toggle-muted
+                         (appkit-media--inline-ensure host))))
+          (define-key map (kbd "L")
+                      (lambda () (interactive)
+                        (unless (and (appkit-media-inline-host-live-p host)
+                                     (appkit-media-inline-host-resource host))
+                          (user-error "Activate this media before using controls"))
+                        (appkit-media-video-inline-toggle-loop
+                         (appkit-media--inline-ensure host)))))
         (dolist (range ranges)
           (add-text-properties
            (car range) (cdr range)
-           (list 'appkit-media-inline-token (appkit-media-inline-host-token host)
-                 'appkit-media-inline-host host 'keymap map
-                 'help-echo (if (eq kind 'video)
-                                "RET: play/pause; C-RET: view video"
-                              "RET: open or replay; C-RET: view image")
-                 'mouse-face 'highlight 'follow-link t)))
+           (nconc
+            (list 'appkit-media-inline-token (appkit-media-inline-host-token host)
+                  'appkit-media-inline-host host)
+            (when map
+              (list 'keymap map
+                    'help-echo (if (eq kind 'video)
+                                   "RET: play/pause; C-RET: view video"
+                                 "RET: open or replay; C-RET: view image")
+                    'mouse-face 'highlight 'follow-link t)))))
         (push host appkit-media--inline-hosts)
         (add-hook 'before-change-functions
                   #'appkit-media--inline-before-change nil t)

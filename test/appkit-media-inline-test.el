@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'appkit-media-inline)
+(require 'button)
 
 (defun appkit-media-inline-test--poster ()
   "Return a two-row inert poster for an inline host."
@@ -17,6 +18,23 @@
     (apply #'appkit-media-inline-host-attach
            start (point) poster '((url . "https://example.invalid/media"))
            :kind kind keys)))
+
+(ert-deftest appkit-media-inline-passive-emoji-preserves-reaction-button ()
+  (with-temp-buffer
+    (let ((poster (appkit-media-inline-test--poster))
+          (reactions 1))
+      (insert-text-button "[:wave: 1]"
+                          'action (lambda (_button) (cl-incf reactions)))
+      (put-text-property 2 8 'display poster)
+      (let ((host (appkit-media-inline-host-attach
+                   2 8 poster nil :controls-p nil)))
+        (goto-char 3)
+        (call-interactively (key-binding (kbd "RET")))
+        (should (= reactions 2))
+        (appkit-media--inline-show-canvas
+         host nil '(image :type canvas :width 80 :height 20))
+        (call-interactively (key-binding (kbd "RET")))
+        (should (= reactions 3))))))
 
 (ert-deftest appkit-media-inline-styling-preserves-host-until-text-replacement ()
   (with-temp-buffer
