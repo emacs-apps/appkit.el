@@ -559,6 +559,28 @@ authoritative.  Clients provide local-file acquisition, duration metadata,
 resource invalidation callbacks, and protocol identity; they do not own player
 processes or sentinels.
 
+** Composer attachment acquisition
+
+Reserve Telega's attachment meanings: ~C-c C-a~ chooses an extensible staging
+action, ~C-c C-f~ selects local media/files, and ~C-c C-v~ acquires clipboard
+files or image bytes.  None submits a message.  A universal prefix forces a
+document only when the provider has a distinct document kind; it must not
+silently become spoiler, visibility, or preview.
+
+Use ~appkit-media-read-file-name~ for readable regular files and
+~appkit-media-clipboard-source~ for acquisition without upload or staging.
+The latter returns ~(:files PATHS)~ or
+~(:mime-type MIME :suffix SUFFIX :data BYTES)~.  Local file URIs take precedence
+over PNG/JPEG/BMP bytes; invalid or nonlocal URI entries reject the entire list.
+Native selection and available Wayland, macOS, or X11 tools share this contract.
+The client owns any private staging file and retains it through captured sends;
+ordinary clipboard files remain user-owned.
+
+Clients without attachment upload leave these keys unbound.  Zulip uses
+~C-c C-p~ for preview and ~C-c C-o~ for message operations; Discourse uses
+~C-c #~ for topic tags and ~C-c C-p~ for preview.
+
+
 ** Completion
 
 Appkit owns token bounds, candidate metadata, CAPF and picker
@@ -805,6 +827,8 @@ systemd-run --user --wait --pipe \
                            (plist-get entry :load-paths))))))
   (dev-with-source-loads directories
     (require (quote appkit))
+    (add-to-list (quote load-path)
+                 (expand-file-name "appkit-apps/appkit.el/test" repository))
     (require (quote org))
     (require (quote notifications))
     (let ((result

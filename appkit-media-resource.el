@@ -19,6 +19,7 @@
 
 (require 'browse-url)
 (require 'cl-lib)
+(require 'dnd)
 (require 'plz)
 (require 'seq)
 (require 'subr-x)
@@ -202,6 +203,79 @@ graphical file dialogs do not enforce `read-file-name' acceptance functions."
     (unless (funcall acceptable-p file)
       (user-error "Media attachment is not a readable regular file: %s" file))
     file))
+
+(defun appkit-media-clipboard-available-p ()
+  "Whether this session can acquire clipboard files or image bytes."
+  (or (and (display-graphic-p) (fboundp 'gui-get-selection))
+      (and (getenv "WAYLAND_DISPLAY") (executable-find "wl-paste"))
+      (and (eq system-type 'darwin) (executable-find "pngpaste"))
+      (and (getenv "DISPLAY") (executable-find "xclip"))))
+
+(defun appkit-media--clipboard-command (program &rest arguments)
+  "Return binary stdout of PROGRAM with ARGUMENTS, or nil on failure."
+  (when program
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (let ((coding-system-for-read 'no-conversion))
+        (when (and (eq 0 (apply #'call-process program nil (list t nil) nil arguments))
+                   (> (buffer-size) 0))
+          (buffer-string))))))
+
+(defun appkit-media--clipboard-selection (type)
+  "Read clipboard TYPE through native selection or an available platform tool."
+  (or (and (display-graphic-p)
+           (condition-case nil
+               (let* ((selection-coding-system 'no-conversion)
+                      (value (gui-get-selection 'CLIPBOARD type)))
+                 (and (stringp value) (> (length value) 0) value))
+             (error nil)))
+      (and (getenv "WAYLAND_DISPLAY")
+           (appkit-media--clipboard-command
+            (executable-find "wl-paste") "--no-newline" "--type" (symbol-name type)))
+      (and (eq system-type 'darwin) (eq type 'image/png)
+           (appkit-media--clipboard-command (executable-find "pngpaste") "-"))
+      (and (getenv "DISPLAY")
+           (appkit-media--clipboard-command
+            (executable-find "xclip") "-selection" "clipboard"
+            "-t" (symbol-name type) "-o"))))
+
+(defun appkit-media--clipboard-file-paths (uri-list)
+  "Return local regular files from URI-LIST, rejecting unusable entries."
+  (let (paths)
+    (dolist (entry (split-string uri-list "[\r\n\0]" t))
+      (let ((uri (string-trim entry)))
+        (unless (or (string-empty-p uri) (string-prefix-p "#" uri))
+          (let ((path (if (string-prefix-p "file:" uri)
+                          (dnd-get-local-file-name uri)
+                        (and (file-name-absolute-p uri) uri))))
+            (unless (and path (not (file-remote-p path))
+                         (appkit-media-readable-file-p path))
+              (user-error "Clipboard attachment is not a readable local regular file: %s"
+                          uri))
+            (push (expand-file-name path) paths)))))
+    (nreverse paths)))
+
+(defun appkit-media-clipboard-source ()
+  "Acquire clipboard files or image bytes without staging or sending them.
+
+Return (:files PATHS) for local readable regular files, or
+(:mime-type MIME :suffix SUFFIX :data BYTES) for a PNG, JPEG or BMP.
+BYTES is unibyte.  File URI lists take precedence over images.
+Treat this result as immutable.  The caller owns any private temporary
+file it creates from BYTES and must retain it through captured sends;
+ordinary clipboard files remain user-owned."
+  (or (when-let* ((uris (appkit-media--clipboard-selection 'text/uri-list))
+                  ((stringp uris))
+                  (paths (appkit-media--clipboard-file-paths uris)))
+        (list :files paths))
+      (cl-loop
+       for (type mime suffix) in '((image/png "image/png" ".png")
+                                  (image/jpeg "image/jpeg" ".jpg")
+                                  (image/bmp "image/bmp" ".bmp"))
+       for bytes = (appkit-media--clipboard-selection type)
+       when (and (stringp bytes) (> (length bytes) 0))
+       return (list :mime-type mime :suffix suffix :data (string-as-unibyte bytes)))
+      (user-error "Clipboard has no local files or supported image")))
 
 (defun appkit-media-url-filename (url)
   "Extract a best-effort filename from URL."

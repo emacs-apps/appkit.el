@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'ert-x)
 (require 'cl-lib)
+(require 'url-util)
 (require 'appkit-media-resource)
 (require 'appkit-media-effect)
 (require 'appkit-test-helper)
@@ -98,6 +99,48 @@
           (should-not (appkit-media-file-present-p directory))
           (should-not (appkit-media-readable-file-p directory)))
       (delete-directory directory t))))
+
+(ert-deftest appkit-media-clipboard-rejects-nonlocal-and-incomplete-file-batches ()
+  (let* ((directory (make-temp-file "appkit-clipboard-" t))
+         (file (expand-file-name "图片 with spaces.png" directory))
+         (uri (concat "file://" (url-encode-url file))))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "user-owned"))
+          (should (equal (list file)
+                         (appkit-media--clipboard-file-paths
+                          (concat "# copied files\r\n" uri "\r\n"))))
+          (dolist (invalid (list (concat "file://foreign.invalid" file)
+                                 (concat "file://" directory)
+                                 (concat "file://" file ".missing")
+                                 "https://example.invalid/photo.png"))
+            (should-error
+             (appkit-media--clipboard-file-paths (concat uri "\n" invalid))
+             :type 'user-error))
+          (should (file-exists-p file)))
+      (delete-directory directory t))))
+
+(ert-deftest appkit-media-clipboard-prefers-files-and-preserves-image-bytes ()
+  (let ((file (make-temp-file "appkit-clipboard-user-"))
+        (bytes (unibyte-string 66 77 0 255 128 10)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'appkit-media--clipboard-selection)
+                     (lambda (type)
+                       (pcase type
+                         ('text/uri-list (concat "file://" file "\r\n"))
+                         (_ (ert-fail "File clipboard must precede image reads"))))))
+            (should (equal (list :files (list file))
+                           (appkit-media-clipboard-source))))
+          (cl-letf (((symbol-function 'appkit-media--clipboard-selection)
+                     (lambda (type) (and (eq type 'image/bmp) bytes))))
+            (let ((source (appkit-media-clipboard-source)))
+              (should (equal "image/bmp" (plist-get source :mime-type)))
+              (should (equal ".bmp" (plist-get source :suffix)))
+              (should-not (multibyte-string-p (plist-get source :data)))
+              (should (equal bytes (plist-get source :data)))))
+          (should (file-exists-p file)))
+      (delete-file file))))
 
 (ert-deftest appkit-media-file-reader-enforces-regular-file-at-both-boundaries ()
   (let* ((directory (make-temp-file "appkit-media-reader-" t))
