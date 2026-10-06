@@ -24,6 +24,7 @@
 (require 'appkit-chatbuf)
 (require 'appkit-core)
 (require 'appkit-ui)
+(require 'appkit-bindings)
 
 (require 'appkit-surface)
 
@@ -580,12 +581,13 @@ Navigation preserves the complete draft and its semantic generation."
     (user-error "No compose item at point")))
 
 (defvar appkit-chat-compose-timeline-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'appkit-chat-compose-edit-at-point)
-    (define-key map (kbd "e") #'appkit-chat-compose-edit-at-point)
-    (define-key map (kbd "d") #'appkit-chat-compose-drop-item)
-    map)
+  (make-sparse-keymap)
   "Keymap for generated compose draft rows.")
+
+(appkit-bindings-define 'appkit-chat-compose-timeline-mode-map 'read-only
+  'activate #'appkit-chat-compose-edit-at-point
+  'edit #'appkit-chat-compose-edit-at-point
+  'delete #'appkit-chat-compose-drop-item)
 
 (define-minor-mode appkit-chat-compose-timeline-mode
   "Enable keys on generated compose draft rows."

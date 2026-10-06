@@ -25,6 +25,7 @@
 (require 'appkit-ewoc)
 (require 'appkit-position)
 (require 'appkit-ui)
+(require 'appkit-bindings)
 
 (defconst appkit-directory-entry-roles
   '(section group item note spacer)
@@ -593,16 +594,19 @@ activation to remain independent from `appkit-directory-toggle-entry-fold'."
 (defvar appkit-directory-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
-    (define-key map (kbd "RET") #'appkit-directory-activate)
-    (define-key map (kbd "TAB") #'appkit-directory-tab-dwim)
-    (define-key map (kbd "<backtab>") #'appkit-directory-previous-item)
-    (define-key map (kbd "n") #'appkit-directory-next-item)
-    (define-key map (kbd "p") #'appkit-directory-previous-item)
     (define-key map (kbd "u") #'appkit-directory-next-unread)
-    (define-key map (kbd "q") #'quit-window)
     (define-key map [mouse-1] #'appkit-directory-mouse-activate)
     map)
   "Shared keymap for sectioned directory surfaces.")
+
+(appkit-bindings-define 'appkit-directory-mode-map 'read-only
+  'activate #'appkit-directory-activate
+  'next-button #'appkit-directory-tab-dwim
+  'previous-button #'appkit-directory-previous-item
+  'next-item #'appkit-directory-next-item
+  'previous-item #'appkit-directory-previous-item
+  'quit #'quit-window
+  'help #'describe-mode)
 
 (define-derived-mode appkit-directory-mode special-mode "Appkit-Directory"
   "Base mode for non-recursive sectioned directory surfaces."

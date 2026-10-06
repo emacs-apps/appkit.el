@@ -23,6 +23,7 @@
 (require 'cl-lib)
 (require 'appkit-directory)
 (require 'appkit-chatbuf)
+(require 'appkit-bindings)
 
 (declare-function evil-define-key* "evil-core"
                   (state keymap key def &rest bindings))
@@ -217,35 +218,19 @@ Do nothing until Evil is loaded or when STATE is nil."
         (when (apply #'derived-mode-p modes)
           (appkit-evil-normalize-keymaps))))))
 
-(defun appkit-evil-chatbuf-enter-input ()
-  "Focus the current Appkit chat composer and enter Evil insert state."
-  (interactive)
-  (unless (appkit-chatbuf-focus-input)
-    (user-error "Appkit chat buffer has no writable composer"))
-  (evil-insert-state))
 
 (defun appkit-evil-define-readonly-keys (keymap-symbol)
-  "Install standard read-only modal bindings in KEYMAP-SYMBOL.
-
-`q' and `ZZ' close the window, `ZQ' uses `evil-quit', and `g?' describes
-the mode.  Editing and search commands remain Evil's responsibility.
-Call this before adding surface-specific bindings."
-  (appkit-evil-define-keys appkit-evil--readonly-states keymap-symbol
-    "q" #'quit-window
-    "ZZ" #'quit-window
-    "g ?" #'describe-mode
-    "ZQ" #'evil-quit))
-
-(defun appkit-evil--define-directory-keys ()
-  "Install modal bindings for `appkit-directory-mode-map'."
-  (appkit-evil-define-readonly-keys 'appkit-directory-mode-map)
-  (appkit-evil-map
-    :map appkit-directory-mode-map
-    :nm
-    "RET" #'appkit-directory-activate
-    "<return>" #'appkit-directory-activate
-    "TAB" #'appkit-directory-tab-dwim
-    "<backtab>" #'appkit-directory-previous-item))
+  "Declare standard read-only quit/help capabilities and project them into Evil.
+Existing provider actions win.  All keys come from the shared semantic theme;
+this also supports read-only adapters that only need these baseline actions."
+  (let* ((adapter (gethash keymap-symbol appkit-bindings--adapters))
+         (actions (copy-sequence (and adapter (appkit-bindings--adapter-actions adapter)))))
+    (dolist (action '((quit . quit-window) (quit-cancel . evil-quit) (help . describe-mode)))
+      (unless (assq (car action) actions) (push action actions)))
+    (apply #'appkit-bindings-define keymap-symbol
+           (or (and adapter (appkit-bindings--adapter-context adapter)) 'read-only)
+           (cl-loop for (id . command) in actions append (list id command))))
+  (appkit-bindings-enable-evil keymap-symbol))
 
 ;;;###autoload
 (defun appkit-evil-setup ()
@@ -256,7 +241,9 @@ Safe to call multiple times."
     (when (and (featurep 'evil) appkit-evil-directory-initial-state)
       (evil-set-initial-state
        'appkit-directory-mode appkit-evil-directory-initial-state))
-    (appkit-evil--define-directory-keys)))
+    (appkit-evil-define-readonly-keys 'appkit-directory-mode-map)
+    (appkit-bindings-enable-evil 'appkit-chatbuf-mode-map)
+    (appkit-bindings-enable-evil 'appkit-chat-compose-timeline-mode-map)))
 
 (appkit-evil-setup)
 

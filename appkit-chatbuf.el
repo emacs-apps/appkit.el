@@ -24,6 +24,9 @@
 (require 'appkit-surface)
 (require 'appkit-transaction)
 (require 'appkit-ui)
+(require 'appkit-bindings)
+
+(declare-function evil-insert-state "evil-states" ())
 
 (autoload 'appkit-media-inline-mount "appkit-media-inline")
 
@@ -355,6 +358,14 @@ function never changes modal editor state."
     (appkit-chatbuf-update-context-mode)
     position))
 
+(defun appkit-chatbuf-enter-input ()
+  "Focus the writable composer, entering insert state if Evil is active."
+  (interactive)
+  (unless (appkit-chatbuf-focus-input)
+    (user-error "Appkit chat buffer has no writable composer"))
+  (when (bound-and-true-p evil-local-mode)
+    (evil-insert-state)))
+
 (defun appkit-chatbuf-capture-window-input-offsets ()
   "Return (WINDOW . OFFSET) pairs for windows whose point is in composer input."
   (let ((bounds (appkit-chatbuf-input-region-bounds))
@@ -403,6 +414,21 @@ function never changes modal editor state."
     (and bounds
          (<= (car bounds) pos)
          (<= pos (cdr bounds)))))
+
+(defun appkit-chatbuf-dispatch-return (input-command &optional timeline-command)
+  "Dispatch Return by composer geometry, leaving protocol policy to callbacks.
+In input, invoke INPUT-COMMAND once.  Else activate an exact Appkit action or
+native button; only then invoke TIMELINE-COMMAND or focus input.  A nil action
+result still owns Return.  Honor Emacs command remapping and prefix arguments."
+  (cond
+   ((appkit-chatbuf-point-in-input-p)
+    (call-interactively (or (command-remapping input-command) input-command)))
+   ((get-text-property (point) appkit-ui-action-property)
+    (appkit-ui-activate-at (point)))
+   ((button-at (point)) (push-button (point)))
+   (timeline-command
+    (call-interactively (or (command-remapping timeline-command) timeline-command)))
+   (t (appkit-chatbuf-enter-input))))
 
 (defun appkit-chatbuf-point-in-prompt-p (&optional position)
   "Return non-nil when POSITION or point is inside the prompt glyph span."
@@ -480,6 +506,8 @@ that symbol.  Passing nil removes the current timeline mode."
     (define-key map (kbd "M-n") #'appkit-chatbuf-input-history-next)
     map)
   "Base keymap for editable Appkit chat buffers.")
+
+(appkit-bindings-define 'appkit-chatbuf-mode-map 'input 'newline #'newline)
 
 (define-derived-mode appkit-chatbuf-mode nil "Appkit-Chat"
   "Base major mode for a generated timeline with a trailing composer."
