@@ -838,6 +838,25 @@ identity, mentions and encrypted media sources survive supported body/caption
 edits.  An uncertain edit uses the existing submission-review gate rather
 than automatically retrying.
 
+** Matrix message images
+
+Genuine SDK ~m.image~ events retain their caption and render local originals
+through ~appkit-media-resource-poster~ / ~video-source-poster~.  Preview budgets
+are default-scale pixels: line counts follow text zoom, preserve aspect ratio,
+and shrink only to fit the current window.  Canvas posters are drawn from the
+original at the actual display size; animated playback uses the same geometry.
+Return or click opens a still-image viewer or toggles animation, never submits
+the composer.  Non-Canvas displays retain captions and filenames without fetching.
+
+~media.image~ requires ~room_id~, ~subscription_id~, ~event_id~ and ~source_id~.
+The opaque source identity covers the complete SDK media source, including
+encrypted attachment metadata.  The SDK owns authenticated download, decryption
+and hash verification; URLs and attachment keys do not cross the frontend wire.
+Account-private Resources share one interest replacement with avatars and fence
+late completions against source replacement, redaction and subscription teardown.
+Private immutable originals live under ~STORE/media/GENERATION/~; the 32 MiB
+admission limit is checked after SDK buffering, not a streaming memory limit.
+
 * Namespaces
 
 Use these runtime prefixes directly:
