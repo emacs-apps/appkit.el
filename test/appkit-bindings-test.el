@@ -77,5 +77,38 @@
       (makunbound one)
       (makunbound two))))
 
+(ert-deftest appkit-bindings-managed-text-composer-keeps-evil-substitution ()
+  "A declared composer and its child map retain editing, not Snipe's s motion."
+  (require 'evil-snipe)
+  (let ((appkit-bindings--adapters (make-hash-table :test #'eq))
+        (appkit-bindings--managed-maps (make-hash-table :test #'eq :weakness 'key))
+        (appkit-binding-overrides nil)
+        (evil-snipe-mode t)
+        (evil-snipe-override-mode t)
+        (evil-snipe-disabled-modes nil)
+        (parent (make-symbol "appkit-bindings-composer")))
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-buffer
+            (text-mode) (evil-local-mode 1) (evil-normal-state)
+            (turn-on-evil-snipe-mode) (turn-on-evil-snipe-override-mode)
+            (should evil-snipe-local-mode)
+            (set parent (make-sparse-keymap))
+            (appkit-bindings-define parent 'input 'return #'newline)
+            (let ((child (make-sparse-keymap))
+                  (buffer (current-buffer)))
+              (set-keymap-parent child (symbol-value parent))
+              (use-local-map child)
+              (cl-letf (((symbol-function 'buffer-list) (lambda (&optional _frame) (list buffer))))
+                (appkit-bindings-refresh parent)))
+            (should-not evil-snipe-local-mode)
+            (should-not evil-snipe-override-local-mode)
+            (switch-to-buffer (current-buffer))
+            (insert "hello") (goto-char (point-min))
+            (execute-kbd-macro (kbd "s"))
+            (should (equal (buffer-string) "ello"))
+            (should (eq evil-state 'insert))))
+      (makunbound parent))))
+
 (provide 'appkit-bindings-test)
 ;;; appkit-bindings-test.el ends here

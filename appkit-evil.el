@@ -17,8 +17,8 @@
 
 ;;; Code:
 
-(declare-function turn-off-evil-snipe-mode "evil-snipe" ())
-(declare-function turn-off-evil-snipe-override-mode "evil-snipe" ())
+
+
 
 (require 'cl-lib)
 (require 'appkit-directory)
@@ -28,6 +28,7 @@
 (declare-function evil-define-key* "evil-core"
                   (state keymap key def &rest bindings))
 (declare-function evil-normalize-keymaps "evil-core" (&optional state))
+(declare-function evil-snipe-refresh "evil-snipe" (&optional buffer))
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function evil-insert-state "evil-states" ())
 (declare-function evil-quit "evil-commands" (&optional force))
@@ -201,7 +202,9 @@ For example:
   (when (and (featurep 'evil)
              (boundp 'evil-local-mode)
              evil-local-mode)
-    (evil-normalize-keymaps)))
+    (evil-normalize-keymaps))
+  (when (fboundp 'evil-snipe-refresh)
+    (evil-snipe-refresh (current-buffer))))
 
 (defun appkit-evil-set-initial-states (modes state)
   "Register Evil initial STATE for every major mode in MODES.
@@ -247,9 +250,7 @@ Safe to call multiple times."
 
 (appkit-evil-setup)
 
-(with-eval-after-load 'evil-snipe
-  (add-hook 'appkit-directory-mode-hook #'turn-off-evil-snipe-mode)
-  (add-hook 'appkit-directory-mode-hook #'turn-off-evil-snipe-override-mode))
+
 
 (provide 'appkit-evil)
 

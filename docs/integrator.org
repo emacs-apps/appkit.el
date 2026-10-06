@@ -740,41 +740,64 @@ stale completions inert.
 frees a slot.  Synchronous completion is delivered only after the
 starter returns its handle.
 
-* Evil adapters
+* Semantic keys and Evil adapters
 
-Keep ordinary mode maps as the Emacs-state contract.  Use
-~appkit-evil-map~ for client modal bindings: its Doom-style ~:n~, ~:m~, and
-combined state shorthands group string key descriptions under an explicit
-~:map~ without adding a Doom or General dependency.  Arguments form one flat
-stream, not a list of clauses.  State shorthands persist across key/definition
-pairs until another state shorthand or ~:map~.  Each ~:map~ resets the state,
-so every map needs an explicit state shorthand.  For example:
+Declare capabilities once in the native map.  ~appkit-bindings-define~ follows
+evil-collection's action/command approach without requiring Evil:
 
 #+begin_src emacs-lisp
-(appkit-evil-map
-  :map example-mode-map
-  :nm "RET" #'example-open
-      "g r" #'example-refresh
-  :n "D" #'example-delete
-  :map example-other-mode-map
-  :m "RET" #'example-open)
+(appkit-bindings-define 'example-mode-map 'read-only
+  'activate #'example-open
+  'app-menu #'example-transient
+  'refresh #'example-refresh
+  'quit #'quit-window)
 #+end_src
 
-The underlying installer defers until both Evil and the target map exist.
+The context is ~read-only~ or ~input~.  Declare only implemented capabilities;
+command and prefix-map definitions are accepted.  The shared theme provides
+native bindings immediately.  The adapter's optional Evil setup calls
+~appkit-bindings-enable-evil~ on the same map; declaration, map, and Evil may
+arrive in any order.  Keep protocol-specific controls in their existing maps,
+using ~appkit-evil-map~ when they need modal bindings.
 
-Read-only surfaces may add ~appkit-evil-define-readonly-keys~ for quit and
-~g?~ help.  Keep timeline-only bindings on the point-sensitive minor map so
-they disappear in editable input.  Preserve Evil's bare ~?~ search and visual
-~o~ motion; use ~C-c C-o~ for input options.  Use ~appkit-evil-set-initial-states~
-and ~appkit-evil-normalize-buffers~ for client lifecycle setup.
+| Action | Native | Evil |
+|--------+--------+------|
+| Application menu | ~?~ in views, ~C-c ?~ in input | ~ga~ |
+| Navigation | ~M-g~ | ~gA~ |
+| Refresh | ~g~ in views, ~C-c g~ in input | ~gr~ |
+| Input focus | ~C-c '~ | ~i~ |
+| Return / newline | ~RET~, ~<return>~ / ~C-j~ | same |
+| Submit | ~C-c C-c~, ~C-c RET~, ~C-c <return>~ | same |
+| Input options | ~C-c C-o~ | same |
+| Preview / cancel | ~M-RET~, ~M-<return>~ / ~C-c C-k~ | same |
+| Attachment chooser / file / clipboard | ~C-c C-a~ / ~C-c C-f~ / ~C-c C-v~ | ~Za~ / ~Zf~ / ~Zv~ |
 
-Message actions follow Telega where supported.  Keep application commands
-(~ga~), chat navigation (~gA~), and point-local activation separate.
-Reuse an existing native navigation prefix rather than duplicating it.
-Exact inline actions take precedence over the containing row.
+Return is an application policy, not a universal send operation.  Chat clients
+may submit; public posts, mail, and forum composers retain their editing
+policy.  Completion-in-region gets Return first.  Use
+~appkit-chatbuf-dispatch-return~ for shared input/timeline geometry: exact
+inline action, native button, client timeline action, then input focus.
+Input and timeline command remappings are honored.  Bind both Return event
+forms; native Wayland can deliver ~<return>~ instead of character ~RET~.
 
-Disable both Snipe modes through application major-mode hooks registered
-with ~with-eval-after-load 'evil-snipe~.
+Keep message capabilities on point-sensitive timeline maps.  They must not
+remain active in editable input.  The read-only native projection steps aside
+in modal states, preserving Evil's bare ~?~ search and visual ~o~ motion.
+Use ~appkit-evil-set-initial-states~ and ~appkit-evil-normalize-buffers~ for
+client lifecycle setup.  ~appkit-evil-define-readonly-keys~ supplies baseline
+quit/help capabilities for auxiliary views.
+
+~appkit-binding-overrides~ replaces individual theme properties, including
+explicit nil; ~:enabled nil~ disables a role.  ~appkit-bindings-refresh~
+updates registered adapters while preserving user replacements.  It removes
+retired local entries rather than shadowing inherited keys with nil.
+
+Snipe eligibility is centralized.  Appkit registers
+~appkit-bindings-buffer-p~ once in ~evil-snipe-disabled-functions~; native map
+identity and parent inheritance cover views and editable composers.  Do not
+add per-client Snipe disable hooks.  ~evil-snipe-refresh~ reconciles automatic
+activation after a late policy load.  Explicit local Snipe commands remain
+available and are not overwritten by that refresh.
 
 * Namespaces
 

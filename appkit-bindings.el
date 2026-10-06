@@ -14,6 +14,7 @@
 
 (declare-function appkit-evil-define-keys "appkit-evil" (states keymap-symbol &rest bindings))
 (declare-function appkit-evil-normalize-keymaps "appkit-evil" ())
+(declare-function evil-snipe-refresh "evil-snipe" (&optional buffer))
 (declare-function evil-get-auxiliary-keymap "evil-core" (map state &optional create ignore-parent))
 (defvar appkit-evil-enable-integration)
 
@@ -90,6 +91,19 @@ refreshes registered maps automatically.  Example:
 
 (defvar appkit-bindings--adapters (make-hash-table :test #'eq)
   "Map symbols and their supported semantic actions.")
+
+(defvar appkit-bindings--managed-maps (make-hash-table :test #'eq :weakness 'key)
+  "Native application maps; weak keys do not retain replaced keymaps.")
+
+(defun appkit-bindings-buffer-p ()
+  "Return non-nil when the current major map inherits application semantics.
+Use map identity, not a growing package-name blacklist; editable composers
+and derived views are application buffers too."
+  (let ((map (current-local-map)) managed)
+    (while (and (keymapp map) (not managed))
+      (setq managed (gethash map appkit-bindings--managed-maps)
+            map (keymap-parent map)))
+    (and managed t)))
 
 (defun appkit-bindings--property (id property &optional default)
   "Resolve ID's PROPERTY, distinguishing explicit nil from absence."
@@ -194,6 +208,7 @@ Native timeline letters must not shadow Evil search or visual motions."
       ;; Validate both plans before removing any old bindings.
       (let ((native-plan (appkit-bindings--plan adapter nil))
             (modal-plan (when modal (appkit-bindings--plan adapter t))))
+        (puthash map (appkit-bindings--adapter-context adapter) appkit-bindings--managed-maps)
         (appkit-bindings--retire adapter (appkit-bindings--adapter-native-installed adapter))
         (appkit-bindings--retire adapter (appkit-bindings--adapter-evil-installed adapter))
         (setf (appkit-bindings--adapter-native-installed adapter) nil
@@ -276,7 +291,13 @@ Retire old owned bindings; preserve unrelated or subsequently customized keys."
   (appkit-bindings--schedule)
   (when (fboundp 'appkit-evil-normalize-keymaps)
     (dolist (buffer (buffer-list))
-      (with-current-buffer buffer (appkit-evil-normalize-keymaps)))))
+      (with-current-buffer buffer (appkit-evil-normalize-keymaps))))
+  (when (fboundp 'evil-snipe-refresh)
+    (evil-snipe-refresh)))
+
+(with-eval-after-load 'evil-snipe
+  (add-hook 'evil-snipe-disabled-functions #'appkit-bindings-buffer-p)
+  (evil-snipe-refresh))
 
 (provide 'appkit-bindings)
 ;;; appkit-bindings.el ends here
