@@ -817,10 +817,45 @@ add per-client Snipe disable hooks.  ~evil-snipe-refresh~ reconciles automatic
 activation after a late policy load.  Explicit local Snipe commands remain
 available and are not overwritten by that refresh.
 
+** Matrix attachments and replies
+
+The room composer keeps attachment objects in the property-preserving Appkit
+input.  ~C-c C-f~ chooses a local file, ~C-c C-v~ stages clipboard files or image
+bytes, and ~C-c C-a~ opens the attachment chooser.  ~C-c C-d~ detaches an
+attachment.  A universal prefix forces a generic file instead of inferred media.
+Return or ~C-c C-c~ submits the captured text/caption and ordered attachments.
+
+~message.send~ requires ~room_id~, ~subscription_id~, ~body~, an ~attachments~
+array, and optional ~reply_to~.  Each attachment carries an absolute local path,
+filename, MIME type, and optional image dimensions.  The backend prevalidates
+sources and delegates queue persistence, media upload, encryption and retry
+policy to the SDK.  Multiple attachments become separate events; only the first
+receives the draft caption, and all retain the captured reply target.
+
+Queue admission reports ~accepted~ and ~total~, not delivery confirmation.
+Full acceptance clears only the exact captured draft.  Partial acceptance removes
+only the accepted prefix and consumed caption; unaccepted attachments remain.
+Newer drafts are retained and require submission review rather than automatic
+resubmission.  Private clipboard files are App-owned, with separate draft and
+captured-send references; closing a view cannot revoke an admitted send's source.
+Selected user files are never deleted.
+
+Incoming quotes show the SDK relationship, original author and preview, with
+explicit loading, unavailable and error states.  Missing preview details are
+fetched through the SDK without blocking timeline updates; fallback body/HTML
+is not treated as a relation.  Return or click follows the exact loaded original.
+An original outside the loaded timeline offers its Matrix permalink and
+load-older guidance, not a jump to a nearby message.
+
+Timeline ~r~ stages the exact SDK-replyable server event in composer aux state
+without replacing the ordinary draft.  ~C-c C-k~ cancels an idle reply while
+retaining text and attachments.  Session, subscription, event identity and SDK
+reply capability are revalidated before admission.
+
 ** Matrix message mutations
 
 Matrix timeline ~e~ / Evil ~i~ loads the exact own server event into the input
-and retains the preceding ordinary draft.  Return queues ~message.edit~,
+and retains the preceding rich draft and reply state.  Return queues ~message.edit~,
 not ~message.send~.  Acceptance restores the preceding draft only if the
 captured edit revision still owns the input; failures and newer edits remain.
 ~C-c C-k~ cancels an idle edit and restores its saved draft.
