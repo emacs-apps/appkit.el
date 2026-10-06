@@ -840,12 +840,20 @@ resubmission.  Private clipboard files are App-owned, with separate draft and
 captured-send references; closing a view cannot revoke an admitted send's source.
 Selected user files are never deleted.
 
+Room operation feedback is emitted through post-commit echo-area Effects and
+~*Messages*~, never stored as composer content.  Send, edit, redaction and
+submission-review feedback cannot add persistent rows above the input.
+
 Incoming quotes show the SDK relationship, original author and preview, with
 explicit loading, unavailable and error states.  Missing preview details are
 fetched through the SDK without blocking timeline updates; fallback body/HTML
 is not treated as a relation.  Return or click follows the exact loaded original.
 An original outside the loaded timeline offers its Matrix permalink and
 load-older guidance, not a jump to a nearby message.
+
+Reply authors use the same stable name color as message headings.  Composer
+reply context uses the shared two-line ~appkit-chatbuf-aux-render~ card: a
+~Reply to AUTHOR~ title, author-colored accent, and a bounded content preview.
 
 Timeline ~r~ stages the exact SDK-replyable server event in composer aux state
 without replacing the ordinary draft.  ~C-c C-k~ cancels an idle reply while
