@@ -577,7 +577,9 @@ Navigation preserves the complete draft and its semantic generation."
   (interactive)
   (barf-if-buffer-read-only)
   (if-let* ((index (appkit-chat-compose-item-index-at-point)))
-      (appkit-chat-compose-goto-part index)
+      (progn
+        (appkit-chat-compose-goto-part index)
+        (appkit-chatbuf-enter-input))
     (user-error "No compose item at point")))
 
 (defvar appkit-chat-compose-timeline-mode-map

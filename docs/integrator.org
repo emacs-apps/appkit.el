@@ -762,15 +762,33 @@ using ~appkit-evil-map~ when they need modal bindings.
 
 | Action | Native | Evil |
 |--------+--------+------|
-| Application menu | ~?~ in views, ~C-c ?~ in input | ~ga~ |
+| Application menu | ~C-c t~ | ~ga~, ~C-c t~ |
+| Help | ~C-c ?~, ~?~ in read-only views | ~g?~ |
 | Navigation | ~M-g~ | ~gA~ |
-| Refresh | ~g~ in views, ~C-c g~ in input | ~gr~ |
-| Input focus | ~C-c '~ | ~i~ |
-| Return / newline | ~RET~, ~<return>~ / ~C-j~ | same |
-| Submit | ~C-c C-c~, ~C-c RET~, ~C-c <return>~ | same |
+| Refresh (Appkit extension) | ~g~ in views, ~C-c g~ in input | ~gr~ |
+| Edit message / committed compose item | ~e~ on the timeline | ~i~ |
+| Delete message / committed compose item | ~d~ on the timeline | ~D~, ~dd~ |
+| Return / force newline | ~RET~, ~<return>~ / ~S-RET~, ~S-<return>~ | same |
+| Explicit submit, when supported | ~C-c C-c~ | same |
 | Input options | ~C-c C-o~ | same |
 | Preview / cancel | ~M-RET~, ~M-<return>~ / ~C-c C-k~ | same |
 | Attachment chooser / file / clipboard | ~C-c C-a~ / ~C-c C-f~ / ~C-c C-v~ | ~Za~ / ~Zf~ / ~Zv~ |
+| Code-block editor, when supported | ~C-c '~ | same |
+
+~i~ edits the actual message or committed compose item at point; it is not an
+input-focus shortcut.  ~C-c '~ follows ~telega-mnz-chatbuf-attach-code~:
+open a real source editor and stage its result, never send or merely focus
+input.  Slackit provides this capability.  Clients without a corresponding
+operation leave the key unclaimed.
+
+The message-edit/delete and attachment modal keys follow evil-collection's
+Telega adapter; navigation, input options, preview and cancellation follow
+Telega's native map.  ~C-c t~ follows the local Telega application prefix.
+Refresh, pagination and generic mark roles are Appkit extensions, not claims
+about Telega's message keys.  In particular, Telega's chat ~C-c C-c~ cancels a
+filter; Appkit's optional submit role preserves clients' explicit publishing
+or editor-commit convention.  No extra ~C-c RET~ or dedicated ~C-j~ binding
+is installed; inherited Emacs ~C-j~ remains available.
 
 Return is an application policy, not a universal send operation.  Chat clients
 may submit; public posts, mail, and forum composers retain their editing
@@ -798,6 +816,27 @@ identity and parent inheritance cover views and editable composers.  Do not
 add per-client Snipe disable hooks.  ~evil-snipe-refresh~ reconciles automatic
 activation after a late policy load.  Explicit local Snipe commands remain
 available and are not overwritten by that refresh.
+
+** Matrix message mutations
+
+Matrix timeline ~e~ / Evil ~i~ loads the exact own server event into the input
+and retains the preceding ordinary draft.  Return queues ~message.edit~,
+not ~message.send~.  Acceptance restores the preceding draft only if the
+captured edit revision still owns the input; failures and newer edits remain.
+~C-c C-k~ cancels an idle edit and restores its saved draft.
+
+Timeline ~d~ / Evil ~D~ or ~dd~ confirms ~message.redact~.  The captured Surface,
+session, subscription, event identity and SDK permission are checked again
+after confirmation.  There is no local deletion substitute: SDK timeline
+updates supply the stable tombstone.  Local queue entries and unavailable,
+undecrypted or unauthorized events do not acquire edit capabilities.
+
+The backend requires ~room_id~, ~subscription_id~ and ~event_id~ for mutations
+(plus ~body~ for edits), revalidates current room permissions, and delegates
+encryption and queue ownership to the SDK.  Text/notice/emote subtype, reply
+identity, mentions and encrypted media sources survive supported body/caption
+edits.  An uncertain edit uses the existing submission-review gate rather
+than automatically retrying.
 
 * Namespaces
 
