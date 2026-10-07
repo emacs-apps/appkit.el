@@ -418,8 +418,10 @@ function never changes modal editor state."
 (defun appkit-chatbuf-dispatch-return (input-command &optional timeline-command)
   "Dispatch Return by composer geometry, leaving protocol policy to callbacks.
 In input, invoke INPUT-COMMAND once.  Else activate an exact Appkit action or
-native button; only then invoke TIMELINE-COMMAND or focus input.  A nil action
-result still owns Return.  Honor Emacs command remapping and prefix arguments."
+native button, then fall back to TIMELINE-COMMAND when supplied.  Without an
+action, leave point and modal state unchanged; Return never implicitly enters
+input.  A nil action result still owns Return.  Honor Emacs command remapping
+and prefix arguments."
   (cond
    ((appkit-chatbuf-point-in-input-p)
     (call-interactively (or (command-remapping input-command) input-command)))
@@ -427,8 +429,7 @@ result still owns Return.  Honor Emacs command remapping and prefix arguments."
     (appkit-ui-activate-at (point)))
    ((button-at (point)) (push-button (point)))
    (timeline-command
-    (call-interactively (or (command-remapping timeline-command) timeline-command)))
-   (t (appkit-chatbuf-enter-input))))
+    (call-interactively (or (command-remapping timeline-command) timeline-command)))))
 
 (defun appkit-chatbuf-point-in-prompt-p (&optional position)
   "Return non-nil when POSITION or point is inside the prompt glyph span."
