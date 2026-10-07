@@ -235,6 +235,23 @@ display widths and owns their geometry while the client selects their
 presentation meaning.  Clients retain protocol objects, media selection and
 acquisition, labels, identity faces, and resource invalidation.
 
+Chat sender headings share ~appkit-chat-heading~, appended over the complete
+heading including its newline.  It supplies the full-width background while
+identity colors and subdued timestamps retain precedence.  Matrix, QQ (including
+forwarded messages), Slackit, Disco, Zulip and Chirp direct messages use this
+face; ordinary body text and same-sender continuations remain unshaded.
+
+Insert inline quotes through ~appkit-chat-ins-insert-reply-preview~ with the
+same mutable body prefix state used for the message.  The card consumes that
+state once and replaces its trailing indent column with the shared vertical
+border; it never adds a gutter column to the body.  The renderer owns the reply
+arrow, author separator and one-line width budget.  It appends
+~appkit-chat-inline-reply~ beneath the author's identity face and existing
+semantic content faces; ~appkit-chat-reply-author~ supplies author emphasis.
+QQ previews retain structured mention colors without nested profile actions.
+The client supplies the exact original-message action and retains protocol
+identity and unresolved-reply states.  Do not infer mentions from plain text.
+
 Use ~appkit-chat-avatar-one-line-string~ for identity icons in rows, prompts,
 compact messages, and annotations.  It preserves the source aspect ratio,
 sizes the image to one current text line with character-relative units, and

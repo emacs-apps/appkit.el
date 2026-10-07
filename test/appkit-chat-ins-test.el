@@ -4,6 +4,46 @@
 (require 'button)
 (require 'appkit-chat-ins)
 
+(ert-deftest appkit-chat-ins-reply-keeps-author-emphasis-and-action-out-of-body ()
+  (with-temp-buffer
+    (let* ((author-face '(:foreground "#123456"))
+           (preview (appkit-ui-one-line-preview-create
+                     :label "Alice" :label-face author-face
+                     :text (concat (propertize "@Bob" 'face '(:foreground "#654321"))
+                                   " original\nmessage with a long continuation")))
+           (target '(:event "original"))
+           (prefix (appkit-ui-make-prefix-state "H " "  "))
+           activated)
+      (let ((span
+             (appkit-chat-ins-insert-reply-preview
+              preview 24 :prefix prefix
+              :action (lambda () (setq activated target)))))
+        (goto-char (car span))
+        (search-forward "Alice")
+        (let ((faces (get-text-property (match-beginning 0) 'face)))
+          (should (equal (car faces) author-face))
+          (should (memq 'appkit-chat-reply-author faces)))
+        (search-forward "@Bob")
+        (should (equal (car (get-text-property (match-beginning 0) 'face))
+                       '(:foreground "#654321")))
+        (push-button (match-beginning 0))
+        (should (eq activated target))
+        (goto-char (car span))
+        (should (<= (string-width
+                     (buffer-substring (point) (line-end-position))) 24))
+        (should (= (line-number-at-pos (1- (cdr span))) 1))
+        (should (eq (get-text-property (1- (cdr span)) 'face)
+                    'appkit-chat-inline-reply))
+        (should (= (string-width (get-text-property (car span) 'line-prefix))
+                   (string-width (appkit-ui-prefix-state-rest prefix))))
+        (should (equal (substring (get-text-property (car span) 'line-prefix) 0 1) "H"))
+        (goto-char (cdr span))
+        (appkit-ui-insert-prefixed-lines prefix "Answer")
+        (should (equal (get-text-property (cdr span) 'line-prefix) "  "))
+        (should-not (get-text-property (cdr span) 'face))
+        (should-not (button-at (cdr span)))
+        (should (equal (appkit-ui-one-line-preview-label-face preview) author-face))))))
+
 (ert-deftest appkit-chat-ins-insert-full-width-divider-applies-face-and-properties ()
   (with-temp-buffer
     (let ((span (appkit-chat-ins-insert-full-width-divider "Label" 'shadow 24 '(demo t))))

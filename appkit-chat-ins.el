@@ -22,6 +22,64 @@
 (require 'appkit-ui)
 (require 'appkit-geometry)
 
+(defface appkit-chat-heading
+  '((((class color) (background light))
+     :background "gray90" :extend t)
+    (((class color) (background dark))
+     :background "gray20" :extend t)
+    (t :inherit widget-single-line-field :extend t))
+  "Full-width background for chat sender headings.
+Author colors and subdued timestamps take precedence over this base face."
+  :group 'appkit)
+
+(defface appkit-chat-inline-reply
+  '((t :inherit (appkit-chat-heading shadow) :extend t))
+  "Subdued reply context joined visually to a chat heading."
+  :group 'appkit)
+
+(defface appkit-chat-reply-author
+  '((t :inherit bold))
+  "Emphasis for the original author within an inline reply.
+The client's stable author color takes precedence over this face."
+  :group 'appkit)
+
+(cl-defun appkit-chat-ins-insert-reply-preview
+    (preview width &key prefix properties action help-echo)
+  "Insert one shared inline reply PREVIEW bounded to WIDTH columns.
+PREVIEW is an `appkit-ui-one-line-preview'.  Its label is the original
+author; preserve its identity face above the subdued body and emphasize it.
+The container owns the reply arrow and separator.  Its display-only border
+replaces the trailing column of PREFIX, like other Appkit cards; it does not
+take a column from WIDTH.  ACTION opens the exact original.  PROPERTIES retain
+client-owned identity.  Return the span including its terminating newline."
+  (let* ((model (copy-appkit-ui-one-line-preview preview))
+         (start (point)))
+    (setf (appkit-ui-one-line-preview-separator model) ">")
+    (let* ((fragment
+            (appkit-ui-render-one-line-preview
+             model (max 0 (- width 2)) :face 'appkit-chat-inline-reply))
+           (author-length
+            (length (appkit-ui-one-line-text (appkit-ui-one-line-preview-label model)))))
+      (add-face-text-property
+       0 (min author-length (length fragment)) 'appkit-chat-reply-author 'append fragment)
+      (let ((label (concat (propertize (truncate-string-to-width "↩ " (max 0 width))
+                                     'face 'appkit-chat-inline-reply)
+                           fragment)))
+        (if action
+            (appkit-ui-insert-action-button label action :help-echo help-echo)
+          (insert label))))
+    (insert (propertize "\n" 'face 'appkit-chat-inline-reply))
+    (let ((appkit-ui-card-indent-prefix-state prefix))
+      (appkit-ui-apply-line-prefix
+       start (point)
+       (appkit-ui-card-prefix-state
+        :face 'appkit-chat-inline-reply
+        :indent (appkit-ui-prefix-string prefix nil ""))))
+    (when properties
+      (add-text-properties start (point) properties))
+    (add-text-properties start (point) '(rear-nonsticky t))
+    (cons start (point))))
+
 (defface appkit-chat-selection-marker
   '((t :inherit region))
   "Face for the continuous strip beside selected chat messages."
