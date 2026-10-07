@@ -759,8 +759,15 @@ starter returns its handle.
 
 * Semantic keys and Evil adapters
 
-Declare capabilities once in the native map.  ~appkit-bindings-define~ follows
-evil-collection's action/command approach without requiring Evil:
+Bindings have two sources: the [[file:../appkit-bindings.el::(defconst appkit-binding-defaults][shared native/Evil theme]] assigns
+keys to semantic roles, and each client's capability declaration assigns
+commands to those roles.  Protocol-specific controls stay in the client's
+keymap.  Inspect the effective binding in the target buffer and Evil state
+with ~C-h k~; button maps and point-sensitive modes also participate.
+
+** Declaring capabilities
+
+Use [[file:../appkit-bindings.el::(defun appkit-bindings-define][appkit-bindings-define]] to declare only implemented capabilities:
 
 #+begin_src emacs-lisp
 (appkit-bindings-define 'example-mode-map 'read-only
@@ -770,82 +777,54 @@ evil-collection's action/command approach without requiring Evil:
   'quit #'quit-window)
 #+end_src
 
-The context is ~read-only~ or ~input~.  Declare only implemented capabilities;
-command and prefix-map definitions are accepted.  The shared theme provides
-native bindings immediately.  The adapter's optional Evil setup calls
-~appkit-bindings-enable-evil~ on the same map; declaration, map, and Evil may
-arrive in any order.  Keep protocol-specific controls in their existing maps,
-using ~appkit-evil-map~ when they need modal bindings.
+The context is ~read-only~ or ~input~; actions accept commands or prefix maps.
+Native bindings work without Evil.  The client's optional Evil setup calls
+[[file:../appkit-bindings.el::(defun appkit-bindings-enable-evil][appkit-bindings-enable-evil]] on the same map, so declarations, maps and Evil
+may arrive in any order.  Unsupported actions stay unbound, rather than
+acquiring substitute commands.
 
-| Action | Native | Evil |
-|--------+--------+------|
-| Application menu | ~C-c t~ | ~ga~, ~C-c t~ |
-| Help | ~C-c ?~, ~?~ in read-only views | ~g?~ |
-| Navigation | ~M-g~ | ~gA~ |
-| Refresh (Appkit extension) | ~g~ in views, ~C-c g~ in input | ~gr~ |
-| Edit message / committed compose item | ~e~ on the timeline | ~i~ |
-| Delete message / committed compose item | ~d~ on the timeline | ~D~, ~dd~ |
-| Return / force newline | ~RET~, ~<return>~ / ~S-RET~, ~S-<return>~ | same |
-| Explicit submit, when supported | ~C-c C-c~ | same |
-| Input options | ~C-c C-o~ | same |
-| Preview / cancel | ~M-RET~, ~M-<return>~ / ~C-c C-k~ | same |
-| Attachment chooser / file / clipboard | ~C-c C-a~ / ~C-c C-f~ / ~C-c C-v~ | ~Za~ / ~Zf~ / ~Zv~ |
-| Code-block editor, when supported | ~C-c '~ | same |
+The message-edit/delete and attachment roles follow evil-collection's Telega
+adapter; navigation, input options, preview and cancellation follow Telega's
+native interaction model.  Refresh, pagination, generic marks and explicit
+submission are Appkit conventions, not claims about Telega's keys.
 
-~i~ edits the actual message or committed compose item at point; it is not an
-input-focus shortcut.  ~C-c '~ follows ~telega-mnz-chatbuf-attach-code~:
-open a real source editor and stage its result, never send or merely focus
-input.  Slackit provides this capability.  Clients without a corresponding
-operation leave the key unclaimed.
+** Point and modal context
 
-The message-edit/delete and attachment modal keys follow evil-collection's
-Telega adapter; navigation, input options, preview and cancellation follow
-Telega's native map.  ~C-c t~ follows the local Telega application prefix.
-Refresh, pagination and generic mark roles are Appkit extensions, not claims
-about Telega's message keys.  In particular, Telega's chat ~C-c C-c~ cancels a
-filter; Appkit's optional submit role preserves clients' explicit publishing
-or editor-commit convention.  No extra ~C-c RET~ or dedicated ~C-j~ binding
-is installed; inherited Emacs ~C-j~ remains available.
+Keep message capabilities on [[file:../appkit-chatbuf.el::(defun appkit-chatbuf-use-timeline-mode][point-sensitive timeline maps]], out of editable
+input.  Native read-only bindings step aside in modal states so that Evil
+search and visual motions remain available.  Message editing targets the
+actual message or committed compose item; it is not a composer-focus action.
+Attachment and code-editor actions stage content without sending it.
 
-Return is an application policy, not a universal send operation.  Chat clients
-may submit; public posts, mail, and forum composers retain their editing
-policy.  Completion-in-region gets Return first.  Use
-~appkit-chatbuf-dispatch-return~ for shared input/timeline geometry: exact
-inline action, native button, then an optional client timeline action.
-With no action, keep point, draft and Evil state unchanged; neither the
-dispatcher nor client timeline callbacks should fall back to focusing input.
-This follows Telega's message-content activation and evil-collection's
-preservation of it.  Explicit reply, edit and composer-entry commands retain
-their own focus policy.  Input and timeline command remappings are honored.
-Bind both Return event forms; native Wayland can deliver ~<return>~ instead
-of character ~RET~.
+Return belongs to the surface's interaction policy.  In a chat timeline,
+[[file:../appkit-chatbuf.el::(defun appkit-chatbuf-dispatch-return][appkit-chatbuf-dispatch-return]] activates an exact inline action or button,
+then an optional client content action.  Without an action, point, draft and
+modal state stay unchanged.  In input, the client decides whether Return
+sends or edits; active completion takes precedence.  Explicit reply, edit
+and composer-entry commands retain their own focus policy.  Preserve command
+remapping, prefix arguments and both Return event forms: native Wayland may
+deliver ~<return>~ instead of character ~RET~.
 
-Keep message capabilities on point-sensitive timeline maps.  They must not
-remain active in editable input.  The read-only native projection steps aside
-in modal states, preserving Evil's bare ~?~ search and visual ~o~ motion.
-Use ~appkit-evil-set-initial-states~ and ~appkit-evil-normalize-buffers~ for
-client lifecycle setup.  ~appkit-evil-define-readonly-keys~ supplies baseline
-quit/help capabilities for auxiliary views.
+Use the shared [[file:../appkit-evil.el::(defun appkit-evil-set-initial-states][initial-state]] and [[file:../appkit-evil.el::(defun appkit-evil-normalize-buffers][buffer-normalization]] helpers for client
+lifecycle setup.  Snipe eligibility is centralized through
+[[file:../appkit-bindings.el::(defun appkit-bindings-buffer-p][appkit-bindings-buffer-p]]; do not add per-client disable hooks.
 
-~appkit-binding-overrides~ replaces individual theme properties, including
-explicit nil; ~:enabled nil~ disables a role.  ~appkit-bindings-refresh~
-updates registered adapters while preserving user replacements.  It removes
-retired local entries rather than shadowing inherited keys with nil.
+** Customization
 
-Snipe eligibility is centralized.  Appkit registers
-~appkit-bindings-buffer-p~ once in ~evil-snipe-disabled-functions~; native map
-identity and parent inheritance cover views and editable composers.  Do not
-add per-client Snipe disable hooks.  ~evil-snipe-refresh~ reconciles automatic
-activation after a late policy load.  Explicit local Snipe commands remain
-available and are not overwritten by that refresh.
+[[file:../appkit-bindings.el::(defcustom appkit-binding-overrides][appkit-binding-overrides]] changes individual theme properties, with explicit
+nil removing a property and ~:enabled nil~ disabling a role.
+[[file:../appkit-bindings.el::(defun appkit-bindings-refresh][appkit-bindings-refresh]] reapplies the theme while preserving user replacements,
+restoring inherited keys when managed bindings retire, and refreshing live
+Evil and Snipe state.
+
+* Matrix client integration
 
 ** Matrix attachments and replies
 
-The room composer keeps attachment objects in the property-preserving Appkit
-input.  ~C-c C-f~ chooses a local file, ~C-c C-v~ stages clipboard files or image
-bytes, and ~C-c C-a~ opens the attachment chooser.  ~C-c C-d~ detaches an
-attachment.  A universal prefix forces a generic file instead of inferred media.
-Return or ~C-c C-c~ submits the captured text/caption and ordered attachments.
+The [[file:../../matrix/matrix-room.el::(appkit-bindings-define 'matrix-room-mode-map][room composer actions]] keep attachment objects in property-preserving Appkit
+input.  File and clipboard actions stage sources; a universal prefix forces
+a generic file instead of inferred media.  Submission captures the text or
+caption and ordered attachments.
 
 ~message.send~ requires ~room_id~, ~subscription_id~, ~body~, an ~attachments~
 array, and optional ~reply_to~.  Each attachment carries an absolute local path,
@@ -877,23 +856,23 @@ Reply authors use the same stable name color as message headings.  Composer
 reply context uses the shared two-line ~appkit-chatbuf-aux-render~ card: a
 ~Reply to AUTHOR~ title, author-colored accent, and a bounded content preview.
 
-Timeline ~r~ stages the exact SDK-replyable server event in composer aux state
-without replacing the ordinary draft.  ~C-c C-k~ cancels an idle reply while
-retaining text and attachments.  Session, subscription, event identity and SDK
-reply capability are revalidated before admission.
+The reply action in the [[file:../../matrix/matrix-room.el::(appkit-bindings-define 'matrix-room-timeline-mode-map][timeline declaration]] stages the exact SDK-replyable
+server event in composer aux state without replacing the ordinary draft.
+Canceling an idle reply retains text and attachments.  Session, subscription,
+event identity and SDK reply capability are revalidated before admission.
 
 ** Matrix message mutations
 
-Matrix timeline ~e~ / Evil ~i~ loads the exact own server event into the input
-and retains the preceding rich draft and reply state.  Return queues ~message.edit~,
-not ~message.send~.  Acceptance restores the preceding draft only if the
-captured edit revision still owns the input; failures and newer edits remain.
-~C-c C-k~ cancels an idle edit and restores its saved draft.
+Editing loads the exact own server event into the input and retains the
+preceding rich draft and reply state.  Submission queues ~message.edit~, not
+~message.send~.  Acceptance restores the preceding draft only if the captured
+edit revision still owns the input; failures and newer edits remain.
+Canceling an idle edit restores its saved draft.
 
-Timeline ~d~ / Evil ~D~ or ~dd~ confirms ~message.redact~.  The captured Surface,
-session, subscription, event identity and SDK permission are checked again
-after confirmation.  There is no local deletion substitute: SDK timeline
-updates supply the stable tombstone.  Local queue entries and unavailable,
+Deletion confirms ~message.redact~.  The captured Surface, session,
+subscription, event identity and SDK permission are checked again after
+confirmation.  There is no local deletion substitute: SDK timeline updates
+supply the stable tombstone.  Local queue entries and unavailable,
 undecrypted or unauthorized events do not acquire edit capabilities.
 
 The backend requires ~room_id~, ~subscription_id~ and ~event_id~ for mutations
