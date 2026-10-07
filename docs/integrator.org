@@ -307,38 +307,33 @@ delimiter geometry.
 
 ** Read state and chat headers
 
-~appkit-chat-read~ separates the protocol's moving read frontier from a
-Surface-local reading-session boundary.  Pass ordered canonical message keys
-and an exact ~:first-unread-key~ to ~appkit-chat-read-update~ before projection.
-Use ~:known-p nil~ for unknown metadata; a known nil key means no unread
-frontier.  Counts alone never identify a message.  Timestamp/snowflake adapters
-may resolve the first known unread canonical key using their native ordering;
-Matrix uses the SDK ReadMarker and QQ uses its exact native first-unread pair.
-Zulip retains sparse per-message flags, not a fabricated cumulative cursor.
+~appkit-chat-read-update~ receives ordered message keys and an authoritative
+~:first-unread-key~ before projection.  The boundary stays fixed during partial
+reading.  An exact ~:unread-count~ of zero or explicit ~:all-read-p t~ removes it,
+including completion reported by another client.  Nil counts, unloaded keys,
+empty caches and notification badges do not prove completion.
 
-The first known boundary stays fixed through ordinary receipts and history
-redraws, even after the unread count reaches zero.  A boundary outside the
-loaded window is not moved to a nearby row.  A replacement Surface starts a
-new reading session.  After a confirmed explicit read-all, call
-~appkit-chat-read-clear~; use ~appkit-chat-read-rebase~ when an explicit unread
-action chooses the current authoritative frontier.  Neither function changes
-protocol state or redraws the timeline by itself.
+Use ~:known-p nil~ when the boundary itself is unknown.  Never derive message
+identity from a count or approximate an unloaded boundary.  Protocol adapters
+retain native ordering, sparse read flags, receipt transport and ownership.
+Matrix's unread index is resolved against the same revision's SDK snapshot.
 
-Render the returned boundary with ~appkit-chat-read-insert-divider~ and break
-compact sender grouping there.  The shared ~appkit-chat-show-unread-divider~
-option and ~appkit-chat-unread-divider~ face replace client-specific copies.
-~appkit-chat-read-target~ returns the exact row at point, or the newest eligible
-loaded row from the composer.  Divider text is never a read target.  Clients
-supply read eligibility and retain receipt transport, pending-request handling,
-explicit-unread suppression and Surface ownership checks; merely rendering a
-buffer does not authorize reading account-wide history.
+Render the returned key with ~appkit-chat-read-insert-divider~ and break compact
+sender grouping there.  Appearance is controlled by
+~appkit-chat-show-unread-divider~ and ~appkit-chat-unread-divider~.
+~appkit-chat-read-clear~ dismisses a confirmed explicit read-all boundary;
+~appkit-chat-read-rebase~ selects a newly confirmed explicit unread target.
+Replacement Surfaces start fresh; none of these helpers changes protocol state.
 
-Chat headers carry useful status, not a second conversation title or unread
-counter.  Keep account disambiguation, security, connection failures, active
-operations and filters; omit an empty header.  Buffer names already carry chat
-identity, while root/directory unread badges remain authoritative navigation.
-Chirp's encrypted read events do not expose an authoritative message frontier,
-so its DM view does not invent an unread divider.
+~appkit-chat-read-target~ selects the exact row at point or the newest eligible
+loaded row from the composer.  Dividers have no read target.  Clients retain
+eligibility, pending-request handling and explicit-unread suppression.
+
+Chat headers use ~appkit-chat-read-count-text~ for reliable positive counts in
+the current conversation/narrow.  Put progress before unbounded account labels.
+Keep useful security, connection, operation and filter context; hide an empty
+header.  Buffer names carry conversation identity.  Root badges retain their
+own protocol semantics and are not substitutes for chat message counts.
 
 ** Scroll edges
 

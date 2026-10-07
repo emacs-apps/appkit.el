@@ -6,9 +6,9 @@
 
 ;; Protocol adapters retain authoritative read receipts and message ordering.
 ;; This controller separates that moving frontier from the stable boundary at
-;; which the current reading session began.  Keys are opaque and exact; counts
-;; cannot identify a boundary.  State belongs to the current Surface, not to an
-;; account or to a reused buffer name.
+;; which reading began.  Authoritative complete-read evidence removes the
+;; boundary.  Keys are opaque and exact; counts cannot identify a boundary.
+;; State belongs to the current Surface, not to an account or reused name.
 
 ;;; Code:
 
@@ -47,27 +47,37 @@
     appkit-chat-read--state))
 
 (cl-defun appkit-chat-read-update
-    (keys &key first-unread-key (known-p t))
+    (keys &key first-unread-key (known-p t) unread-count all-read-p)
   "Return the stable unread boundary present in ordered message KEYS.
 
 FIRST-UNREAD-KEY is an exact protocol-authoritative key, possibly outside the
 loaded window.  With KNOWN-P nil, retain the previous authoritative frontier.
-A known nil key means no known unread message, not an unknown position.
+A nil key does not prove that unread messages outside this window are read.
 
-The first unread key latches independently of subsequent read receipts.  It
-remains fixed across acknowledgements, history loading and redraws.  A missing
-key is not replaced by a nearby message.  Explicit read-all may dismiss the
-boundary with `appkit-chat-read-clear'; explicit unread navigation may choose
-the current frontier with `appkit-chat-read-rebase'."
+UNREAD-COUNT is an authoritative message count for this exact conversation or
+narrow, or nil when unknown.  Zero confirms completion.  ALL-READ-P supplies
+equivalent protocol evidence when no exact count is available.  Notification,
+mention and badge counts, optimistic receipts and empty caches are not proof.
+
+While messages remain unread, the first unread key stays fixed across partial
+receipts, history loading and redraws.  Confirmed completion clears it, even
+when another client read the messages.  Missing keys are never approximated.
+Use `appkit-chat-read-clear' after an explicit confirmed read-all and
+`appkit-chat-read-rebase' for explicit unread navigation."
   (let ((state (appkit-chat-read--current-state)))
-    (when known-p
+    (cond
+     ((or (eq all-read-p t) (eql unread-count 0))
+      (setf (appkit-chat-read--state-current-key state) nil
+            (appkit-chat-read--state-boundary-key state) nil
+            (appkit-chat-read--state-dismissed-p state) nil))
+     (known-p
       (unless (equal first-unread-key
                      (appkit-chat-read--state-current-key state))
         (setf (appkit-chat-read--state-current-key state) first-unread-key
               (appkit-chat-read--state-dismissed-p state) nil))
       (unless (or (appkit-chat-read--state-boundary-key state)
                   (appkit-chat-read--state-dismissed-p state))
-        (setf (appkit-chat-read--state-boundary-key state) first-unread-key)))
+        (setf (appkit-chat-read--state-boundary-key state) first-unread-key))))
     (let ((boundary (appkit-chat-read--state-boundary-key state)))
       (and appkit-chat-show-unread-divider boundary
            (member boundary keys) boundary))))
@@ -86,6 +96,13 @@ Use for explicit unread navigation, not for ordinary read receipts."
     (setf (appkit-chat-read--state-dismissed-p state) nil
           (appkit-chat-read--state-boundary-key state)
           (appkit-chat-read--state-current-key state))))
+
+(defun appkit-chat-read-count-text (count)
+  "Return header text for reliable positive unread message COUNT.
+Unknown, invalid and zero counts have no header component.  The adapter must
+supply a current conversation/narrow count, not an account total or badge."
+  (when (and (integerp count) (> count 0))
+    (propertize (format "Unread: %d" count) 'face 'bold)))
 
 (defun appkit-chat-read-target (&optional position eligible-p)
   "Return the exact projected message row represented by POSITION or point.

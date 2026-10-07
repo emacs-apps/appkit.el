@@ -13,6 +13,31 @@
     (should-not (appkit-chat-read-update '(older a b c) :first-unread-key nil))
     (should (eq 'd (appkit-chat-read-update '(a b c d) :first-unread-key 'd)))))
 
+(ert-deftest appkit-chat-read-completion-ends-boundary-and-allows-new-unreads ()
+  (appkit-test-with-surface
+    (should (eq 'b (appkit-chat-read-update
+                    '(a b c) :first-unread-key 'b :unread-count 2)))
+    (should (eq 'b (appkit-chat-read-update
+                    '(a b c) :first-unread-key 'c :unread-count 1)))
+    ;; Empty or unknown loaded frontiers are not complete-read evidence.
+    (should (eq 'b (appkit-chat-read-update '(a b c) :first-unread-key nil)))
+    (should (eq 'b (appkit-chat-read-update '(a b c) :known-p nil)))
+    ;; A zero message count wins over an obsolete first-unread field.
+    (should-not (appkit-chat-read-update
+                 '(a b c) :first-unread-key 'c :unread-count 0))
+    (appkit-chat-read-rebase)
+    (should-not (appkit-chat-read-update '(a b c) :known-p nil))
+    ;; Marking the same message unread again begins a fresh boundary.
+    (should (eq 'b (appkit-chat-read-update
+                    '(a b c) :first-unread-key 'b :unread-count 2)))
+    ;; Some protocols prove completion by cursor/latest rather than a count.
+    (should (eq 'b (appkit-chat-read-update
+                    '(a b c) :known-p nil :all-read-p :false)))
+    (should-not (appkit-chat-read-update
+                 '(a b c) :known-p nil :all-read-p t))
+    (should (eq 'd (appkit-chat-read-update
+                    '(a b c d) :first-unread-key 'd :unread-count 1)))))
+
 (ert-deftest appkit-chat-read-clear-rejects-stale-frontier-relatch ()
   (appkit-test-with-surface
     (appkit-chat-read-update '(a b c) :first-unread-key 'b)
