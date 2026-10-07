@@ -811,9 +811,14 @@ Return is an application policy, not a universal send operation.  Chat clients
 may submit; public posts, mail, and forum composers retain their editing
 policy.  Completion-in-region gets Return first.  Use
 ~appkit-chatbuf-dispatch-return~ for shared input/timeline geometry: exact
-inline action, native button, client timeline action, then input focus.
-Input and timeline command remappings are honored.  Bind both Return event
-forms; native Wayland can deliver ~<return>~ instead of character ~RET~.
+inline action, native button, then an optional client timeline action.
+With no action, keep point, draft and Evil state unchanged; neither the
+dispatcher nor client timeline callbacks should fall back to focusing input.
+This follows Telega's message-content activation and evil-collection's
+preservation of it.  Explicit reply, edit and composer-entry commands retain
+their own focus policy.  Input and timeline command remappings are honored.
+Bind both Return event forms; native Wayland can deliver ~<return>~ instead
+of character ~RET~.
 
 Keep message capabilities on point-sensitive timeline maps.  They must not
 remain active in editable input.  The read-only native projection steps aside
