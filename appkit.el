@@ -58,6 +58,7 @@
 (require 'appkit-mode-line)
 (require 'appkit-chat-avatar)
 (require 'appkit-chat-ins)
+(require 'appkit-chat-read)
 (require 'appkit-discussion)
 (require 'appkit-directory)
 
