@@ -48,5 +48,19 @@ A row disappearing from a projection is not evidence of deletion."
    :keys (seq-difference (appkit-selection-keys selection) keys #'equal)
    :previous (seq-difference (appkit-selection-previous selection) keys #'equal)))
 
+(cl-defun appkit-selection-target-keys
+    (&key (captured nil captured-p) (region nil region-p) marked point)
+  "Return stable operation keys with shared message-selection precedence.
+An explicitly supplied CAPTURED snapshot wins, then an explicitly supplied
+REGION, then MARKED keys, then POINT.  An empty snapshot or active region
+stays empty: never substitute marks or a new point target.
+
+Return a fresh list without reordering or filtering keys.  Adapters own
+timeline ordering, eligibility, action cardinality and Surface validation."
+  (cond (captured-p (copy-sequence captured))
+        (region-p (copy-sequence region))
+        (marked (copy-sequence marked))
+        (point (list point))))
+
 (provide 'appkit-selection)
 ;;; appkit-selection.el ends here
