@@ -377,11 +377,33 @@ It composes the strip with existing avatar and content prefixes on both
 logical and wrapped lines, without changing text or content faces.
 Customize ~appkit-chat-selection-marker~ for the shared appearance.
 
-Clients still own target ordering, selectability, action cardinality,
-permissions and transport.  Capture exact Surface identity and stable keys for
-menus; resolve current objects at execution without falling back to a new point
-target.  Batch requests should advance through committed transitions and owned
+Message-batch adapters use ~appkit-selection-target-keys~ for target precedence:
+an inherited ~:captured~ snapshot, then an active ~:region~, then ~:marked~ keys,
+then ~:point~.  Omit ~:region~ when inactive; passing it as nil means an explicit
+empty selection, such as a region wholly inside a draft, and must not fall
+through to marks or point.  The helper preserves key order and never filters
+unavailable targets into a different selection.
+
+Capture before Transient or Evil deactivates the region.  Reuse that capture
+through submenus, including forwarding from the message-operation menu; do not
+recapture at the suffix.  QQ and Disco use the same selector for their message
+batches.  Clients still own ordering, eligibility, permissions and transport.
+Single-message actions reject a multiple-message target instead of taking its
+first member or silently substituting the current row.
+
+Capture exact Surface identity with the keys and resolve current canonical
+objects at execution.  An invalidated target never falls back to point.  Zulip's
+message menu follows its captured key through an authoritative local-to-server
+promotion, but not ordinary point movement or a replacement Surface.
+Read-through boundaries remain read-through operations, not selected-message
+batches.  Batch requests advance through committed transitions and owned
 Effects, not renderer callbacks.
+
+Do not conflate message keys with partial text selection.  Zulip's quote/forward
+model distinguishes a whole message, quoted text within one message, and a set
+of messages; those content semantics belong to its adapter.  Nor should the
+message selector replace domain-specific mail-mark or draft-delete workflows.
+Adapters without an implemented batch action must not acquire a pretend one.
 
 ** Media
 
@@ -813,10 +835,17 @@ Native bindings work without Evil.  The client's optional Evil setup calls
 may arrive in any order.  Unsupported actions stay unbound, rather than
 acquiring substitute commands.
 
-The message-edit/delete and attachment roles follow evil-collection's Telega
-adapter; navigation, input options, preview and cancellation follow Telega's
-native interaction model.  Refresh, pagination, generic marks and explicit
-submission are Appkit conventions, not claims about Telega's keys.
+The message-edit/delete, forwarding and attachment roles follow evil-collection's
+Telega adapter; navigation, input options, preview and cancellation follow
+Telega's native interaction model.  In a timeline declaring ~forward~, native
+~f~ and Evil normal/motion ~R~ open the same selection-aware operation; Evil
+~f~ remains character-find.  A message menu's ~f~ suffix is independent of that
+modal key choice and must retain the captured target set.
+
+Refresh, pagination, generic marks and explicit submission are Appkit
+conventions, not claims about Telega's keys.  These defaults apply only to
+declared roles: a mail reader's reply-all or a social client's repost keeps
+its own domain-specific meaning.
 
 ** Point and modal context
 
