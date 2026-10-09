@@ -60,6 +60,16 @@ cannot steal graphical Return before Emacs translates it to ~RET~.  Use
 use ~appkit-ui-button-map~.  Do not put control activation only in a major-mode
 Evil map or modify Emacs's global ~button-map~.
 
+Touch drags on sender buttons, action rows and embedded cards scroll the host
+buffer; only a completed tap activates the action.  Use
+~appkit-ui-ignore-mouse~ rather than ~ignore~ for a passive ~down-mouse-1~
+binding: its ~ignored-mouse-command~ property keeps Emacs's native scrolling
+and long-press recognition enabled without starting mouse text selection.
+For image-map hotspots, register the full ~[ID touchscreen-begin]~,
+~[ID touchscreen-update]~ and ~[ID touchscreen-end]~ sequences in
+~function-key-map~ with ~touch-screen-translate-touch~.  This retains the
+hotspot on taps but removes it from buffer gestures such as scrolling.
+
 ** Compose primitives
 
 The exact source-backed contract is documented in

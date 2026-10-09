@@ -3,12 +3,73 @@
 (require 'ert)
 (require 'appkit-ui)
 (require 'mouse)
+(require 'touch-screen)
 
 (defun appkit-ui-test--primary-click (window position)
   "Return a real primary-click event pair in WINDOW at POSITION."
   (let ((posn (list window position '(0 . 0) 0 nil position)))
     (vector (list 'down-mouse-1 posn)
             (list 'mouse-1 posn))))
+
+(defun appkit-ui-test--touch-gesture (position &optional dy canceled)
+  "Dispatch native touch at POSITION and return generated scroll deltas.
+Move by DY unless nil.  CANCELED marks a window-system-canceled release."
+  (let* ((touch-screen-current-tool nil)
+         (touch-screen-aux-tool nil)
+         (touch-screen-current-timer nil)
+         (touch-screen-simple-mouse-conversion nil)
+         (touch-screen-extend-selection nil)
+         (touch-screen-precision-scroll nil)
+         (start (cons 1 (list (selected-window) position '(20 . 100) 0)))
+         (end (cons 1 (list (selected-window) position
+                            (cons 20 (+ 100 (or dy 0))) 0)))
+         (unread-command-events
+          (append (list (list 'touchscreen-begin start))
+                  (when dy (list (list 'touchscreen-update (list end))))
+                  (list (list 'touchscreen-end end canceled) 0))))
+    (unwind-protect
+        (let (keys deltas)
+          (while (not (equal (setq keys (read-key-sequence-vector nil)) [0]))
+            (let ((event (aref keys (1- (length keys)))))
+              (when (eq (car-safe event) 'touchscreen-scroll)
+                (push (nthcdr 2 event) deltas))
+              (funcall (key-binding keys) event)))
+          (nreverse deltas))
+      (when touch-screen-current-timer
+        (cancel-timer touch-screen-current-timer)))))
+
+(ert-deftest appkit-ui-touch-actions-scroll-without-activating ()
+  "Headings, card spans and action rows scroll in either direction."
+  (dolist (kind '(button span row))
+    (with-temp-buffer
+      (let ((calls 0))
+        (dotimes (index 100)
+          (let ((start (point))
+                (action (lambda (&rest _) (cl-incf calls))))
+            (pcase kind
+              ('button
+               (appkit-ui-insert-action-button (format "Sender %d" index) action))
+              ('span
+               (insert (format "Embed %d" index))
+               (appkit-ui-add-action start (point) action))
+              ('row
+               (insert (format "Row %d" index))
+               (appkit-ui-make-action-row start (point) index action)))
+            (insert "\n")))
+        (save-window-excursion
+          (switch-to-buffer (current-buffer))
+          (goto-char (point-min))
+          (forward-line 30)
+          (set-window-start (selected-window) (point))
+          (should (equal (appkit-ui-test--touch-gesture (point) -60)
+                         '((0 60))))
+          (should (equal (appkit-ui-test--touch-gesture (point) 60)
+                         '((0 -60))))
+          (should (= calls 0))
+          (appkit-ui-test--touch-gesture (point) nil t)
+          (should (= calls 0))
+          (appkit-ui-test--touch-gesture (point))
+          (should (= calls 1)))))))
 
 (ert-deftest appkit-ui-progress-bar-fills-from-ratio-and-glyph ()
   (should (equal (appkit-ui-progress-bar 0 10) "          "))
