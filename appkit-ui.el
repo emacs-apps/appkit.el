@@ -170,12 +170,19 @@ Omitting the boundary cleans the entire copied region."
 (defconst appkit-ui-action-property 'appkit-ui-action
   "Text property holding the zero-argument function for an action span.")
 
+(defun appkit-ui-ignore-mouse ()
+  "Ignore a mouse press without taking over touchscreen gestures.
+Action maps activate on release; touch drags must remain buffer scrolling."
+  (interactive))
+
+(put 'appkit-ui-ignore-mouse 'ignored-mouse-command t)
+
 (defvar appkit-ui-action-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'appkit-ui-activate)
     ;; A lower-priority [return] binding prevents Emacs translating it to RET.
     (define-key map [return] #'appkit-ui-activate)
-    (define-key map [down-mouse-1] #'ignore)
+    (define-key map [down-mouse-1] #'appkit-ui-ignore-mouse)
     (define-key map [mouse-1] #'appkit-ui-activate)
     map)
   "Keymap used by inline Appkit action spans.")
@@ -253,7 +260,7 @@ Do nothing when ACTION is not callable or the region is empty."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map button-map)
     (define-key map [return] #'push-button)
-    (define-key map [down-mouse-1] #'ignore)
+    (define-key map [down-mouse-1] #'appkit-ui-ignore-mouse)
     (define-key map [mouse-1] #'push-button)
     map)
   "Native text-button map owning both Return events and primary clicks.")
@@ -284,7 +291,7 @@ text properties passed to `insert-text-button'."
     ;; mouse-1 event before the button at the event position is dispatched.
     (define-key map (kbd "RET") #'push-button)
     (define-key map [return] #'push-button)
-    (define-key map [down-mouse-1] #'ignore)
+    (define-key map [down-mouse-1] #'appkit-ui-ignore-mouse)
     (define-key map [mouse-1] #'push-button)
     ;; Retain the traditional button activation gesture explicitly, without
     ;; inheriting any of the default button keymap's link behavior.
