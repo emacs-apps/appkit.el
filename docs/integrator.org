@@ -279,12 +279,27 @@ thumbnail budget is two unscaled character columns by one text line; its
 displayed width and height follow text zoom together.  Cached source geometry
 does not depend on the zoom level at acquisition.
 
+The descriptor is opaque: use a display helper rather than installing it
+directly as a ~display~ property.  On Canvas displays, a shared bounded poster
+is filled by asynchronous first-frame jobs (at most two decoders); each job
+releases its session after the first frame, error, or deadline.  Detached
+completion strings and disabled-autoplay images therefore get a real first
+frame without retaining players.  Cache identity includes file replacement,
+geometry, fit and background; live animation still belongs to each mounted
+occurrence.  The optional third builder argument selects ~cover~ (default)
+or ~contain~.  Native Canvas cropping and rounded corners need no SVG wrapper.
+Formats without a native decoder, such as source SVG, keep the ordinary Emacs
+image path rather than acquiring a failing Canvas job or another SVG wrapper.
+
 Use ~appkit-media-image-display-string~ for inline image occurrences.  Each
 occurrence has its own full-image display slice while retaining the source
 image resource, so adjacent identical images remain separate and Canvas pixels
 and live updates remain intact.  Treat the ~display~ property as a display
-specification, not necessarily a bare image descriptor.  Preparing strings is
-inert; insertion boundaries mount independently owned video.el occurrences.
+specification, not necessarily a bare image descriptor.  Preparing strings does
+not start playback; insertion boundaries mount independently owned video.el
+occurrences.  Replacing a descriptor's playback resource with
+~appkit-media-image-with-resource~ does not replace its thumbnail source: a
+video attachment can keep its image-file poster without prerolling the video.
 
 ** Discussion
 

@@ -779,6 +779,7 @@
               ((symbol-function 'video-session-inline-create)
                (lambda (candidate _width _height &rest arguments)
                  (should (eq candidate 'video-session))
+                 (should (= 3 (plist-get arguments :corner-radius)))
                  (setq inline-player player)
                  (list :closed nil
                        :close-function
@@ -813,6 +814,7 @@
              (surface
               (appkit-media-video-inline-create
                session 320 180
+               :corner-radius 3
                :close-function
                (lambda (closed-surface)
                  (setq callback-surface closed-surface)

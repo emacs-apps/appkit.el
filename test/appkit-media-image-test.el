@@ -120,50 +120,6 @@
       (should (equal image-properties
                      '(:ascent center :width 21 :height 21))))))
 
-(ert-deftest appkit-media-one-line-thumbnail-clips-into-fixed-box ()
-  (let (rectangle-call embed-call image-properties)
-    (cl-letf (((symbol-function 'file-readable-p) (lambda (_file) t))
-              ((symbol-function 'image-type-available-p)
-               (lambda (type) (eq type 'svg)))
-              ((symbol-function 'appkit-media-image-mime-type)
-               (lambda (_file) "image/png"))
-              ((symbol-function 'svg-create)
-               (lambda (width height) (list :svg width height)))
-              ((symbol-function 'svg-clip-path)
-               (lambda (_svg &rest _properties) :clip))
-              ((symbol-function 'svg-rectangle)
-               (lambda (&rest arguments)
-                 (setq rectangle-call arguments)))
-              ((symbol-function 'svg-embed)
-               (lambda (&rest arguments)
-                 (setq embed-call arguments)))
-              ((symbol-function 'svg-image)
-               (lambda (_svg &rest properties)
-                 (setq image-properties properties)
-                 '(image :type svg :data "thumbnail")))
-              ((symbol-function 'appkit-media-image-object-valid-p)
-               (lambda (_image) t)))
-      (let ((image
-             (appkit-media--one-line-thumbnail-from-file
-              "/tmp/source.png" 40 20)))
-        (should (= 1 (plist-get (cdr image) :appkit-media-nslices)))
-        (should
-         (equal rectangle-call
-                '(:clip 0 0 40 20 :rx 4.0 :ry 4.0)))
-        (should
-         (equal (seq-take embed-call 4)
-                '((:svg 40 20) "/tmp/source.png" "image/png" nil)))
-        (should
-         (equal
-          (plist-get (nthcdr 4 embed-call) :preserveAspectRatio)
-          "xMidYMid slice"))
-        (should
-         (equal
-          (plist-get (nthcdr 4 embed-call) :clip-path)
-          "url(#appkit-one-line-thumbnail-clip)"))
-        (should
-         (equal image-properties
-                '(:ascent center :width 40 :height 20 :scale 1.0)))))))
 
 (ert-deftest appkit-media-cropped-preview-fills-a-fixed-multiline-box ()
   "Cropped previews should cover one exact box with stable slice metadata."
@@ -681,19 +637,27 @@
       (kill-buffer buffer))))
 
 (ert-deftest appkit-media-one-line-thumbnail-scales-both-axes-on-cold-and-warm-load ()
-  (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)))
-  (let ((file (make-temp-file "appkit-one-line-zoom-" nil ".svg"))
+  (skip-unless (and (display-graphic-p) (image-type-available-p 'canvas)))
+  (let ((file (make-temp-file "appkit-one-line-zoom-" nil ".png"))
         (buffer (generate-new-buffer " *appkit-thumbnail-zoom-test*"))
+        (appkit-media--thumbnail-cache (make-hash-table :test #'equal))
+        (appkit-media--thumbnail-waiting nil)
+        (appkit-media--thumbnail-active nil)
+        (appkit-media--thumbnail-timer nil)
         image previous-width)
     (unwind-protect
         (save-window-excursion
-          (with-temp-file file
-            (insert "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><rect width=\"64\" height=\"64\" fill=\"orange\"/></svg>"))
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region
+             (base64-decode-string
+              "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADUlEQVR4nGP4zwAE/wEHAAH/4iOeWQAAAABJRU5ErkJggg==")
+             nil file nil 'silent))
           (switch-to-buffer buffer)
           (dolist (amount '(-2 0 2))
             (text-scale-set amount)
             (let ((cold-image
-                   (appkit-media-one-line-preview-image-from-file file)))
+                   (appkit-media-one-line-preview-image-from-file file))
+                  rendered-size)
               (unless image (setq image cold-image))
               (dolist (source (if (eq image cold-image)
                                  (list image)
@@ -707,14 +671,19 @@
                                 (posn-at-point (point-min) window))))
                   (should (= (cdr pixels)
                              (window-font-height window 'default)))
-                  (should (<= (abs (- (car pixels)
-                                     (* 2 (window-font-width window 'default))))
-                              1))
+                  (when rendered-size
+                    (should (equal pixels rendered-size)))
+                  (setq rendered-size pixels)
                   (when (and previous-width (eq source image))
                     (should (> (car pixels) previous-width)))))
               (setq previous-width
                     (car (posn-object-width-height
                           (posn-at-point (point-min) (selected-window))))))))
+      (when (timerp appkit-media--thumbnail-timer)
+        (cancel-timer appkit-media--thumbnail-timer))
+      (setq appkit-media--thumbnail-waiting nil)
+      (dolist (job (copy-sequence appkit-media--thumbnail-active))
+        (appkit-media--thumbnail-finish job))
       (kill-buffer buffer)
       (delete-file file))))
 
@@ -744,6 +713,114 @@
                  (appkit-media-bytes-to-extension "RIFF1234WEBP" "img")))
   (should (equal "fallback"
                  (appkit-media-bytes-to-extension "unknown" "fallback"))))
+
+(ert-deftest appkit-media-thumbnail-known-geometry-never-decodes-source ()
+  (require 'video-inline)
+  (let ((file (make-temp-file "appkit-thumbnail-"))
+        (appkit-media--thumbnail-cache (make-hash-table :test #'equal))
+        (appkit-media--thumbnail-waiting nil)
+        (metadata-reads 0))
+    (let ((coding-system-for-write 'no-conversion))
+      (write-region
+       (base64-decode-string
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADUlEQVR4nGP4zwAE/wEHAAH/4iOeWQAAAABJRU5ErkJggg==")
+       nil file nil 'silent))
+    (unwind-protect
+        (cl-letf (((symbol-function 'image-type-available-p) (lambda (_) t))
+                  ((symbol-function 'video-canvas-create)
+                   (lambda (w h &rest _) (list 'image :type 'canvas :width w :height h)))
+                  ((symbol-function 'video-background-color) (lambda (&rest _) "#ffffff"))
+                  ((symbol-function 'appkit-media--thumbnail-schedule) #'ignore)
+                  ((symbol-function 'appkit-media--base-char-pixel-height) (lambda () 20))
+                  ((symbol-function 'appkit-media--file-animated-p)
+                   (lambda (_) (cl-incf metadata-reads) t))
+                  ((symbol-function 'image-size) (lambda (&rest _) (ert-fail "Decoded geometry")))
+                  ((symbol-function 'video-source-poster) (lambda (&rest _) (ert-fail "Blocking poster")))
+                  ((symbol-function 'svg-embed) (lambda (&rest _) (ert-fail "Embedded source"))))
+          (let* ((image (appkit-media-one-line-preview-image-from-file file 40 'contain))
+                 (thumbnail (plist-get (cdr image) :appkit-media-thumbnail))
+                 (video (appkit-media-image-with-resource
+                         image '((file . "/original/video.mp4"))
+                         :kind 'video :autoplay nil :animated nil))
+                 (text (appkit-media-one-line-image-display-string image "[image]"))
+                 (video-text (appkit-media-one-line-image-display-string video "[video]"))
+                 (canvas (cadr (get-text-property 0 'display text))))
+            (should (= 40 (appkit-media--thumbnail-width thumbnail)))
+            (should (= 20 (appkit-media--thumbnail-height thumbnail)))
+            (should (eq 'contain (appkit-media--thumbnail-fit thumbnail)))
+            (should (equal file (appkit-media--thumbnail-source thumbnail)))
+            (should (eq canvas (cadr (get-text-property 0 'display video-text))))
+            (should (eq thumbnail (plist-get (cdr video) :appkit-media-thumbnail)))
+            (should (equal '(2.0 . ch) (plist-get (cdr canvas) :width)))
+            (should (equal '(1 . ch) (plist-get (cdr canvas) :height)))
+            (should (equal '((file . "/original/video.mp4"))
+                           (appkit-media--playback-resource
+                            (plist-get (cdr video) :appkit-media-playback))))
+            (dotimes (_ 50)
+              (appkit-media-one-line-preview-image-from-file file 40 'contain))
+            (should (= 1 metadata-reads))
+            (should (= 1 (length appkit-media--thumbnail-waiting)))
+            (appkit-media--thumbnail-get file 40 20 'contain "#000000")
+            (should (= 2 (length appkit-media--thumbnail-waiting)))))
+      (delete-file file))))
+
+(ert-deftest appkit-media-thumbnail-jobs-bound-preroll-and-retire-once ()
+  (require 'video-inline)
+  (let ((appkit-media--thumbnail-active nil)
+        (appkit-media--thumbnail-waiting nil)
+        (appkit-media--thumbnail-timer nil)
+        jobs prepared closed timers)
+    (dotimes (index 4)
+      (push (appkit-media--thumbnail-job-create
+             :thumbnail (appkit-media--thumbnail-create
+                         :source (number-to-string index) :width 40 :height 20
+                         :fit 'cover :background "#ffffff"
+                         :poster (list 'image :type 'canvas :width 40 :height 20)))
+            jobs))
+    (setq appkit-media--thumbnail-waiting (copy-sequence jobs))
+    (cl-letf (((symbol-function 'video-session-create)
+               (lambda (source &rest _) (video--make-session :player source)))
+              ((symbol-function 'video-session-inline-create)
+               (lambda (session _w _h &rest args)
+                 (cons session args)))
+              ((symbol-function 'video-inline-prepare) (lambda (inline) (push inline prepared)))
+              ((symbol-function 'video-inline-play) (lambda (_) (ert-fail "Autoplayed poster")))
+              ((symbol-function 'video-session-close) (lambda (session) (push session closed)))
+              ((symbol-function 'run-at-time)
+               (lambda (_time _repeat callback &rest args)
+                 (push (cons callback args) timers) nil))
+              ((symbol-function 'appkit-media--thumbnail-schedule) #'ignore)
+              ((symbol-function 'video-native-canvas-fill) #'ignore)
+              ((symbol-function 'canvas-refresh) #'ignore))
+      (unwind-protect
+          (progn
+            (appkit-media--thumbnail-pump)
+            (should (= 2 (length prepared)))
+            (should (= 2 (length appkit-media--thumbnail-active)))
+            (should (= 2 (length appkit-media--thumbnail-waiting)))
+            (let* ((job (car jobs))
+                   (inline (appkit-media--thumbnail-job-inline job))
+                   (activate (plist-get (cdr inline) :activate-function))
+                   (buffer (appkit-media--thumbnail-job-buffer job)))
+              (funcall activate inline nil)
+              (apply (caar timers) (cdar timers))
+              (should-not (buffer-live-p buffer))
+              (should (= 1 (length closed)))
+              (funcall activate inline nil)
+              (appkit-media--thumbnail-finish job)
+              (should (= 1 (length closed))))
+            (appkit-media--thumbnail-pump)
+            (should (= 3 (length prepared)))
+            (let ((job (cadr jobs)))
+              (appkit-media--thumbnail-error
+               (appkit-media--thumbnail-job-player job) "bad image")
+              (should (appkit-media--thumbnail-job-finished job))
+              (should-not (buffer-live-p (appkit-media--thumbnail-job-buffer job))))
+            (appkit-media--thumbnail-pump)
+            (should (= 4 (length prepared)))
+            (should-not appkit-media--thumbnail-waiting))
+        (dolist (job jobs) (appkit-media--thumbnail-finish job))))))
+
 
 (provide 'appkit-media-image-test)
 

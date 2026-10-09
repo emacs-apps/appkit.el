@@ -24,6 +24,7 @@
 (require 'appkit-chatbuf)
 (require 'appkit-core)
 (require 'appkit-ui)
+(require 'appkit-media-image)
 (require 'appkit-bindings)
 
 (require 'appkit-surface)
@@ -80,8 +81,7 @@
       (error "Appkit chat compose attachment label must be a string: %S"
              attachment))
     (when preview
-      (setq text (concat text (propertize " " 'display preview
-                                          'rear-nonsticky '(display)))))
+      (setq text (concat text (appkit-media-image-display-string preview " "))))
     (setq text (concat text label))
     (when (and (stringp description)
                (not (string-empty-p description)))
