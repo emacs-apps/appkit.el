@@ -101,6 +101,67 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
       (goto-char (point-min))
       (should-not (appkit-ui-activate-at)))))
 
+(ert-deftest appkit-ui-action-properties-require-valid-action-and-span ()
+  (with-temp-buffer
+    (insert "body")
+    (appkit-ui-add-action 1 5 nil :properties '(owner invalid))
+    (appkit-ui-add-action 1 1 #'ignore :properties '(owner empty))
+    (should-not (get-text-property 1 'owner))
+    (appkit-ui-add-action 1 5 #'ignore :properties '(owner valid))
+    (should (eq (get-text-property 1 'owner) 'valid))))
+
+(ert-deftest appkit-ui-fallback-keeps-nested-controls-and-native-gestures ()
+  "Card fallback must not intercept inner Return, primary click or touch."
+  (with-temp-buffer
+    (let (calls inner-start button-start)
+      (insert "outer ")
+      (setq inner-start (point))
+      (insert "inner")
+      (appkit-ui-add-action inner-start (point)
+                            (lambda () (push 'inner calls))
+                            :help-echo "Inner")
+      (insert " ")
+      (setq button-start (point))
+      (insert-text-button "native"
+                          'keymap appkit-ui-button-map
+                          'follow-link nil
+                          'help-echo "Native"
+                          'action (lambda (_) (push 'native calls)))
+      (insert " tail")
+      (appkit-ui-add-fallback-action
+       (point-min) (point-max) (lambda () (push 'outer calls))
+       :help-echo "Outer" :properties '(fallback-owner outer))
+      (should-not (get-text-property inner-start 'fallback-owner))
+      (should-not (get-text-property button-start 'fallback-owner))
+      (should (equal (get-text-property button-start 'help-echo) "Native"))
+      (should (eq (get-text-property button-start 'keymap) appkit-ui-button-map))
+      (should-not (get-text-property button-start appkit-ui-action-property))
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (dolist (position (list (point-min) inner-start button-start))
+          (goto-char position)
+          (execute-kbd-macro (kbd "RET"))
+          (execute-kbd-macro
+           (appkit-ui-test--primary-click (selected-window) position))
+          (appkit-ui-test--touch-gesture position))
+        (should (equal calls '(native native native inner inner inner
+                                     outer outer outer)))))))
+
+(ert-deftest appkit-ui-fallback-respects-overlay-buttons-and-custom-maps ()
+  (with-temp-buffer
+    (insert "abcdefghijkl")
+    (let ((button (make-button 3 5 'action #'ignore))
+          (map (make-sparse-keymap)))
+      (put-text-property 7 9 'keymap map)
+      (appkit-ui-add-fallback-action 1 13 #'ignore)
+      (should (eq (button-at 3) button))
+      (should-not (get-text-property 3 appkit-ui-action-property))
+      (should-not (get-text-property 7 appkit-ui-action-property))
+      (should (eq (get-text-property 7 'keymap) map))
+      (dolist (position '(1 5 9 12))
+        (should (eq (get-text-property position appkit-ui-action-property)
+                    #'ignore))))))
+
 (ert-deftest appkit-ui-action-row-dispatches-ret-and-exact-mouse-position ()
   (with-temp-buffer
     (let* ((buffer (current-buffer))
@@ -413,6 +474,59 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
       (should (equal "A " (get-text-property (point) 'line-prefix)))
       (forward-line 1)
       (should (equal "B " (get-text-property (point) 'line-prefix))))))
+
+(ert-deftest appkit-ui-prefix-faces-preserve-nesting-and-clean-copies ()
+  (with-temp-buffer
+    (let* ((first (propertize "A " 'face 'bold))
+           (rest "B ")
+           (state (appkit-ui-make-prefix-state first rest)))
+      (appkit-ui-insert-prefixed-lines state "first\nsecond"
+                                       :face 'italic :prefix-face 'shadow)
+      (appkit-ui-apply-line-prefix (point-min) (point-max) "> " 'success)
+      (should (equal (buffer-string) "first\nsecond\n"))
+      (should (equal (get-text-property 1 'line-prefix) "> A "))
+      (should (equal (get-text-property 1 'wrap-prefix) "> B "))
+      (should (equal (get-text-property 7 'line-prefix) "> B "))
+      (should (eq (get-text-property 1 'face) 'italic))
+      (should (memq 'shadow
+                    (ensure-list
+                     (get-text-property
+                      2 'face (get-text-property 1 'line-prefix)))))
+      (should (eq (get-text-property 0 'face first) 'bold))
+      (should-not (get-text-property 0 'face rest))
+      (let ((copy (appkit-ui-buffer-substring-filter
+                   (point-min) (point-max) nil)))
+        (should (equal copy "first\nsecond\n"))
+        (should-not (text-property-not-all 0 (length copy) 'line-prefix nil copy))
+        (should-not (text-property-not-all 0 (length copy) 'wrap-prefix nil copy)))
+      (appkit-ui-insert-prefixed-lines state "third" :prefix-face 'shadow)
+      (should (equal (get-text-property 14 'line-prefix) "B ")))))
+
+(ert-deftest appkit-ui-card-shares-parent-prefix-and-excludes-only-newline ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'appkit-ui-vbar-string)
+               (lambda (face) (propertize "|" 'face face))))
+      (let ((prefix (appkit-ui-make-prefix-state "A " "B ")))
+        (should
+         (equal
+          (appkit-ui-insert-card
+           (lambda (card-prefix)
+             (appkit-ui-insert-prefixed-lines card-prefix "one\ntwo"))
+           :prefix prefix :border-face 'shadow :action #'ignore
+           :properties '(card-owner card))
+          '(1 . 9)))
+        (should (equal (get-text-property 1 'line-prefix) "A|"))
+        (should (equal (get-text-property 1 'wrap-prefix) "B|"))
+        (should (equal (get-text-property 5 'line-prefix) "B|"))
+        (should (eq (get-text-property 8 'card-owner) 'card))
+        (should-not (get-text-property 8 appkit-ui-action-property))
+        (should (eq (get-text-property 7 appkit-ui-action-property) #'ignore))
+        (appkit-ui-insert-prefixed-lines prefix "after")
+        (should (equal (get-text-property 9 'line-prefix) "B "))))
+    (erase-buffer)
+    (should-not (appkit-ui-insert-card #'ignore :action #'ignore))
+    (appkit-ui-insert-card (lambda (_) (insert "x")) :action #'ignore)
+    (should (eq (get-text-property 1 appkit-ui-action-property) #'ignore))))
 
 (ert-deftest appkit-ui-one-line-preview-normalizes-and-styles-text ()
   (let* ((preview

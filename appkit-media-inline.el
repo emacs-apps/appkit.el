@@ -14,10 +14,13 @@
 (require 'appkit-surface)
 (require 'video-inline)
 
+(autoload 'appkit-media--track-mount "appkit-media-track")
+(autoload 'appkit-media-track-activate "appkit-media-track")
+
 (cl-defstruct (appkit-media-inline-host
                (:constructor appkit-media--inline-host-create))
   buffer overlays owner occurrence plan resource animated
-  pending cancel inline map owner-handle autoplay-disabled-p)
+  pending cancel inline map owner-handle autoplay-disabled-p track)
 
 (defvar-local appkit-media--inline-hosts nil
   "Live media occurrences in this buffer.")
@@ -312,12 +315,16 @@ FORCE also checks property-only changes and externally removed overlays."
                (appkit-media-video-inline-toggle inline)
              (appkit-media-video-inline-play inline))))))))
 
-(defun appkit-media-inline-host-activate (host &optional presentation)
+(cl-defun appkit-media-inline-host-activate (host &optional presentation)
   "Activate HOST using its interaction policy, or promote to PRESENTATION.
-PRESENTATION is nil, `dedicated', or `frame'.  A media interaction toggles
-animated images and videos; still images and open interactions use a viewer."
+PRESENTATION is nil, `dedicated', or `frame'.  Tracks also accept `external'.
+A media interaction toggles animated images and videos; still images and open
+interactions use a viewer."
   (unless (appkit-media-inline-host-live-p host)
     (user-error "Inline media belongs to a retired buffer span"))
+  (when-let* ((track (appkit-media-inline-host-track host)))
+    (cl-return-from appkit-media-inline-host-activate
+      (appkit-media-track-activate track presentation)))
   (unless (memq presentation '(nil dedicated frame))
     (error "Unknown inline media presentation: %S" presentation))
   (unless (appkit-media--inline-canvas-p host)
@@ -340,7 +347,7 @@ animated images and videos; still images and open interactions use a viewer."
         (cond
          ((not (appkit-media-inline-host-live-p host))
           (appkit-media--inline-close host))
-         ((and (eq (appkit-media--playback-kind plan) 'image)
+         ((and plan (eq (appkit-media--playback-kind plan) 'image)
                appkit-media-inline-animation-enabled
                (appkit-media--playback-autoplay plan)
                (appkit-media-inline-host-animated host)
@@ -371,19 +378,22 @@ animated images and videos; still images and open interactions use a viewer."
   "Create overlay-owned playback for exact RANGES of OCCURRENCE under OWNER."
   (let* ((poster (appkit-media--occurrence-image occurrence))
          (plan (plist-get (cdr poster) :appkit-media-playback))
-         (interaction (appkit-media--playback-interaction plan))
-         (resource (appkit-media--playback-resource plan))
+         (descriptor (plist-get (cdr poster) :appkit-media-track))
+         (interaction (and plan (appkit-media--playback-interaction plan)))
+         (resource (and plan (appkit-media--playback-resource plan)))
          (host (appkit-media--inline-host-create
                 :buffer (current-buffer) :owner owner :occurrence occurrence
                 :plan plan
                 :resource (and resource (appkit-media-resource-normalize resource))
-                :animated (appkit-media--playback-animated-p plan)))
-         (map (and interaction (make-sparse-keymap)))
+                :animated (and plan (appkit-media--playback-animated-p plan))))
+         (map (if descriptor
+                  (appkit-media--track-mount host descriptor poster (caar ranges))
+                (and interaction (make-sparse-keymap))))
          completed)
     (unwind-protect
         (progn
           (setf (appkit-media-inline-host-map host) map)
-          (when map
+          (when (and map (not descriptor))
             (dolist (key '("RET" "<return>" "<mouse-1>"))
               (define-key map (kbd key)
                           (lambda () (interactive)
@@ -426,11 +436,14 @@ animated images and videos; still images and open interactions use a viewer."
               (when map
                 (overlay-put overlay 'keymap map)
                 (overlay-put overlay 'mouse-face 'highlight)
-                (overlay-put overlay 'follow-link t)
+                ;; These maps own primary clicks, not button-style mouse-2.
+                ;; Advertising follow-link would silently discard native taps.
                 (overlay-put overlay 'help-echo
-                             (if (appkit-media--inline-toggle-p host)
-                                 "RET: play/pause; C-RET: open viewer"
-                               "RET: open viewer")))))
+                             (cond
+                              (descriptor "Left/right: select; RET: activate; C-RET: viewer; F: frame")
+                              ((appkit-media--inline-toggle-p host)
+                               "RET: play/pause; C-RET: open viewer")
+                              (t "RET: open viewer"))))))
           (setf (appkit-media-inline-host-overlays host)
                 (nreverse (appkit-media-inline-host-overlays host)))
           (push host appkit-media--inline-hosts)
@@ -446,7 +459,7 @@ animated images and videos; still images and open interactions use a viewer."
             (setf (appkit-media-inline-host-owner-handle host)
                   (appkit-register-handle
                    owner 'function (lambda () (appkit-media--inline-close host)))))
-          (when (and (appkit-media--playback-autoplay plan)
+          (when (and plan (appkit-media--playback-autoplay plan)
                      (appkit-media-inline-host-animated host))
             (appkit-media--inline-schedule-start))
           (setq completed t)
@@ -482,15 +495,16 @@ Return newly created hosts in order."
       (let* ((occurrence (get-text-property position 'appkit-media-occurrence))
              (next (next-single-property-change
                     position 'appkit-media-occurrence nil end))
-             (plan (and occurrence
-                        (plist-get (cdr (appkit-media--occurrence-image occurrence))
-                                   :appkit-media-playback))))
-        (when (and plan
-                   (or (appkit-media--playback-interaction plan)
-                       (and appkit-media-inline-animation-enabled
-                            (eq (appkit-media--playback-kind plan) 'image)
-                            (appkit-media--playback-autoplay plan)
-                            (appkit-media--playback-animated-p plan))))
+             (poster (and occurrence (appkit-media--occurrence-image occurrence)))
+             (plan (and poster (plist-get (cdr poster) :appkit-media-playback)))
+             (track (and poster (plist-get (cdr poster) :appkit-media-track))))
+        (when (or track
+                  (and plan
+                       (or (appkit-media--playback-interaction plan)
+                           (and appkit-media-inline-animation-enabled
+                                (eq (appkit-media--playback-kind plan) 'image)
+                                (appkit-media--playback-autoplay plan)
+                                (appkit-media--playback-animated-p plan)))))
           (let ((span position))
             (while (< span next)
               (let ((limit (min (next-single-property-change span 'display nil next)

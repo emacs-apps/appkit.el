@@ -483,6 +483,11 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
   (span-length nil :read-only t)
   (slices nil :read-only t))
 
+(defun appkit-media--prepared-image-p (image)
+  "Return non-nil when IMAGE needs an independently mounted occurrence."
+  (or (plist-get (cdr image) :appkit-media-playback)
+      (plist-get (cdr image) :appkit-media-track)))
+
 (defun appkit-media--file-animated-p (file)
   "Return non-nil when local FILE contains multiple native animation frames."
   (when (and (stringp file) (not (file-remote-p file))
@@ -553,12 +558,12 @@ cached image stay separate without copying its pixels.  Playback annotations
 are inert until the containing text is mounted."
   (if (not image)
       fallback
-    (let* ((playback (plist-get (cdr image) :appkit-media-playback))
+    (let* ((prepared (appkit-media--prepared-image-p image))
            (string
             (propertize (or fallback " ")
                         'display (list '(slice 0 0 1.0 1.0) image)
                         'rear-nonsticky '(display appkit-media-occurrence))))
-      (when playback
+      (when prepared
         (put-text-property 0 (length string) 'appkit-media-occurrence
                            (appkit-media--occurrence-create
                             :image image :span-length (length string) :slices 1)
@@ -660,9 +665,9 @@ IMAGE is not mutated.  After `text-scale-mode', rebuild and call this
 again so the rows follow the new line height."
   (pcase-let* ((`(,render-image ,slice-count ,slice-height)
                 (appkit-media--line-slice-geometry image))
-               (playback (plist-get (cdr render-image) :appkit-media-playback))
+               (prepared (appkit-media--prepared-image-p render-image))
                (occurrence
-                (and playback
+                (and prepared
                      (appkit-media--occurrence-create
                       :image render-image :span-length 1 :slices slice-count))))
     (cl-loop for slice-index below slice-count
@@ -696,10 +701,10 @@ the image's protocol alt text.  HELP-ECHO describes ACTION."
     (pcase-let*
         ((`(,render-image ,slice-count ,slice-height)
           (appkit-media--line-slice-geometry image))
-         (playback (plist-get (cdr render-image) :appkit-media-playback))
+         (prepared (appkit-media--prepared-image-p render-image))
          (label (or fallback "[image]"))
          (occurrence
-          (and playback
+          (and prepared
                (appkit-media--occurrence-create
                 :image render-image :span-length (length label)
                 :slices slice-count))))
