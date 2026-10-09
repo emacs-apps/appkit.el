@@ -32,6 +32,16 @@
 (declare-function video-canvas-copy "video-runtime" (image))
 (declare-function video-source-poster
                   "video-runtime" (source width height &rest args))
+(declare-function video-canvas-create "video-runtime" (width height &optional background))
+(declare-function video-background-color "video-runtime" (&optional buffer position window))
+(declare-function video-native-canvas-fill "video-module"
+                  (image width height x y fill-width fill-height color))
+(declare-function canvas-refresh "canvas" (image))
+(declare-function video-session-create "video-runtime" (source &rest args))
+(declare-function video-session-player "video-runtime" (session))
+(declare-function video-session-close "video-runtime" (session))
+(declare-function video-session-inline-create "video-inline" (session width height &rest args))
+(declare-function video-inline-prepare "video-inline" (inline))
 (declare-function appkit-media--inline-prune "appkit-media-inline" (&optional force))
 
 (autoload 'appkit-media-inline-mount "appkit-media-inline"
@@ -219,18 +229,6 @@ INSETS is an optional (TOP RIGHT BOTTOM LEFT) list of transparent pixels."
               (and (appkit-media-image-object-valid-p image) image))))
       (error nil))))
 
-(defun appkit-media--one-line-thumbnail-from-file
-    (file pixel-width pixel-height)
-  "Return FILE center-cropped to a compact one-line thumbnail.
-
-PIXEL-WIDTH and PIXEL-HEIGHT define the exact rounded output box."
-  (when-let* ((radius (max 1 (/ (min pixel-width pixel-height) 5.0)))
-              (image
-               (appkit-media--cropped-image-from-file
-                file pixel-width pixel-height
-                "appkit-one-line-thumbnail-clip" radius)))
-    (plist-put (cdr image) :appkit-media-nslices 1)
-    image))
 
 (defun appkit-media-cropped-preview-image-from-file
     (file pixel-width pixel-height &optional insets)
@@ -475,6 +473,148 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
   (animation-loop-policy nil :read-only t)
   (fit nil :read-only t))
 
+(cl-defstruct (appkit-media--thumbnail
+               (:constructor appkit-media--thumbnail-create)
+               (:copier nil))
+  "Immutable thumbnail source and authored pixel geometry, never a player."
+  (source nil :read-only t)
+  (width nil :read-only t)
+  (height nil :read-only t)
+  (fit nil :read-only t)
+  (background nil :read-only t)
+  (animated-p nil :read-only t)
+  (poster nil :read-only t))
+
+(cl-defstruct (appkit-media--thumbnail-job
+               (:constructor appkit-media--thumbnail-job-create))
+  thumbnail buffer player session inline timer finished)
+
+(defvar appkit-media--thumbnail-cache
+  (make-hash-table :test #'equal :weakness 'value)
+  "Weak cache of bounded posters keyed by source identity and authored geometry.")
+
+(defvar appkit-media--thumbnail-waiting nil)
+(defvar appkit-media--thumbnail-active nil)
+(defvar appkit-media--thumbnail-timer nil)
+
+(defun appkit-media--thumbnail-schedule ()
+  "Coalesce asynchronous poster work outside rendering and redisplay."
+  (unless (timerp appkit-media--thumbnail-timer)
+    (setq appkit-media--thumbnail-timer
+          (run-at-time 0 nil #'appkit-media--thumbnail-pump))))
+
+(defun appkit-media--thumbnail-finish (job &optional error)
+  "Release JOB's first-frame decoder exactly once, reporting ERROR."
+  (unless (appkit-media--thumbnail-job-finished job)
+    (setf (appkit-media--thumbnail-job-finished job) t)
+    (when-let* ((timer (appkit-media--thumbnail-job-timer job)))
+      (cancel-timer timer))
+    (unwind-protect
+        (progn
+          (unwind-protect
+              (when-let* ((session (appkit-media--thumbnail-job-session job)))
+                (video-session-close session))
+            (when-let* ((buffer (appkit-media--thumbnail-job-buffer job))
+                        ((buffer-live-p buffer)))
+              (kill-buffer buffer)))
+          (when error
+            ;; A failed source must not remain an invisible loading surface.
+            (let* ((thumbnail (appkit-media--thumbnail-job-thumbnail job))
+                   (canvas (appkit-media--thumbnail-poster thumbnail))
+                   (width (appkit-media--thumbnail-width thumbnail))
+                   (height (appkit-media--thumbnail-height thumbnail)))
+              (video-native-canvas-fill canvas width height 0 0 width height #x993333)
+              (canvas-refresh canvas))
+            (message "Thumbnail unavailable: %s" error)))
+      (setq appkit-media--thumbnail-active (delq job appkit-media--thumbnail-active))
+      (when appkit-media--thumbnail-waiting (appkit-media--thumbnail-schedule)))))
+
+(defun appkit-media--thumbnail-error (player error)
+  "Retire a one-shot thumbnail PLAYER on native ERROR."
+  (when-let* ((job (cl-find player appkit-media--thumbnail-active
+                            :key #'appkit-media--thumbnail-job-player :test #'eq)))
+    (appkit-media--thumbnail-finish job error)))
+
+(defun appkit-media--thumbnail-pump ()
+  "Run at most two one-shot native decoders, without waiting for a frame."
+  (setq appkit-media--thumbnail-timer nil)
+  (while (and appkit-media--thumbnail-waiting
+              (< (length appkit-media--thumbnail-active) 2))
+    (let* ((job (pop appkit-media--thumbnail-waiting))
+           (thumbnail (appkit-media--thumbnail-job-thumbnail job))
+           (buffer (generate-new-buffer " *appkit-thumbnail*")))
+      (push job appkit-media--thumbnail-active)
+      (setf (appkit-media--thumbnail-job-buffer job) buffer)
+      (condition-case err
+          (with-current-buffer buffer
+            (setq-local face-remapping-alist
+                        `((default (:background ,(appkit-media--thumbnail-background thumbnail)))))
+            (let* ((width (appkit-media--thumbnail-width thumbnail))
+                   (height (appkit-media--thumbnail-height thumbnail))
+                   (session (video-session-create
+                             (appkit-media--thumbnail-source thumbnail)
+                             :kind 'image :muted t)))
+              (setf (appkit-media--thumbnail-job-session job) session
+                    (appkit-media--thumbnail-job-player job) (video-session-player session)
+                    (appkit-media--thumbnail-job-timer job)
+                    (run-at-time 15 nil #'appkit-media--thumbnail-finish
+                                 job "First frame timed out"))
+              (let ((inline
+                     (video-session-inline-create
+                      session width height
+                      :fit (appkit-media--thumbnail-fit thumbnail)
+                      :corner-radius (/ (min width height) 5.0)
+                      :canvas (appkit-media--thumbnail-poster thumbnail)
+                      :controls-p nil
+                      :visible-function (lambda (_) t)
+                      :alive-function (lambda (_) (not (appkit-media--thumbnail-job-finished job)))
+                      :activate-function
+                      (lambda (_inline _canvas)
+                        ;; Close after dispatch unwinds, not during target traversal.
+                        (unless (appkit-media--thumbnail-job-finished job)
+                          (when-let* ((timer (appkit-media--thumbnail-job-timer job)))
+                            (cancel-timer timer))
+                          (setf (appkit-media--thumbnail-job-timer job)
+                                (run-at-time 0 nil #'appkit-media--thumbnail-finish job)))))))
+                (setf (appkit-media--thumbnail-job-inline job) inline)
+                (video-inline-prepare inline))))
+        (error (appkit-media--thumbnail-finish job (error-message-string err)))))))
+
+(defun appkit-media--thumbnail-get (file width height fit &optional background)
+  "Return FILE's shared poster plan for WIDTH, HEIGHT, FIT and BACKGROUND."
+  (require 'video-inline)
+  (setq background (or background (video-background-color)))
+  (let* ((attributes (file-attributes file))
+         (key (list (expand-file-name file)
+                    (file-attribute-size attributes)
+                    (file-attribute-modification-time attributes)
+                    (file-attribute-status-change-time attributes)
+                    width height fit background)))
+    (or (gethash key appkit-media--thumbnail-cache)
+        (let* ((poster (video-canvas-create width height "#999999"))
+               (thumbnail (appkit-media--thumbnail-create
+                           :source file :width width :height height
+                           :animated-p (appkit-media--file-animated-p file)
+                           :fit fit :poster poster :background background)))
+          ;; All strings share this one first-frame pixel store, including
+          ;; copies whose playback plan is later replaced with a video source.
+          (plist-put (cdr poster) :width (cons (/ (float width) height) 'ch))
+          (plist-put (cdr poster) :height '(1 . ch))
+          (puthash key thumbnail appkit-media--thumbnail-cache)
+          (setq appkit-media--thumbnail-waiting
+                (nconc appkit-media--thumbnail-waiting
+                       (list (appkit-media--thumbnail-job-create
+                              :thumbnail thumbnail))))
+          (add-hook 'video-player-error-hook #'appkit-media--thumbnail-error)
+          (appkit-media--thumbnail-schedule)
+          thumbnail))))
+
+(defun appkit-media--image-poster (image)
+  "Return IMAGE's shared first-frame pixel store, or IMAGE itself."
+  (if-let* ((thumbnail (plist-get (cdr image) :appkit-media-thumbnail)))
+      (appkit-media--thumbnail-poster thumbnail)
+    image))
+
 (cl-defstruct (appkit-media--occurrence
                (:constructor appkit-media--occurrence-create)
                (:copier nil))
@@ -485,7 +625,8 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
 
 (defun appkit-media--prepared-image-p (image)
   "Return non-nil when IMAGE needs an independently mounted occurrence."
-  (or (plist-get (cdr image) :appkit-media-playback)
+  (or (plist-get (cdr image) :appkit-media-thumbnail)
+      (plist-get (cdr image) :appkit-media-playback)
       (plist-get (cdr image) :appkit-media-track)))
 
 (defun appkit-media--file-animated-p (file)
@@ -532,11 +673,14 @@ request to start playback.  RESOLVE-FUNCTION may acquire RESOURCE on demand."
                      (video-canvas-copy image)
                    (cons 'image (copy-sequence (cdr image)))))
            (file (alist-get 'file resource))
+           (thumbnail (plist-get (cdr image) :appkit-media-thumbnail))
            (animated-p
             (if (eq animated 'auto)
-                (if file
-                    (appkit-media--file-animated-p file)
-                  (appkit-media-animated-image-p image))
+                (cond
+                 ((and thumbnail (equal file (appkit-media--thumbnail-source thumbnail)))
+                  (appkit-media--thumbnail-animated-p thumbnail))
+                 (file (appkit-media--file-animated-p file))
+                 (t (appkit-media-animated-image-p image)))
               (and animated t))))
       (setcdr copy
               (plist-put
@@ -561,7 +705,8 @@ are inert until the containing text is mounted."
     (let* ((prepared (appkit-media--prepared-image-p image))
            (string
             (propertize (or fallback " ")
-                        'display (list '(slice 0 0 1.0 1.0) image)
+                        'display (list '(slice 0 0 1.0 1.0)
+                                       (appkit-media--image-poster image))
                         'rear-nonsticky '(display appkit-media-occurrence))))
       (when prepared
         (put-text-property 0 (length string) 'appkit-media-occurrence
@@ -584,8 +729,15 @@ nil IMAGE returns it unchanged."
             (appkit-media--image-with-height
              image (appkit-media-ch-height-spec 1)))
            (properties (cdr render-image))
-           (max-width (plist-get properties :max-width)))
-      (cl-remf properties :width)
+           (max-width (plist-get properties :max-width))
+           (thumbnail (plist-get properties :appkit-media-thumbnail)))
+      (if thumbnail
+          (setq properties
+                (plist-put properties :width
+                           (cons (/ (float (appkit-media--thumbnail-width thumbnail))
+                                    (appkit-media--thumbnail-height thumbnail))
+                                 'ch)))
+        (cl-remf properties :width))
       (cl-remf properties :max-height)
       (when (numberp max-width)
         (setq properties
@@ -680,7 +832,7 @@ again so the rows follow the new line height."
                                           (* slice-index slice-height)
                                           1.0
                                           slice-height)
-                                    render-image)
+                                    (appkit-media--image-poster render-image))
                      'rear-nonsticky '(display appkit-media-occurrence))))
                (when occurrence
                  (put-text-property 0 1 'appkit-media-occurrence occurrence row))
@@ -718,7 +870,7 @@ the image's protocol alt text.  HELP-ECHO describes ACTION."
                            (* slice-index slice-height)
                            1.0
                            slice-height)))
-          (insert-image render-image label nil slice)
+          (insert-image (appkit-media--image-poster render-image) label nil slice)
           (when occurrence
             (add-text-properties
              slice-start (point)
@@ -939,35 +1091,48 @@ Display is a separate step: call `appkit-media-insert-image-slices' or
     (appkit-media-image-with-resource
      image `((file . ,file)) :interaction nil)))
 
-(defun appkit-media-one-line-preview-image-from-file (file &optional max-width)
-  "Create a compact one-row thumbnail for local FILE.
+(defun appkit-media-one-line-preview-image-from-file (file &optional max-width fit)
+  "Prepare a nonblocking, one-row thumbnail for local FILE.
 
-MAX-WIDTH is the default-scale pixel budget.  It defaults to two unscaled
-character columns, capped by `appkit-media-preview-max-width', following
-Telega's two-column, one-line geometry.  A graphical display uses a
-center-cropped SVG thumbnail.  Displays without SVG support retain the ordinary
-image decoder with one-line height and maximum-width constraints.  Original
-source playback data survives SVG wrapping, with passive interaction and
-`cover' fitting for the center crop.
+MAX-WIDTH is an authored, default-scale pixel budget, defaulting to two
+unscaled character columns capped by `appkit-media-preview-max-width'.
+FIT defaults to `cover'; `contain' retains the full source aspect.
+The immutable `:appkit-media-thumbnail' records source, geometry, fit and a
+bounded shared first-frame Canvas, independently of the playback resource.
+One-shot decoders run asynchronously with bounded concurrency and retire
+after their first frame.  Static and disabled-autoplay thumbnails therefore
+work even in standalone strings; animation remains occurrence-owned.
+Without a native decoder (including source SVG), use the ordinary Emacs image
+decoder or return nil for text fallback; never wrap the source in another SVG.
 
 Display with `appkit-media-one-line-image-display-string'."
-  (let* ((safe-max-width
-          (max 1
-               (if (numberp max-width)
-                   max-width
-                 (min appkit-media-preview-max-width
-                      (* 2 (appkit-media--base-char-pixel-width))))))
-         (line-height (appkit-media--base-char-pixel-height)))
-    (or (when-let* ((image (appkit-media--one-line-thumbnail-from-file
-                           file safe-max-width line-height)))
+  (when (and (stringp file) (not (file-remote-p file))
+             (file-readable-p file) (file-regular-p file))
+    (let* ((file (expand-file-name file))
+           (width (max 1 (round
+                          (if (numberp max-width)
+                              max-width
+                            (min appkit-media-preview-max-width
+                                 (* 2 (appkit-media--base-char-pixel-width)))))))
+           (height (appkit-media--base-char-pixel-height))
+           (fit (or fit 'cover)))
+      (unless (memq fit '(cover contain))
+        (error "Invalid thumbnail fit: %S" fit))
+      (if (and (image-type-available-p 'canvas)
+               (or (memq (ignore-errors (image-type-from-file-header file))
+                         '(png jpeg gif webp))
+                   (memq (video-source-format file) '(apng webp lottie))))
+          (let ((thumbnail (appkit-media--thumbnail-get file width height fit)))
+            (appkit-media-image-with-resource
+             (list 'image :type 'pbm :data "P1\n2 2\n0 1\n1 0\n"
+                   :width width :height height :scale 1.0
+                   :appkit-media-nslices 1 :appkit-media-thumbnail thumbnail)
+             `((file . ,file)) :interaction nil :fit fit))
+        (ignore-errors
           (appkit-media-image-with-resource
-           image `((file . ,file)) :interaction nil :fit 'cover))
-        (let ((image
-               (appkit-media-preview-image-from-file
-                file safe-max-width line-height)))
-          (when (appkit-media-image-object-valid-p image)
-            (plist-put (cdr image) :max-width safe-max-width)
-            image)))))
+           (create-image file nil nil :height '(1 . ch)
+                         :max-width width :scale 1.0 :appkit-media-nslices 1)
+           `((file . ,file)) :interaction nil :fit fit))))))
 
 (defun appkit-media--bytes-prefix-p (bytes offset prefix-bytes)
   "Return non-nil when BYTES at OFFSET starts with PREFIX-BYTES."
