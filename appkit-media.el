@@ -17,11 +17,13 @@
 
 (require 'appkit-media-card)
 (require 'appkit-media-image)
+(require 'appkit-media-grid)
 (require 'appkit-media-resource)
 (require 'appkit-media-effect)
 (require 'appkit-media-player)
 (require 'appkit-media-video)
 (require 'appkit-media-inline)
+(require 'appkit-media-track)
 
 (provide 'appkit-media)
 

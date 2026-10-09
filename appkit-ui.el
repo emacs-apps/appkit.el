@@ -187,6 +187,18 @@ Action maps activate on release; touch drags must remain buffer scrolling."
     map)
   "Keymap used by inline Appkit action spans.")
 
+(defun appkit-ui-bind-image-map (map id command)
+  "Bind image hotspot ID in MAP to interactive COMMAND.
+Primary presses leave native touch scrolling alone; releases invoke COMMAND
+with its own interactive event specification.  Full hotspot-prefixed touch
+sequences use the native translator in `function-key-map'.  Return MAP."
+  (define-key map (vector id 'down-mouse-1) #'appkit-ui-ignore-mouse)
+  (define-key map (vector id 'mouse-1) command)
+  (dolist (event '(touchscreen-begin touchscreen-update touchscreen-end))
+    (define-key function-key-map (vector id event)
+                #'touch-screen-translate-touch))
+  map)
+
 (defun appkit-ui--event-position (&optional event)
   "Return the buffer position for EVENT, or point when EVENT is not a click."
   (or (and event
@@ -230,10 +242,11 @@ sees the same entry the user clicked."
       (user-error "No action at point"))))
 
 (cl-defun appkit-ui-add-action
-    (start end action &key help-echo face (mouse-face 'highlight))
+    (start end action &key help-echo properties face (mouse-face 'highlight))
   "Make START..END an Appkit action span that calls ACTION.
 
 ACTION is a zero-argument function.  HELP-ECHO describes that action.
+PROPERTIES are extra text properties stored on the valid action span.
 FACE is appended when non-nil.  MOUSE-FACE defaults to `highlight'; an
 explicit nil disables hover highlighting.  A terminating newline keeps its
 action and face but is excluded from hover, separating adjacent blocks.
@@ -242,6 +255,8 @@ Do nothing when ACTION is not callable or the region is empty."
              (integer-or-marker-p start)
              (integer-or-marker-p end)
              (< start end))
+    (when properties
+      (add-text-properties start end properties))
     (add-text-properties
      start end
      (list appkit-ui-action-property action
@@ -255,6 +270,28 @@ Do nothing when ACTION is not callable or the region is empty."
     (when face
       (add-face-text-property start end face 'append))
     action))
+
+(cl-defun appkit-ui-add-fallback-action
+    (start end action &key help-echo properties face (mouse-face 'highlight))
+  "Make unclaimed parts of START..END invoke ACTION.
+Existing Appkit actions, native buttons and custom keymaps retain precedence,
+including their help, hover and keyboard/mouse/touch bindings.  Other arguments
+have the same meaning as in `appkit-ui-add-action'."
+  (when (and (functionp action)
+             (integer-or-marker-p start)
+             (integer-or-marker-p end)
+             (< start end))
+    (let ((position start))
+      (while (< position end)
+        (let ((next (next-char-property-change position end)))
+          (unless (or (get-char-property position appkit-ui-action-property)
+                      (button-at position)
+                      (get-char-property position 'keymap)
+                      (get-char-property position 'local-map))
+            (appkit-ui-add-action
+             position next action :help-echo help-echo :properties properties
+             :face face :mouse-face mouse-face))
+          (setq position next))))))
 
 (defvar appkit-ui-button-map
   (let ((map (make-sparse-keymap)))
@@ -445,6 +482,28 @@ prefix for subsequent card rows."
      (appkit-ui-card-line-prefix :face face :indent first-indent)
      (appkit-ui-card-line-prefix :face face :indent rest-indent))))
 
+(cl-defun appkit-ui-insert-card
+    (inserter &key prefix border-face action help-echo properties)
+  "Insert a card by calling INSERTER with mutable card prefix state.
+PREFIX is a string or prefix state supplying outer indentation.  BORDER-FACE
+styles the display-only border.  PROPERTIES apply to the completed card;
+ACTION is a fallback that preserves inner controls and excludes a terminating
+newline.  Return the inserted (START . END), or nil for an empty card."
+  (let* ((appkit-ui-card-indent-prefix-state
+          (cond
+           ((appkit-ui-prefix-state-p prefix) prefix)
+           ((stringp prefix) (appkit-ui-make-prefix-state prefix prefix))))
+         (card-prefix (appkit-ui-card-prefix-state :face border-face))
+         (start (point)))
+    (funcall inserter card-prefix)
+    (when (< start (point))
+      (when properties
+        (add-text-properties start (point) properties))
+      (appkit-ui-add-fallback-action
+       start (if (eq (char-before) ?\n) (1- (point)) (point)) action
+       :help-echo help-echo)
+      (cons start (point)))))
+
 ;;; ── Line prefix application ────────────────────────────────────────
 
 (defun appkit-ui--apply-line-prefix-span (start end line-prefix-str &optional wrap-prefix-str)
@@ -452,15 +511,19 @@ prefix for subsequent card rows."
 
 LINE-PREFIX-STR is prepended to existing `line-prefix'.  WRAP-PREFIX-STR
 defaults to LINE-PREFIX-STR and is prepended to existing `wrap-prefix'."
-  (when (< start end)
-    (let* ((line (or line-prefix-str ""))
-           (wrap (or wrap-prefix-str line))
-           (existing-line (get-text-property start 'line-prefix))
-           (existing-wrap (get-text-property start 'wrap-prefix)))
-      (add-text-properties
-       start end
-       (list 'line-prefix (concat line (if (stringp existing-line) existing-line ""))
-             'wrap-prefix (concat wrap (if (stringp existing-wrap) existing-wrap "")))))))
+  (let ((position start)
+        (line (or line-prefix-str ""))
+        (wrap (or wrap-prefix-str line-prefix-str "")))
+    (while (< position end)
+      (let ((next (min (next-single-property-change position 'line-prefix nil end)
+                       (next-single-property-change position 'wrap-prefix nil end)))
+            (existing-line (get-text-property position 'line-prefix))
+            (existing-wrap (get-text-property position 'wrap-prefix)))
+        (add-text-properties
+         position next
+         (list 'line-prefix (concat line (if (stringp existing-line) existing-line ""))
+               'wrap-prefix (concat wrap (if (stringp existing-wrap) existing-wrap ""))))
+        (setq position next)))))
 
 (defun appkit-ui--append-wrap-prefix-span (start end wrap-prefix-str)
   "Append a soft-wrap prefix to START..END.
@@ -550,16 +613,27 @@ span.  Return (LINE-START . LINE-END)."
      line-start line-end (or continuation-prefix prefix)))
   (cons line-start line-end))
 
-(defun appkit-ui-apply-line-prefix (start end prefix)
+(defun appkit-ui--face-prefix (prefix face)
+  "Return PREFIX with FACE appended, without changing the source string."
+  (if (and face (stringp prefix))
+      (let ((copy (copy-sequence prefix)))
+        (add-face-text-property 0 (length copy) face 'append copy)
+        copy)
+    prefix))
+
+(defun appkit-ui-apply-line-prefix (start end prefix &optional face)
   "Apply PREFIX as display prefix for region START..END.
 
 PREFIX can be a string or a mutable prefix-state created by
-`appkit-ui-make-prefix-state'."
+`appkit-ui-make-prefix-state'.  FACE styles only the display prefixes, not
+copied text, and is appended to existing prefix faces."
   (when (< start end)
     (if (appkit-ui-prefix-state-p prefix)
         (let* ((pos start)
-               (first-prefix (appkit-ui-prefix-state-consume prefix))
-               (rest-prefix (or (appkit-ui-prefix-state-rest prefix)
+               (first-prefix (appkit-ui--face-prefix
+                              (appkit-ui-prefix-state-consume prefix) face))
+               (rest-prefix (or (appkit-ui--face-prefix
+                                 (appkit-ui-prefix-state-rest prefix) face)
                                 first-prefix))
                (line-prefix first-prefix))
           (save-excursion
@@ -576,7 +650,8 @@ PREFIX can be a string or a mutable prefix-state created by
                 (setq line-prefix rest-prefix)
                 (setq pos next-pos)))))
       (let ((pos start)
-            (line-prefix (appkit-ui-prefix-string prefix nil "")))
+            (line-prefix (appkit-ui--face-prefix
+                          (appkit-ui-prefix-string prefix nil "") face)))
         (save-excursion
           (while (< pos end)
             (goto-char pos)
@@ -588,11 +663,13 @@ PREFIX can be a string or a mutable prefix-state created by
 
 ;;; ── High-level inserters ───────────────────────────────────────────
 
-(cl-defun appkit-ui-insert-prefixed-lines (prefix text &key face properties)
+(cl-defun appkit-ui-insert-prefixed-lines
+    (prefix text &key face properties prefix-face)
   "Insert TEXT as newline-separated lines using display-only PREFIX.
 
 PREFIX can be a prefix string or prefix state.  FACE and PROPERTIES are applied
-per inserted line so copied text stays clean."
+per inserted line so copied text stays clean.  PREFIX-FACE styles only the
+display prefix, preserving any existing prefix styling."
   (dolist (line (split-string (or text "") "\n" nil))
     (let ((start (point)))
       (insert line "\n")
@@ -603,7 +680,7 @@ per inserted line so copied text stays clean."
          (append properties
                  (when face
                    (list 'face face)))))
-      (appkit-ui-apply-line-prefix start (point) prefix))))
+      (appkit-ui-apply-line-prefix start (point) prefix prefix-face))))
 
 (defun appkit-ui-append-face (start end face)
   "Append FACE to region START..END."

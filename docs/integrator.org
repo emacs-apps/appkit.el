@@ -53,6 +53,10 @@ Hover defaults to ~highlight~; pass ~:mouse-face nil~ to disable it without
 disabling activation.  A terminating newline retains its action and face but
 is excluded from hover, so adjacent multi-line action blocks remain separate.
 
+Pass protocol metadata with ~:properties~; it is applied only to a valid
+action span.  ~appkit-ui-add-fallback-action~ fills unclaimed spans without
+replacing inner Appkit actions, native buttons, or custom keymaps.
+
 Native control maps own both Return events, so application and Evil bindings
 cannot steal graphical Return before Emacs translates it to ~RET~.  Use
 ~appkit-ui-insert-action-button~ for ordinary text buttons and
@@ -65,10 +69,10 @@ buffer; only a completed tap activates the action.  Use
 ~appkit-ui-ignore-mouse~ rather than ~ignore~ for a passive ~down-mouse-1~
 binding: its ~ignored-mouse-command~ property keeps Emacs's native scrolling
 and long-press recognition enabled without starting mouse text selection.
-For image-map hotspots, register the full ~[ID touchscreen-begin]~,
-~[ID touchscreen-update]~ and ~[ID touchscreen-end]~ sequences in
-~function-key-map~ with ~touch-screen-translate-touch~.  This retains the
-hotspot on taps but removes it from buffer gestures such as scrolling.
+Use ~appkit-ui-bind-image-map~ to bind an image-map hotspot's primary action
+and full ID-prefixed native touch translations.  This retains the hotspot on
+taps but removes it from scrolling gestures.  Primary-click-only media maps
+must not advertise ~follow-link~: native taps would become unhandled ~mouse-2~.
 
 ** Compose primitives
 
@@ -441,7 +445,32 @@ For row-sliced image montages, use
 an exact box.  Its optional ~(TOP RIGHT BOTTOM LEFT)~ transparent insets
 reserve pixel gutters without changing the box or its line-slice geometry.
 
-Use ~appkit-media-horizontal-strip-image~ when several files must remain one
+~appkit-media-insert-grid~ executes caller-supplied bands of typed
+~appkit-media-grid-cell~ values.  Cells supply an image or fallback, action,
+metadata and help.  Appkit owns line slices, shorter-cell padding, pixel
+gutters and display-only prefixes.  Repeating a cell index in successive bands
+continues its slices; ~:band-slices~ fixes each band's height.  Item limits,
+crop policy and topology selection remain with the application.  Grid
+insertion prepares occurrences but never acquires media or mounts a player.
+
+For an interactive carousel, prepare ~appkit-media-track-image~ from generic
+items (~:file~, dimensions, optional ~:display-width~, ~:fit~, ~:playable-p~).
+The session adapter receives ~(INDEX MUTED)~ and lazily returns an Appkit video
+session; nil declines inline playback.  The open adapter receives
+~(INDEX INLINE PRESENTATION)~ for the exact selected occurrence.  Protocol
+resource resolution and business actions stay in these adapters.
+
+Insert through ordinary image/slice helpers and use the existing Surface
+commit or ~appkit-media-inline-mount~ boundary.  Each occurrence owns typed
+selection and a composite Canvas through its existing inline host—not another
+marker registry or teardown hook.  ~appkit-media-track-at-point~,
+~appkit-media-track-index~ and ~appkit-media-track-inline~ expose the live
+selection without rewriting prepared text.  Left/right reveals the selected
+item; taps activate the clicked box without shifting the viewport.  RET, m,
+L, F and the dedicated/external Return variants operate on that selection.
+M-RET remains the application's entry action.
+
+For geometry-only scenes, ~appkit-media-horizontal-strip-image~ creates one
 unbreakable display object.  It preserves a shared height, reserves explicit
 pixel gutters and missing-file geometry, and exposes each item as an image-map
 hot spot.  Items may override their display width, request center-cover instead
@@ -556,10 +585,11 @@ when producing plain copied content.
 
 Completion affixations, header-line strings, and display-only prefixes are not
 buffer insertion boundaries and remain posters.  Circular avatars, inset
-crops, composite scenes, and navigation covers also remain static unless their
-owner deliberately supplies an appropriate playback plan.  A composite or
-live/danmaku renderer can keep the lower-level session/Canvas APIs; it must not
-replace an entire scene with one item's uncropped source.
+crops and navigation covers also remain static unless their owner deliberately
+supplies an appropriate playback plan.  Prepared media tracks preserve the
+whole composite scene while replacing only the selected item's pixels.
+Custom live/danmaku renderers can keep the lower-level session/Canvas APIs;
+they must not replace an entire scene with one item's uncropped source.
 
 ~appkit-media-start-video-preview~ extracts only a static JPG.  Playback uses
 the original resource, not a generated GIF or bounded preview movie.
@@ -799,12 +829,21 @@ editable selections.  ~appkit-ui-vbar-string~ supplies a GUI/terminal vertical
 marker; ~appkit-ui-tinted-background-face~ derives a subtle background from an
 existing accent face without changing the text foreground.
 
+For decorative indentation, use ~appkit-ui-apply-line-prefix~ or
+~appkit-ui-insert-prefixed-lines~, not literal prefix insertion.  Both preserve
+mutable first/rest prefix consumption; optional prefix faces style only the
+display decoration.  Copied body text and protocol entity offsets stay clean.
+
 Cards have no implicit outer indentation: ~appkit-ui-card-prefix-state~ adds
 only the border by default.  Bind ~appkit-ui-card-indent-prefix-state~ (or
 ~appkit-ui-card-indent-prefix~) when a chat card must reuse an existing body
 gutter; its border replaces the gutter's last column.  A discussion renderer
 that applies its body prefix after insertion should leave the card indent
 empty, so the parent prefix is applied only once.
+~appkit-ui-insert-card~ supplies that mutable prefix state to an inserter,
+applies optional card metadata, and installs a fallback action excluding the
+trailing newline.  Inner profile links, media controls and native buttons
+retain their own activation.
 
 * Task queues
 
