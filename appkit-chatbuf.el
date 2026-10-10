@@ -38,6 +38,18 @@
   :type 'integer
   :group 'appkit)
 
+(defcustom appkit-chatbuf-scroll-conservatively 101
+  "Value of `scroll-conservatively' in chat buffers.
+Values above 100 scroll only enough to bring point into view, without
+automatically recentering it."
+  :type 'integer
+  :group 'appkit)
+
+(defcustom appkit-chatbuf-recenter-to-bottom-arg -1
+  "Argument to `recenter' for an unprefixed `C-l' in chat input."
+  :type 'integer
+  :group 'appkit)
+
 (defcustom appkit-chatbuf-wrap-long-lines t
   "Whether Appkit chat buffers visually wrap long timeline lines.
 
@@ -318,6 +330,8 @@ automatic continuation-prefix producer."
   (setq-local filter-buffer-substring-function
               #'appkit-chatbuf--buffer-substring-filter)
   (setq-local next-screen-context-lines 0)
+  (setq-local scroll-conservatively appkit-chatbuf-scroll-conservatively)
+  (setq-local scroll-error-top-bottom t)
   (setq-local appkit-chatbuf-owns-wrap-prefix-p t)
   (appkit-chatbuf-set-soft-wrap appkit-chatbuf-wrap-long-lines)
   (when (fboundp 'cursor-intangible-mode)
@@ -496,17 +510,24 @@ that symbol.  Passing nil removes the current timeline mode."
      :prune-broken-objects t
      :sync-function appkit-chatbuf-input-sync-function)))
 
-(defvar appkit-chatbuf-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "DEL") #'appkit-chatbuf-input-backward-delete)
-    (define-key map (kbd "<backspace>")
-                #'appkit-chatbuf-input-backward-delete)
-    (define-key map (kbd "C-d") #'appkit-chatbuf-input-forward-delete)
-    (define-key map (kbd "<delete>") #'appkit-chatbuf-input-forward-delete)
-    (define-key map (kbd "M-p") #'appkit-chatbuf-input-history-prev)
-    (define-key map (kbd "M-n") #'appkit-chatbuf-input-history-next)
-    map)
-  "Base keymap for editable Appkit chat buffers.")
+(defun appkit-chatbuf-recenter (arg)
+  "Recenter chat input at the bottom, otherwise use `recenter-top-bottom'.
+With prefix ARG, or outside the input region, use native recentering.
+This does not move point into the composer."
+  (interactive "P")
+  (if (and (not arg) (appkit-chatbuf-point-in-input-p))
+      (recenter appkit-chatbuf-recenter-to-bottom-arg)
+    (recenter-top-bottom arg)))
+
+(defvar-keymap appkit-chatbuf-mode-map
+  :doc "Base keymap for editable Appkit chat buffers."
+  "C-l" #'appkit-chatbuf-recenter
+  "DEL" #'appkit-chatbuf-input-backward-delete
+  "<backspace>" #'appkit-chatbuf-input-backward-delete
+  "C-d" #'appkit-chatbuf-input-forward-delete
+  "<delete>" #'appkit-chatbuf-input-forward-delete
+  "M-p" #'appkit-chatbuf-input-history-prev
+  "M-n" #'appkit-chatbuf-input-history-next)
 
 (appkit-bindings-define 'appkit-chatbuf-mode-map 'input 'newline #'newline)
 

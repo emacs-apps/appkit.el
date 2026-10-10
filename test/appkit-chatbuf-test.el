@@ -398,6 +398,57 @@
     (should (= (point) (appkit-chatbuf-input-logical-end-position)))
     (should-not appkit-chatbuf-test--timeline-mode)))
 
+(ert-deftest appkit-chatbuf-recenter-preserves-input-point-and-prefix-position ()
+  (save-window-excursion
+    (with-temp-buffer
+      (set-window-buffer (selected-window) (current-buffer))
+      (appkit-chatbuf-mode)
+      (let* ((height (window-body-height))
+             (appkit-chatbuf-recenter-to-bottom-arg -1)
+             (scroll-margin 0))
+        (dotimes (_ (* 3 height)) (insert "history\n"))
+        (appkit-chatbuf-install-prompt)
+        (insert "first input line\nsecond input line")
+        (let ((input-point (point))
+              (input-line (line-number-at-pos)))
+          (recenter 0)
+          (appkit-chatbuf-recenter nil)
+          (should (= (point) input-point))
+          (should (= (line-number-at-pos (window-start))
+                     (- input-line (1- height))))
+          ;; Zero is an explicit prefix, not the unprefixed input action.
+          (appkit-chatbuf-recenter 0)
+          (should (= (point) input-point))
+          (should (= (line-number-at-pos (window-start)) input-line))
+          (appkit-chatbuf-recenter -2)
+          (should (= (point) input-point))
+          (should (= (line-number-at-pos (window-start))
+                     (- input-line (- height 2)))))))))
+
+(ert-deftest appkit-chatbuf-recenter-cycles-without-leaving-history ()
+  (save-window-excursion
+    (with-temp-buffer
+      (set-window-buffer (selected-window) (current-buffer))
+      (appkit-chatbuf-mode)
+      (let* ((height (window-body-height))
+             (scroll-margin 0)
+             (recenter-positions '(middle top bottom))
+             (recenter-last-op nil)
+             (this-command #'appkit-chatbuf-recenter)
+             (last-command nil))
+        (dotimes (_ (* 3 height)) (insert "history\n"))
+        (appkit-chatbuf-install-prompt)
+        (goto-char (point-min))
+        (forward-line height)
+        (let ((reading-point (point))
+              (reading-line (line-number-at-pos)))
+          (dolist (row (list (/ height 2) 0 (1- height) (/ height 2)))
+            (appkit-chatbuf-recenter nil)
+            (should (= reading-point (point)))
+            (should (= row (- reading-line
+                              (line-number-at-pos (window-start)))))
+            (setq last-command this-command)))))))
+
 (ert-deftest appkit-chatbuf-structured-object-insert-and-prune ()
   (with-temp-buffer
     (appkit-chatbuf-install-prompt ">>> ")
