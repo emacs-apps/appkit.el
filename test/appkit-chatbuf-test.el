@@ -3,6 +3,7 @@
 (require 'ert)
 
 (require 'appkit-chatbuf)
+(require 'appkit-test-helper)
 
 (defvar appkit-chatbuf-test--timeline-mode-map
   (let ((map (make-sparse-keymap)))
@@ -769,6 +770,40 @@
     (should (eq 'fallback (appkit-chatbuf-input-option :missing 'fallback)))
     (appkit-chatbuf-input-options-reset)
     (should-not (appkit-chatbuf-input-options-state))))
+
+(ert-deftest appkit-chatbuf-generated-update-shifts-composer-undo ()
+  "Composer undo must not replay over generated timeline text."
+  (appkit-test-with-surface
+   (buffer-enable-undo)
+   (insert "timeline\n")
+   (appkit-chatbuf-install-prompt ">>> ")
+   (goto-char (point-max))
+   (setq buffer-undo-list nil)
+   (insert "hello")
+   (undo-boundary)
+   (should (listp buffer-undo-list))
+   (appkit-chatbuf-with-generated-update
+     (goto-char (point-min))
+     (insert "generated\n"))
+   (should (equal "generated\ntimeline\n>>> hello" (buffer-string)))
+   (undo)
+   (should (equal "generated\ntimeline\n>>> " (buffer-string)))))
+
+(ert-deftest appkit-chatbuf-generated-replace-clears-composer-undo ()
+  "Replacing generated composer content must clear stale undo history."
+  (appkit-test-with-surface
+   (buffer-enable-undo)
+   (insert "timeline\n")
+   (appkit-chatbuf-install-prompt ">>> ")
+   (goto-char (point-max))
+   (setq buffer-undo-list nil)
+   (insert "draft")
+   (undo-boundary)
+   (should buffer-undo-list)
+   (appkit-chatbuf-with-generated-update
+     (appkit-chatbuf-input-set-text ""))
+   (should-not buffer-undo-list)
+   (should (equal "timeline\n>>> " (buffer-string)))))
 
 (provide 'appkit-chatbuf-test)
 
