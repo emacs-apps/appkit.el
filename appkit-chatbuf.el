@@ -238,12 +238,26 @@ A nil value disables automatic canonical input synchronization.")
   "Return non-nil while shared chat buffer structure is being updated."
   appkit-chatbuf--rendering)
 
+(defvar appkit-chatbuf--generated-input-replaced nil
+  "Dynamically non-nil while a generated update replaces composer input.")
+
 (defmacro appkit-chatbuf-with-generated-update (&rest body)
-  "Run BODY as one generated Surface structural update."
+  "Run BODY as one generated Surface structural update.
+
+Native undo positions recorded for the editable composer are shifted after the
+update so generated timeline changes cannot make them replay over generated
+text.  When the update replaces composer content, its stale history is cleared."
   (declare (indent 0) (debug t))
-  `(let ((appkit-chatbuf--rendering t))
+  `(let ((appkit-chatbuf--rendering t)
+         (appkit-chatbuf--generated-input-replaced nil)
+         (appkit-chatbuf--generated-undo-base
+          (and (listp buffer-undo-list)
+               (appkit-chatbuf-input-start-position))))
      (appkit-with-content-update (appkit-current-surface)
-       ,@body)))
+       ,@body)
+     (appkit-chatbuf--settle-generated-undo
+      appkit-chatbuf--generated-undo-base
+      appkit-chatbuf--generated-input-replaced)))
 
 (define-button-type 'appkit-chatbuf-prompt
   :supertype 'button
@@ -350,6 +364,41 @@ automatic continuation-prefix producer."
   (and (markerp appkit-chatbuf--input-marker)
        (eq (marker-buffer appkit-chatbuf--input-marker) (current-buffer))
        (marker-position appkit-chatbuf--input-marker)))
+
+(defun appkit-chatbuf--shift-undo-positions (delta)
+  "Shift absolute undo positions in `buffer-undo-list' by DELTA.
+
+Only entries that carry buffer positions are adjusted; marker adjustments and
+opaque `apply' entries are left untouched."
+  (when (and (listp buffer-undo-list) (/= delta 0))
+    (dolist (entry buffer-undo-list)
+      (when (consp entry)
+        (let ((head (car entry))
+              (tail (cdr entry)))
+          (cond
+           ((and (integerp head) (integerp tail))
+            (setcar entry (+ head delta))
+            (setcdr entry (+ tail delta)))
+           ((and (stringp head) (integerp tail))
+            ;; Deletions store POS, or -POS when recorded at point.
+            (setcdr entry (if (< tail 0) (- tail delta) (+ tail delta))))
+           ((and (eq head t) (integerp tail))
+            (setcdr entry (+ tail delta)))))))))
+
+(defun appkit-chatbuf--settle-generated-undo (base replaced-p)
+  "Keep native composer undo valid after one generated update.
+
+BASE is the composer start captured before the update, or nil when undo was
+disabled or no composer existed.  REPLACED-P is non-nil when the update
+replaced composer content, which invalidates the recorded history."
+  (when base
+    (if replaced-p
+        (setq buffer-undo-list nil)
+      (let ((current (appkit-chatbuf-input-start-position)))
+        (cond
+         ((null current) (setq buffer-undo-list nil))
+         ((/= current base)
+          (appkit-chatbuf--shift-undo-positions (- current base))))))))
 
 (defun appkit-chatbuf-input-region-bounds ()
   "Return current editable input bounds as (START . END), or nil."
@@ -646,6 +695,10 @@ cursor and remembered pending input.  A failed replacement leaves the input
 text intact.  Authorized generated updates may bind `inhibit-read-only'."
   (barf-if-buffer-read-only)
   (appkit-chatbuf-init-state)
+  (unless (equal-including-properties
+           (or (appkit-chatbuf-input-string) "")
+           (or text ""))
+    (setq appkit-chatbuf--generated-input-replaced t))
   (let ((appkit-chatbuf--mutating-input t))
     (atomic-change-group
       (appkit-chatbuf-input-delete)
