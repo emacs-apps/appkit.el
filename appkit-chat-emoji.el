@@ -197,6 +197,38 @@ Return nil on Emacs versions without the built-in emoji library."
                     (error-message-string error-data)))))))
   appkit-chat-emoji--candidates)
 
+(defun appkit-chat-emoji-read (prompt &optional preferred)
+  "Read one emoji with PROMPT, offering PREFERRED strings first.
+Candidates match by glyph or Unicode name.  Return the chosen glyph, or the
+trimmed input itself when it names no candidate, so protocols that accept
+arbitrary reaction text keep working."
+  (let ((glyphs (make-hash-table :test #'equal))
+        choices)
+    (dolist (glyph preferred)
+      (unless (gethash glyph glyphs)
+        (puthash glyph glyph glyphs)
+        (push glyph choices)))
+    (dolist (candidate (appkit-chat-emoji-candidates))
+      (let* ((glyph (appkit-chat-completion-candidate-insert candidate))
+             (choice (format "%s %s" glyph
+                             (plist-get (appkit-chat-completion-candidate-value
+                                         candidate)
+                                        :name))))
+        (unless (gethash choice glyphs)
+          (puthash choice glyph glyphs)
+          (push choice choices))))
+    (setq choices (nreverse choices))
+    (let ((input (string-trim
+                  (completing-read
+                   prompt
+                   (lambda (string predicate action)
+                     (if (eq action 'metadata)
+                         '(metadata (display-sort-function . identity))
+                       (complete-with-action action choices string predicate)))))))
+      (when (string-empty-p input)
+        (user-error "No emoji selected"))
+      (gethash input glyphs input))))
+
 (cl-defun appkit-chat-emoji-capf (&key sync-function)
   "Return a CAPF for a Unicode `:name:' token at point.
 

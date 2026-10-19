@@ -37,6 +37,16 @@ Author colors and subdued timestamps take precedence over this base face."
   "Subdued reply context joined visually to a chat heading."
   :group 'appkit)
 
+(defface appkit-chat-reaction
+  '((t :inherit shadow))
+  "Default face of a reaction chip the current account has not chosen."
+  :group 'appkit)
+
+(defface appkit-chat-reaction-selected
+  '((t :inherit (success bold)))
+  "Default face of a reaction chip the current account has chosen."
+  :group 'appkit)
+
 (defface appkit-chat-reply-author
   '((t :inherit bold))
   "Emphasis for the original author within an inline reply.
@@ -191,8 +201,9 @@ Return the inserted span as (START . END)."
   "Insert one reaction chip line for REACTIONS.
 
 PREFIX is applied with `appkit-ui-apply-line-prefix'.  SELECTED-FACE and
-UNSELECTED-FACE style each reaction chip.  LINE-FACE applies to the whole
-inserted span.
+UNSELECTED-FACE style each reaction chip, defaulting to
+`appkit-chat-reaction-selected' and `appkit-chat-reaction'.  LINE-FACE
+applies to the whole inserted span.
 
 LABEL-FUNCTION must format one reaction.  SELECTED-P-FUNCTION identifies the
 current account's reactions, ACTION-FUNCTION makes chips clickable and is
@@ -212,7 +223,9 @@ empty."
                (chip (funcall label-function item))
                (selected-p (and selected-p-function
                                 (funcall selected-p-function item)))
-               (face (if selected-p selected-face unselected-face))
+               (face (if selected-p
+                         (or selected-face 'appkit-chat-reaction-selected)
+                       (or unselected-face 'appkit-chat-reaction)))
                (help-echo (and help-echo-function
                                (funcall help-echo-function item))))
           (if action-function
