@@ -133,6 +133,29 @@ HELP-ECHO, and MOUSE-FACE customize its presentation and interaction."
    :help-echo help-echo
    :mouse-face mouse-face))
 
+(defface appkit-presentation-card-title
+  '((t :inherit bold :height 1.15))
+  "Title of a profile card, such as the name atop a user page."
+  :group 'appkit)
+
+(defface appkit-presentation-action-button
+  '((t :inherit mode-line-inactive :weight semi-bold
+       :box (:line-width -1 :style released-button)))
+  "Primary action buttons on a profile card."
+  :group 'appkit)
+
+(defun appkit-presentation-insert-field (label value &optional face width)
+  "Insert one profile field line: LABEL padded to WIDTH, then VALUE in FACE.
+Insert nothing when VALUE is nil or a blank string.  WIDTH, the label
+column including its colon, defaults to 12."
+  (when (and value (not (and (stringp value) (string-blank-p value))))
+    (insert (propertize (string-pad (concat label ":") (or width 12)) 'face 'bold))
+    (let ((start (point)))
+      (insert (format "%s" value))
+      (when face
+        (add-face-text-property start (point) face)))
+    (insert "\n")))
+
 (cl-defstruct (appkit-presentation-one-line-row
                (:constructor appkit-presentation-one-line-row-create))
   icon-inserter
