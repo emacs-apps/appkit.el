@@ -689,6 +689,12 @@ display prefix, preserving any existing prefix styling."
 
 ;;; ── Bounded one-line previews ──────────────────────────────────────
 
+(defcustom appkit-ui-sender-text-delimiter ">"
+  "Delimiter between a preview's sender label and its text.
+As telega's `telega-symbol-sender-and-text-delim'; every client uses it."
+  :type 'string
+  :group 'appkit)
+
 (cl-defstruct
     (appkit-ui-one-line-preview
      (:constructor appkit-ui-one-line-preview-create))

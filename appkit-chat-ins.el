@@ -194,6 +194,36 @@ Return the inserted span as (START . END)."
              front-sticky (read-only)
              rear-nonsticky (read-only)))))
 
+(cl-defun appkit-chat-ins-insert-tip-row
+    (text face target-width &key time time-face properties)
+  "Insert a gray-tip row for TEXT in FACE across TARGET-WIDTH columns.
+
+Without TIME this is `appkit-chat-ins-insert-divider-row'.  With TIME, as
+telega's and QQ's service rows, TEXT is centered as `( TEXT )' between bars
+and TIME sits at the right edge in TIME-FACE; TEXT is elided before it could
+collide with TIME.  PROPERTIES apply to the whole read-only row.  Return the
+inserted span as (START . END)."
+  (if (not (and (stringp time) (not (string-empty-p time))))
+      (appkit-chat-ins-insert-divider-row text face target-width properties)
+    (let* ((width (max 0 (or target-width 0)))
+           (time-width (string-width time))
+           (content (truncate-string-to-width
+                     text (max 1 (- width time-width 12)) nil nil "…"))
+           (core (concat "( " content " )"))
+           (bars (make-string
+                  (max 0 (floor (- width (string-width core) time-width 8) 2)) ?─))
+           (start (point)))
+      (insert bars " " core " " bars)
+      (add-face-text-property start (point) face t)
+      (appkit-chat-ins-insert-right-aligned-text
+       time width :face (or time-face face) :overflow-newline-p nil)
+      (insert "\n")
+      (add-text-properties
+       start (point)
+       (append properties
+               '(read-only t front-sticky (read-only) rear-nonsticky (read-only))))
+      (cons start (point)))))
+
 (cl-defun appkit-chat-ins-insert-reaction-line
     (reactions &key prefix selected-face unselected-face line-face
                label-function selected-p-function action-function
