@@ -155,6 +155,21 @@ because Plz 0.9 serializes request data through curl's stdin config format."
                   (null (url-password parsed))))
          (error nil))))
 
+(defun appkit-media--loopback-stream-url-p (url)
+  "Return non-nil when URL is a credential-free HTTP URL on loopback.
+
+Local services such as a chat backend's range proxy serve ephemeral
+capability URLs there.  They are played directly and never cached."
+  (and (appkit-media-url-present-p url)
+       (not (string-match-p "[[:space:]\"\\\\]" url))
+       (condition-case nil
+           (let ((parsed (url-generic-parse-url url)))
+             (and (string-equal (url-type parsed) "http")
+                  (member (url-host parsed) '("127.0.0.1" "[::1]"))
+                  (null (url-user parsed))
+                  (null (url-password parsed))))
+         (error nil))))
+
 (defun appkit-media--local-or-https-source-p (source)
   "Return non-nil when SOURCE is an existing local file or HTTPS URL."
   (or (appkit-media--https-url-p source)
@@ -751,6 +766,8 @@ dedicated surface, or close the returned session."
       (cond
        ((appkit-media-file-present-p file)
         (setq source file))
+       ((and (eq kind 'video) (appkit-media--loopback-stream-url-p url))
+        (setq source url))
        ((appkit-media--https-url-p url)
         (if (or (eq kind 'image) (eq cache-policy 'none))
             (setq source url)
@@ -767,7 +784,7 @@ dedicated surface, or close the returned session."
             (setq source url
                   cache-complete-function #'remember-cache))))
        (t
-        (user-error "%s: %s resource has neither local file nor HTTPS URL"
+        (user-error "%s: %s resource has neither local file nor playable URL"
                     label kind)))
       (appkit-media--video-session-create
        :resource resource

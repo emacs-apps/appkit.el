@@ -717,6 +717,27 @@
               (should-not cache-complete))
           (appkit-media-video-session-close session))))))
 
+(ert-deftest appkit-media-video-loopback-stream-plays-directly-without-cache ()
+  (let ((url "http://127.0.0.1:41234/media/stream-0123")
+        opened-source cache-file)
+    (cl-letf (((symbol-function 'video-session-create)
+               (lambda (source &rest arguments)
+                 (setq opened-source source
+                       cache-file (plist-get arguments :cache-file))
+                 'session))
+              ((symbol-function 'video-session-close) #'ignore))
+      (let ((session (appkit-media-video-session-create
+                      (appkit-media-resource-create :url url) "test")))
+        (unwind-protect
+            (progn
+              (should (equal opened-source url))
+              (should-not cache-file))
+          (appkit-media-video-session-close session))))
+    (should-error
+     (appkit-media-video-session-create
+      (appkit-media-resource-create :url url) "test" :kind 'image)
+     :type 'user-error)))
+
 (ert-deftest appkit-media-image-session-bypasses-video-cache ()
   (ert-with-temp-directory directory
     (let* ((url "https://example.invalid/animated.gif")
@@ -1129,6 +1150,8 @@
                             "http://example.invalid/movie.mp4"
                             "gopher://example.invalid/movie.mp4"
                             "https://user@example.invalid/movie.mp4"
+                            "http://localhost:8080/media/stream"
+                            "http://user@127.0.0.1:8080/media/stream"
                             (concat "https://example.invalid/movie.mp4\""
                                     "\n--output /tmp/injected")))
         (should-error
