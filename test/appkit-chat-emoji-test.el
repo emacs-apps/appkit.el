@@ -46,6 +46,23 @@
                       (appkit-chat-completion-candidate-search-terms
                        candidate))))))
 
+(ert-deftest appkit-chat-emoji-read-prefers-given-keys-and-returns-glyphs ()
+  (let* ((appkit-chat-emoji--candidates nil)
+         (appkit-chat-emoji--initialized-p nil)
+         (source (make-hash-table :test #'equal))
+         (appkit-chat-emoji-source-function (lambda () source))
+         offered)
+    (puthash "rocket" "🚀" source)
+    (let ((answers (list "🚀 rocket" "+1" "  ")))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt table &rest _)
+                   (setq offered (all-completions "" table))
+                   (pop answers))))
+        (should (equal (appkit-chat-emoji-read "React: " '("👍")) "🚀"))
+        (should (equal offered '("👍" "🚀 rocket")))
+        (should (equal (appkit-chat-emoji-read "React: ") "+1"))
+        (should-error (appkit-chat-emoji-read "React: ") :type 'user-error)))))
+
 (ert-deftest appkit-chat-emoji-candidates-preserve-category-order ()
   (let ((source (make-hash-table :test #'equal))
         (categories (make-hash-table :test #'equal))
