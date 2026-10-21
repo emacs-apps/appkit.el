@@ -193,6 +193,35 @@ keyed Effect."
      :animation-loop-policy
      (appkit-media-playback-animation-loop-policy playback))))
 
+(cl-defun appkit-media-playback-session-create
+    (playback &key owner)
+  "Create one Appkit session owned by PLAYBACK policy.
+OWNER optionally fences persistent-cache callbacks.  The returned session is
+shared by inline and dedicated presentations; the caller must close it after
+the last lease.  This is the plan-based escape hatch for hosts that require an
+inline and dedicated viewer to share one exact player."
+  (unless (appkit-media-playback-p playback)
+    (signal 'wrong-type-argument (list 'appkit-media-playback-p playback)))
+  (let ((resource (appkit-media-playback-resource playback)))
+    (unless resource
+      (user-error "Media session requires an acquired media resource"))
+    (appkit-media-video-session-create
+     resource
+     (appkit-media-playback-label playback)
+     :owner owner
+     :kind (appkit-media-playback-kind playback)
+     :cache-key (appkit-media-playback-cache-key playback)
+     :cache-directory (appkit-media-playback-cache-directory playback)
+     :cache-policy (or (appkit-media-playback-cache-policy playback)
+                       appkit-media-video-cache-policy)
+     :muted (appkit-media-playback-muted playback)
+     :loop (and (eq (appkit-media-playback-kind playback) 'video)
+                (appkit-media-playback-loop playback))
+     :live (appkit-media-playback-live playback)
+     :request-headers (appkit-media-playback-request-headers playback)
+     :animation-loop-policy
+     (appkit-media-playback-animation-loop-policy playback))))
+
 (defun appkit-media-video-presentation-start
     (_context input _observe resolve reject)
   "Present video INPUT until its viewer closes or the Effect is cancelled."

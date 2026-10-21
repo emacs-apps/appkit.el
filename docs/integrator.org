@@ -558,8 +558,10 @@ The immutable playback plan is also available through
 interaction, mute/autoplay/loop policy, cache identity, live and header policy,
 but never acquired bytes, a player, or a lease.  Pass a plan to
 ~appkit-media-playback-presentation-create~ for a managed dedicated viewer, or
-attach it to a prepared poster for inline playback.  Do not create a second
-session for the same plan in two presentations.
+attach it to a prepared poster for inline playback.  When an inline and a
+dedicated viewer must share one exact player, create the session with
+~appkit-media-playback-session-create~ and pass it to both presentation
+surfaces.  Do not create a second session for the same plan.
 
 When RESOURCE is nil, ~:resolve-function~ receives (SUCCESS FAILURE) on
 activation.  SUCCESS accepts a canonical resource alist; FAILURE accepts a

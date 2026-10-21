@@ -103,5 +103,35 @@
     (should (eq t (plist-get (cdr captured) :loop)))
     (should (eq t (plist-get (cdr captured) :muted)))))
 
+(ert-deftest appkit-media-playback-session-uses-plan-policy ()
+  (let* ((plan (appkit-media-playback-create
+                :resource '((url . "https://cdn.example/session.mp4"))
+                :kind 'video :label "Session"
+                :muted t :loop t :live nil
+                :cache-key 'session
+                :cache-directory "/tmp/verse-media"
+                :cache-policy 'automatic
+                :request-headers '(("Referer" . "spotify"))))
+         captured)
+    (cl-letf (((symbol-function 'appkit-media-video-session-create)
+               (lambda (&rest args)
+                 (setq captured args)
+                 :session)))
+      (should (eq :session
+                  (appkit-media-playback-session-create
+                   plan :owner 'owner))))
+    (should (equal '((url . "https://cdn.example/session.mp4"))
+                   (car captured)))
+    (let ((args (cddr captured)))
+      (should (eq 'video (plist-get args :kind)))
+      (should (eq 'session (plist-get args :cache-key)))
+      (should (equal "/tmp/verse-media" (plist-get args :cache-directory)))
+      (should (eq 'automatic (plist-get args :cache-policy)))
+      (should (eq t (plist-get args :muted)))
+      (should (eq t (plist-get args :loop)))
+      (should (eq 'owner (plist-get args :owner)))
+      (should (equal '(("Referer" . "spotify"))
+                     (plist-get args :request-headers))))))
+
 (provide 'appkit-media-playback-test)
 ;;; appkit-media-playback-test.el ends here
