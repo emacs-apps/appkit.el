@@ -719,7 +719,7 @@ CLIENT-LABEL, OWNER, BUFFER, and DISPLAY-FUNCTION have the same meanings as in
 (cl-defun appkit-media-video-session-create
     (resource &optional client-label
               &key owner cache-key cache-directory cache-update-function
-              (cache-policy appkit-media-video-cache-policy) muted live
+              (cache-policy appkit-media-video-cache-policy) muted loop live
               request-headers kind
               (animation-loop-policy video-animation-loop-policy))
   "Create one Appkit playback session for canonical RESOURCE.
@@ -733,9 +733,11 @@ progressive video playback storage.  Automatic CACHE-POLICY retains only a
 complete video cache; none leaves buffering session-local.  Images do not use
 the persistent video cache regardless of CACHE-POLICY.  CACHE-UPDATE-FUNCTION
 receives a canonical resource copy after a complete video cache is retained.
-MUTED controls the initial player audio state.  LIVE enforces live-stream
-semantics for videos; REQUEST-HEADERS are transport headers and do not become
-part of RESOURCE identity.  Lottie requires an acquired local FILE.
+MUTED controls the initial player audio state.  LOOP requests explicit
+looping and is deferred until the player reports seekability.  LIVE enforces
+live-stream semantics for videos; REQUEST-HEADERS are transport headers and
+do not become part of RESOURCE identity.  Lottie requires an acquired local
+FILE.
 The caller must promptly create an inline or
 dedicated surface, or close the returned session."
   (let* ((label (or client-label "media"))
@@ -797,6 +799,7 @@ dedicated surface, or close the returned session."
         :kind kind
         :animation-loop-policy animation-loop-policy
         :muted muted
+        :loop loop
         :live live
         :auto-close t
         :request-headers request-headers

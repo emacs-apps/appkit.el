@@ -537,5 +537,37 @@
                    lease '(image :type canvas :width 60 :height 30))
           (should-not appkit-media--inline-hosts))))))
 
+(ert-deftest appkit-media-inline-video-autoplay-is-an-explicit-plan-policy ()
+  (dolist (inline-autoplay '(nil t))
+    (save-window-excursion
+      (with-temp-buffer
+        (switch-to-buffer (current-buffer))
+        (let* ((appkit-media-inline-animation-enabled t)
+               (played 0)
+               (lease (appkit-media--video-inline-create
+                       :inline (video--make-inline))))
+          (cl-letf (((symbol-function 'appkit-media--inline-schedule-start) #'ignore)
+                    ((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                    ((symbol-function 'image-type-available-p) (lambda (_) t))
+                    ((symbol-function 'appkit-media--inline-visible-p) (lambda (_) t))
+                    ((symbol-function 'window-end) (lambda (&rest _) (point-max)))
+                    ((symbol-function 'appkit-media--inline-ensure)
+                     (lambda (_host) lease))
+                    ((symbol-function 'video-inline-target) (lambda (_inline) nil))
+                    ((symbol-function 'appkit-media-video-inline-play)
+                     (lambda (_inline) (cl-incf played))))
+            (let* ((image
+                    (appkit-media-image-with-resource
+                     '(image :type png :width 80 :height 20)
+                     '((url . "https://cdn.example/canvas.mp4"))
+                     :kind 'video :interaction 'media
+                     :inline-autoplay inline-autoplay
+                     :muted t :loop t))
+                   (host (appkit-media-inline-test--insert image)))
+              (should host)
+              (appkit-media--inline-start-visible)
+              (should (= played (if inline-autoplay 1 0)))
+              (appkit-media--inline-release-all))))))))
+
 (provide 'appkit-media-inline-test)
 ;;; appkit-media-inline-test.el ends here

@@ -27,6 +27,7 @@
 (require 'appkit-core)
 (require 'appkit-geometry)
 (require 'appkit-media-card)
+(require 'appkit-media-playback)
 (require 'video-source)
 
 (declare-function video-canvas-copy "video-runtime" (image))
@@ -456,23 +457,6 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
                     (puthash (copy-tree key) image cache))))))
       (error nil))))
 
-(cl-defstruct (appkit-media--playback
-               (:constructor appkit-media--playback-create)
-               (:copier nil))
-  "Immutable source playback plan, independent of mounted runtime state."
-  (resource nil :read-only t)
-  (kind nil :read-only t)
-  (label nil :read-only t)
-  (interaction nil :read-only t)
-  (autoplay nil :read-only t)
-  (animation nil :read-only t)
-  (animated-p nil :read-only t)
-  (resolve-function nil :read-only t)
-  (cache-key nil :read-only t)
-  (cache-directory nil :read-only t)
-  (animation-loop-policy nil :read-only t)
-  (fit nil :read-only t))
-
 (cl-defstruct (appkit-media--thumbnail
                (:constructor appkit-media--thumbnail-create)
                (:copier nil))
@@ -645,12 +629,13 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
   "Return non-nil when IMAGE has known animation capability."
   (when (eq (car-safe image) 'image)
     (when-let* ((playback (plist-get (cdr image) :appkit-media-playback)))
-      (appkit-media--playback-animated-p playback))))
+      (appkit-media-playback-animated-p playback))))
 
 (cl-defun appkit-media-image-with-resource
     (image resource &key (kind 'image) label (interaction 'media)
-           (autoplay t) (animated 'auto) resolve-function cache-key
-           cache-directory animation-loop-policy (fit 'contain))
+           (autoplay t) muted inline-autoplay loop (animated 'auto)
+           resolve-function cache-key cache-directory cache-policy live
+           request-headers animation-loop-policy (fit 'contain))
   "Return a poster copy of IMAGE prepared to display RESOURCE.
 Ordinary image descriptors are shallow-copied.  Native Canvas images are
 explicitly snapshotted with their pixels into a static poster; a Lisp-only
@@ -662,13 +647,13 @@ ANIMATED defaults to local source metadata, or IMAGE's known capability when
 RESOURCE has no local file.  Its `auto', t or nil directive is retained for
 later resource resolution.  No acquisition or playback occurs here.
 INTERACTION nil preserves enclosing actions; `media' supplies normal media
-actions and `open' always opens the viewer.  AUTOPLAY is eligibility, not a
-request to start playback.  RESOLVE-FUNCTION may acquire RESOURCE on demand."
+actions and `open' always opens the viewer.  AUTOPLAY is eligibility for
+image animation, not a request to start playback.  MUTED, INLINE-AUTOPLAY,
+and LOOP are explicit video policy; INLINE-AUTOPLAY is opt-in so ordinary
+video does not start itself.  CACHE-POLICY, LIVE, and REQUEST-HEADERS are
+retained in the plan for the eventual presentation.  RESOLVE-FUNCTION may
+acquire RESOURCE on demand."
   (when image
-    (unless (memq kind '(image video))
-      (error "Inline media kind must be image or video"))
-    (unless (memq interaction '(nil media open))
-      (error "Inline media interaction must be nil, media, or open"))
     (let* ((copy (if (eq (plist-get (cdr image) :type) 'canvas)
                      (video-canvas-copy image)
                    (cons 'image (copy-sequence (cdr image)))))
@@ -685,12 +670,14 @@ request to start playback.  RESOLVE-FUNCTION may acquire RESOURCE on demand."
       (setcdr copy
               (plist-put
                (cdr copy) :appkit-media-playback
-               (appkit-media--playback-create
+               (appkit-media-playback-create
                 :resource resource :kind kind :label label
                 :interaction interaction :autoplay autoplay
+                :muted muted :inline-autoplay inline-autoplay :loop loop
                 :animation animated :animated-p (and animated-p t)
                 :resolve-function resolve-function :cache-key cache-key
-                :cache-directory cache-directory
+                :cache-directory cache-directory :cache-policy cache-policy
+                :live live :request-headers request-headers
                 :animation-loop-policy animation-loop-policy :fit fit)))
       copy)))
 

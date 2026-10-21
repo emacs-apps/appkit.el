@@ -754,7 +754,7 @@
             (should (equal '(2.0 . ch) (plist-get (cdr canvas) :width)))
             (should (equal '(1 . ch) (plist-get (cdr canvas) :height)))
             (should (equal '((file . "/original/video.mp4"))
-                           (appkit-media--playback-resource
+                           (appkit-media-playback-resource
                             (plist-get (cdr video) :appkit-media-playback))))
             (dotimes (_ 50)
               (appkit-media-one-line-preview-image-from-file file 40 'contain))

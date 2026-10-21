@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'appkit-effect)
+(require 'appkit-media-playback)
 (require 'appkit-media-resource)
 
 (cl-defstruct (appkit-media-acquisition
@@ -117,6 +118,7 @@ settlement."
   cache-directory
   cache-policy
   muted
+  loop
   live
   request-headers
   buffer
@@ -129,13 +131,15 @@ settlement."
 (cl-defun appkit-media-video-presentation-create
     (resource &key label cache-key cache-directory
               (cache-policy appkit-media-video-cache-policy)
-              muted live request-headers buffer display-function (start t)
+              muted loop live request-headers buffer display-function (start t)
               setup-function kind
               (animation-loop-policy video-animation-loop-policy))
   "Create owned input for a managed video RESOURCE presentation.
-SETUP-FUNCTION, when non-nil, is called with the ready session and viewer
-buffer.  It returns nil or an `appkit-cancellation' for auxiliary work,
-which is cancelled when the viewer closes or the presentation is cancelled."
+LOOP requests explicit looping and is deferred until the player reports
+seekability.  SETUP-FUNCTION, when non-nil, is called with the ready session
+and viewer buffer.  It returns nil or an `appkit-cancellation' for auxiliary
+work, which is cancelled when the viewer closes or the presentation is
+cancelled."
   (unless (or (null setup-function) (functionp setup-function))
     (error "Video presentation setup must be callable"))
   (appkit-media--video-presentation-create
@@ -145,6 +149,7 @@ which is cancelled when the viewer closes or the presentation is cancelled."
    :cache-directory cache-directory
    :cache-policy cache-policy
    :muted muted
+   :loop loop
    :live live
    :request-headers (copy-tree request-headers)
    :buffer buffer
@@ -153,6 +158,40 @@ which is cancelled when the viewer closes or the presentation is cancelled."
    :setup-function setup-function
    :kind kind
    :animation-loop-policy animation-loop-policy))
+
+(cl-defun appkit-media-playback-presentation-create
+    (playback &key label buffer display-function (start t) setup-function)
+  "Return managed presentation input for PLAYBACK.
+
+The shared playback plan supplies resource, kind, cache identity, mute, loop,
+live and request-header policy.  LABEL, BUFFER, DISPLAY-FUNCTION, START, and
+SETUP-FUNCTION remain presentation-time choices.  This function creates no
+player; start the result with `appkit-media-video-presentation-start' inside a
+keyed Effect."
+  (unless (appkit-media-playback-p playback)
+    (signal 'wrong-type-argument (list 'appkit-media-playback-p playback)))
+  (let ((resource (appkit-media-playback-resource playback)))
+    (unless resource
+      (user-error "Presentation requires an acquired media resource"))
+    (appkit-media-video-presentation-create
+     resource
+     :label (or label (appkit-media-playback-label playback))
+     :cache-key (appkit-media-playback-cache-key playback)
+     :cache-directory (appkit-media-playback-cache-directory playback)
+     :cache-policy (or (appkit-media-playback-cache-policy playback)
+                       appkit-media-video-cache-policy)
+     :muted (appkit-media-playback-muted playback)
+     :loop (and (eq (appkit-media-playback-kind playback) 'video)
+                (appkit-media-playback-loop playback))
+     :live (appkit-media-playback-live playback)
+     :request-headers (appkit-media-playback-request-headers playback)
+     :buffer buffer
+     :display-function display-function
+     :start start
+     :setup-function setup-function
+     :kind (appkit-media-playback-kind playback)
+     :animation-loop-policy
+     (appkit-media-playback-animation-loop-policy playback))))
 
 (defun appkit-media-video-presentation-start
     (_context input _observe resolve reject)
@@ -191,6 +230,7 @@ which is cancelled when the viewer closes or the presentation is cancelled."
                    :cache-directory (appkit-media-video-presentation-cache-directory input)
                    :cache-policy (appkit-media-video-presentation-cache-policy input)
                    :muted (appkit-media-video-presentation-muted input)
+                   :loop (appkit-media-video-presentation-loop input)
                    :live (appkit-media-video-presentation-live input)
                    :request-headers (appkit-media-video-presentation-request-headers input))
                   viewer

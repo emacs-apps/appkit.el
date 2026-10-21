@@ -229,7 +229,7 @@ This only queues a bounded first-frame job; it never decodes synchronously."
     (or (and existing (not (appkit-media-video-inline-closed-p existing)) existing)
         (with-current-buffer (appkit-media-inline-host-buffer host)
           (let* ((plan (appkit-media-inline-host-plan host))
-                 (kind (appkit-media--playback-kind plan))
+                 (kind (appkit-media-playback-kind plan))
                  (poster (appkit-media--image-poster
                           (appkit-media--occurrence-image
                            (appkit-media-inline-host-occurrence host))))
@@ -253,14 +253,22 @@ This only queues a bounded first-frame job; it never decodes synchronously."
                  (session
                   (appkit-media-video-session-create
                    (appkit-media-inline-host-resource host)
-                   (or (appkit-media--playback-label plan) "media")
+                   (or (appkit-media-playback-label plan) "media")
                    :kind kind :owner (appkit-media-inline-host-owner host)
-                   :cache-key (appkit-media--playback-cache-key plan)
-                   :cache-directory (appkit-media--playback-cache-directory plan)
-                   :cache-policy (if (eq kind 'image) 'none 'automatic)
-                   :muted (eq kind 'image)
+                   :cache-key (appkit-media-playback-cache-key plan)
+                   :cache-directory (appkit-media-playback-cache-directory plan)
+                   :cache-policy
+                   (or (appkit-media-playback-cache-policy plan)
+                       (if (eq kind 'image) 'none 'automatic))
+                   :muted (or (appkit-media-playback-muted plan)
+                              (eq kind 'image))
+                   :loop (and (eq kind 'video)
+                              (appkit-media-playback-loop plan))
+                   :live (appkit-media-playback-live plan)
+                   :request-headers
+                   (appkit-media-playback-request-headers plan)
                    :animation-loop-policy
-                   (or (appkit-media--playback-animation-loop-policy plan)
+                   (or (appkit-media-playback-animation-loop-policy plan)
                        video-animation-loop-policy)))
                  inline opened)
             (unwind-protect
@@ -268,7 +276,7 @@ This only queues a bounded first-frame job; it never decodes synchronously."
                   (setq inline
                         (appkit-media-video-inline-create
                          session width height
-                         :poster poster :fit (appkit-media--playback-fit plan)
+                         :poster poster :fit (appkit-media-playback-fit plan)
                          :corner-radius (if thumbnail (/ (min width height) 5.0) 0)
                          :controls-p (appkit-media--inline-toggle-p host)
                          :visible-function (lambda (_) (appkit-media--inline-visible-p host))
@@ -295,8 +303,33 @@ This only queues a bounded first-frame job; it never decodes synchronously."
 (defun appkit-media--inline-toggle-p (host)
   "Whether HOST's normal action controls inline playback."
   (let ((plan (appkit-media-inline-host-plan host)))
-    (and (eq (appkit-media--playback-interaction plan) 'media)
-         (or (eq (appkit-media--playback-kind plan) 'video)
+    (and (eq (appkit-media-playback-interaction plan) 'media)
+         (or (eq (appkit-media-playback-kind plan) 'video)
+             (appkit-media-inline-host-animated host)))))
+
+(defun appkit-media--playback-inline-autoplay-p (plan)
+  "Return non-nil when PLAN is eligible for automatic inline playback.
+Images preserve the existing autoplay/animation policy; video requires the
+explicit INLINE-AUTOPLAY plan field."
+  (and plan
+       appkit-media-inline-animation-enabled
+       (pcase (appkit-media-playback-kind plan)
+         ('image
+          (and (appkit-media-playback-autoplay plan)
+               (appkit-media-playback-animated-p plan)))
+         ('video (appkit-media-playback-inline-autoplay plan))
+         (_ nil))))
+
+(defun appkit-media--inline-autoplay-p (host)
+  "Return non-nil when HOST may start inline playback without activation."
+  (let ((plan (appkit-media-inline-host-plan host)))
+    (and (appkit-media--playback-inline-autoplay-p plan)
+         (appkit-media-inline-host-live-p host)
+         (not (appkit-media-inline-host-autoplay-disabled-p host))
+         (appkit-media-inline-host-resource host)
+         (not (appkit-media-inline-host-inline host))
+         (appkit-media--inline-visible-p host)
+         (or (not (eq (appkit-media-playback-kind plan) 'image))
              (appkit-media-inline-host-animated host)))))
 
 (defun appkit-media--inline-use (host presentation)
@@ -304,7 +337,7 @@ This only queues a bounded first-frame job; it never decodes synchronously."
   (let ((plan (appkit-media-inline-host-plan host)))
     (if (not (appkit-media-inline-host-resource host))
         (unless (appkit-media-inline-host-pending host)
-          (let ((resolver (appkit-media--playback-resolve-function plan))
+          (let ((resolver (appkit-media-playback-resolve-function plan))
                 (request (cons nil nil)))
             (unless resolver
               (user-error "Inline media resource is not available"))
@@ -320,7 +353,7 @@ This only queues a bounded first-frame job; it never decodes synchronously."
                                   (appkit-media-inline-host-cancel host) nil
                                   (appkit-media-inline-host-resource host)
                                   (appkit-media-resource-normalize resource))
-                            (when (eq (appkit-media--playback-animation plan) 'auto)
+                            (when (eq (appkit-media-playback-animation plan) 'auto)
                               (when-let* ((file (alist-get
                                                 'file
                                                 (appkit-media-inline-host-resource host))))
@@ -333,7 +366,7 @@ This only queues a bounded first-frame job; it never decodes synchronously."
                             (setf (appkit-media-inline-host-pending host) nil
                                   (appkit-media-inline-host-cancel host) nil)
                             (message "%s: %s"
-                                     (or (appkit-media--playback-label plan) "media")
+                                     (or (appkit-media-playback-label plan) "media")
                                      reason))))))
                   ;; Resolution may settle or retire its host synchronously.
                   (if (eq request (appkit-media-inline-host-pending host))
@@ -348,11 +381,11 @@ This only queues a bounded first-frame job; it never decodes synchronously."
                    (unless (appkit-media--inline-toggle-p host) 'dedicated))
           ('dedicated
            (appkit-media-present-video-inline
-            inline (appkit-media--playback-label plan)
+            inline (appkit-media-playback-label plan)
             :owner (appkit-media-inline-host-owner host)))
           ('frame
            (appkit-media-present-video-inline
-            inline (appkit-media--playback-label plan)
+            inline (appkit-media-playback-label plan)
             :owner (appkit-media-inline-host-owner host)
             :display-function #'video-display-buffer-other-frame))
           (_
@@ -378,7 +411,7 @@ interactions use a viewer."
   (appkit-media--inline-use host presentation))
 
 (defun appkit-media--inline-start-visible (&rest _ignored)
-  "Start eligible visible images after committed buffer changes."
+  "Start eligible visible media after committed buffer changes."
   (appkit-media--inline-prune)
   ;; Inspect visible overlays, not every image retained in chat history.
   (let (hosts)
@@ -389,28 +422,20 @@ interactions use a viewer."
                          (window-start window) (or (window-end window) (point-max))))
             (unless (memq host hosts) (push host hosts))))))
     (dolist (host hosts)
-      (let ((plan (appkit-media-inline-host-plan host)))
-        (when (appkit-media-inline-host-live-p host)
-          (appkit-media--inline-refresh-thumbnail host))
-        (cond
-         ((not (appkit-media-inline-host-live-p host))
-          (appkit-media--inline-close host))
-         ((and plan (eq (appkit-media--playback-kind plan) 'image)
-               appkit-media-inline-animation-enabled
-               (appkit-media--playback-autoplay plan)
-               (appkit-media-inline-host-animated host)
-               (not (appkit-media-inline-host-autoplay-disabled-p host))
-               (appkit-media-inline-host-resource host)
-               (not (appkit-media-inline-host-inline host))
-               (appkit-media--inline-visible-p host))
-          (condition-case err
-              (appkit-media--inline-use host 'inline)
-            (error
-             (setf (appkit-media-inline-host-autoplay-disabled-p host) t)
-             (message "Inline media unavailable: %s" (error-message-string err))))))))))
+      (when (appkit-media-inline-host-live-p host)
+        (appkit-media--inline-refresh-thumbnail host))
+      (cond
+       ((not (appkit-media-inline-host-live-p host))
+        (appkit-media--inline-close host))
+       ((appkit-media--inline-autoplay-p host)
+        (condition-case err
+            (appkit-media--inline-use host 'inline)
+          (error
+           (setf (appkit-media-inline-host-autoplay-disabled-p host) t)
+           (message "Inline media unavailable: %s" (error-message-string err)))))))))
 
 (defun appkit-media--inline-schedule-start ()
-  "Start visible images after the renderer yields, coalescing insertions."
+  "Start visible media after the renderer yields, coalescing insertions."
   (unless (timerp appkit-media--inline-start-timer)
     (let ((buffer (current-buffer)))
       (setq appkit-media--inline-start-timer
@@ -427,13 +452,13 @@ interactions use a viewer."
   (let* ((poster (appkit-media--occurrence-image occurrence))
          (plan (plist-get (cdr poster) :appkit-media-playback))
          (descriptor (plist-get (cdr poster) :appkit-media-track))
-         (interaction (and plan (appkit-media--playback-interaction plan)))
-         (resource (and plan (appkit-media--playback-resource plan)))
+         (interaction (and plan (appkit-media-playback-interaction plan)))
+         (resource (and plan (appkit-media-playback-resource plan)))
          (host (appkit-media--inline-host-create
                 :buffer (current-buffer) :owner owner :occurrence occurrence
                 :plan plan
                 :resource (and resource (appkit-media-resource-normalize resource))
-                :animated (and plan (appkit-media--playback-animated-p plan))))
+                :animated (and plan (appkit-media-playback-animated-p plan))))
          (map (if descriptor
                   (appkit-media--track-mount host descriptor poster (caar ranges))
                 (and interaction (make-sparse-keymap))))
@@ -508,8 +533,7 @@ interactions use a viewer."
                   (appkit-register-handle
                    owner 'function (lambda () (appkit-media--inline-close host)))))
           (when (or (appkit-media--inline-thumbnail host)
-                    (and plan (appkit-media--playback-autoplay plan)
-                         (appkit-media-inline-host-animated host)))
+                    (appkit-media--playback-inline-autoplay-p plan))
             (appkit-media--inline-schedule-start))
           (setq completed t)
           host)
@@ -549,11 +573,8 @@ Return newly created hosts in order."
              (track (and poster (plist-get (cdr poster) :appkit-media-track))))
         (when (or track (and poster (plist-get (cdr poster) :appkit-media-thumbnail))
                   (and plan
-                       (or (appkit-media--playback-interaction plan)
-                           (and appkit-media-inline-animation-enabled
-                                (eq (appkit-media--playback-kind plan) 'image)
-                                (appkit-media--playback-autoplay plan)
-                                (appkit-media--playback-animated-p plan)))))
+                       (or (appkit-media-playback-interaction plan)
+                           (appkit-media--playback-inline-autoplay-p plan))))
           (let ((span position))
             (while (< span next)
               (let ((limit (min (next-single-property-change span 'display nil next)
