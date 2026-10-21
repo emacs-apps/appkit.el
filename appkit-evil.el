@@ -245,6 +245,7 @@ Safe to call multiple times."
       (evil-set-initial-state
        'appkit-directory-mode appkit-evil-directory-initial-state))
     (appkit-evil-define-readonly-keys 'appkit-directory-mode-map)
+    (appkit-bindings-enable-evil 'appkit-directory-mark-mode-map)
     (appkit-bindings-enable-evil 'appkit-chatbuf-mode-map)
     (appkit-bindings-enable-evil 'appkit-chat-compose-timeline-mode-map)))
 

@@ -391,3 +391,143 @@
 (provide 'appkit-directory-test)
 
 ;;; appkit-directory-test.el ends here
+
+(defun appkit-directory-test--markable-entries ()
+  "Return a projection with markable group and item rows."
+  (list
+   (appkit-directory-entry-create
+    :key '(section . "s")
+    :role 'section
+    :label "Scope")
+   (appkit-directory-entry-create
+    :key '(group . "g")
+    :role 'group
+    :section-key '(section . "s")
+    :label "Folder"
+    :markable-p t)
+   (appkit-directory-entry-create
+    :key '(item . "one")
+    :role 'item
+    :section-key '(section . "s")
+    :group-key '(group . "g")
+    :label "One"
+    :item-p t
+    :markable-p t)
+   (appkit-directory-entry-create
+    :key '(item . "two")
+    :role 'item
+    :section-key '(section . "s")
+    :group-key '(group . "g")
+    :label "Two"
+    :item-p t
+    :markable-p t)))
+
+(ert-deftest appkit-directory-markable-rows-exclude-sections ()
+  (appkit-directory-test--with-surface
+    (appkit-directory-reconcile
+     surface (appkit-directory-test--markable-entries))
+    (should (equal '((group . "g") (item . "one") (item . "two"))
+                   (appkit-directory--keys-at-positions
+                    (appkit-directory--markable-positions surface))))
+    (should-error
+     (appkit-directory-reconcile
+      surface
+      (list (appkit-directory-entry-create
+             :key 'section
+             :role 'section
+             :label "Section"
+             :markable-p t))))))
+
+(ert-deftest appkit-directory-mark-shows-indicator-and-advances ()
+  (appkit-directory-test--with-surface
+    (appkit-directory-reconcile
+     surface (appkit-directory-test--markable-entries))
+    (goto-char (point-min))
+    (search-forward "One")
+    (beginning-of-line)
+    (appkit-directory-mark)
+    (should (equal '((item . "one"))
+                   (appkit-directory-selected-keys surface)))
+    (should (string-match-p "\\* One" (buffer-string)))
+    (should (equal '(item . "two")
+                   (appkit-directory-key-at-point)))
+    (should (appkit-directory-marked-p '(item . "one") surface))
+    (should-not (appkit-directory-marked-p '(item . "two") surface))))
+
+(ert-deftest appkit-directory-region-marking-and-target-precedence ()
+  (appkit-directory-test--with-surface
+    (appkit-directory-reconcile
+     surface (appkit-directory-test--markable-entries))
+    (goto-char (point-min))
+    (search-forward "One")
+    (beginning-of-line)
+    (set-mark (point))
+    (goto-char (point-max))
+    (activate-mark)
+    (appkit-directory-mark)
+    (should (equal '((item . "one") (item . "two"))
+                   (appkit-directory-selected-keys surface)))
+    (should (equal '((item . "one") (item . "two"))
+                   (appkit-directory-target-keys)))
+    (deactivate-mark)
+    (should (equal '("captured")
+                   (appkit-directory-target-keys
+                    :captured '("captured")
+                    :region '("region") :marked '("marked") :point "point")))
+    (should-not
+     (appkit-directory-target-keys
+      :region nil :marked '("marked") :point "point"))
+    (should (equal '("marked")
+                   (appkit-directory-target-keys
+                    :marked '("marked") :point "point")))))
+
+(ert-deftest appkit-directory-mark-all-toggle-and-clear ()
+  (appkit-directory-test--with-surface
+    (appkit-directory-reconcile
+     surface (appkit-directory-test--markable-entries))
+    (appkit-directory-mark-all)
+    (should (equal '((group . "g") (item . "one") (item . "two"))
+                   (appkit-directory-selected-keys surface)))
+    (appkit-directory-toggle-all-marks)
+    (should-not (appkit-directory-selected-keys surface))
+    (appkit-directory-toggle-all-marks)
+    (should (= 3 (length (appkit-directory-selected-keys surface))))
+    (appkit-directory-clear-marks)
+    (should-not (appkit-directory-selected-keys surface))))
+
+(ert-deftest appkit-directory-marks-survive-reconcile-and-forget ()
+  (appkit-directory-test--with-surface
+    (let ((entries (appkit-directory-test--markable-entries)))
+      (appkit-directory-reconcile surface entries)
+      (appkit-directory-mark-all)
+      (appkit-directory-reconcile surface entries)
+      (should (= 3 (length (appkit-directory-selected-keys surface))))
+      (should (string-match-p "\\* Folder" (buffer-string)))
+      (appkit-directory-selection-forget '((item . "one")) surface)
+      (should (equal '((group . "g") (item . "two"))
+                     (appkit-directory-selected-keys surface)))
+      (should-not (string-match-p "\\* One" (buffer-string))))))
+
+(ert-deftest appkit-directory-operation-receives-captured-targets ()
+  (appkit-directory-test--with-surface
+    (let (seen)
+      (appkit-directory-configure
+       surface
+       :operation-function
+       (lambda (_surface operation targets)
+         (setq seen (list operation targets))))
+      (appkit-directory-reconcile
+       surface (appkit-directory-test--markable-entries))
+      (appkit-directory-mark-all)
+      (appkit-directory-run-operation 'delete)
+      (should (equal '(delete ((group . "g") (item . "one") (item . "two")))
+                     seen)))))
+
+(ert-deftest appkit-directory-mark-mode-is-opt-in ()
+  (appkit-directory-test--with-surface
+    (should-not (bound-and-true-p appkit-directory-mark-mode))
+    (should-not (eq (key-binding (kbd "m")) #'appkit-directory-mark))
+    (appkit-directory-mark-mode 1)
+    (should (bound-and-true-p appkit-directory-mark-mode))
+    (should (eq (key-binding (kbd "m")) #'appkit-directory-mark))
+    (should (eq (key-binding (kbd "M-n")) #'appkit-directory-next-marked))))

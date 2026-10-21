@@ -12,9 +12,11 @@
 ;; A protocol-neutral, non-recursive directory surface.  Applications project
 ;; their domain hierarchy into a visible flat stream of sections, groups,
 ;; items, notes, and spacers.  Appkit owns stable reconciliation, fold state,
-;; semantic position, exact row activation, and item navigation.  Every item
-;; belongs to a section; its group key is optional so sections may own items
-;; directly as well as through a full section/group/item path.
+;; semantic position, exact row activation, item navigation, and optional
+;; stable-key marks.  Mutation and operation semantics remain application-owned.
+;;
+;; Marks are opt-in: existing directory adapters keep their keymaps and
+;; rendering until they set `markable-p' and enable `appkit-directory-mark-mode'.
 
 ;;; Code:
 
@@ -25,7 +27,13 @@
 (require 'appkit-ewoc)
 (require 'appkit-position)
 (require 'appkit-ui)
+(require 'appkit-selection)
 (require 'appkit-bindings)
+
+(defgroup appkit-directory nil
+  "Sectioned directory surfaces."
+  :group 'appkit
+  :prefix "appkit-directory-")
 
 (defconst appkit-directory-entry-roles
   '(section group item note spacer)
@@ -49,6 +57,14 @@
 (defconst appkit-directory-unread-property 'appkit-directory-unread
   "Text property marking unread directory items.")
 
+(defconst appkit-directory-marked-property 'appkit-directory-marked
+  "Text property marking a marked directory row.")
+
+(defface appkit-directory-marked-face
+  '((t :inherit font-lock-warning-face :weight bold))
+  "Face for the directory mark indicator."
+  :group 'appkit-directory)
+
 (cl-defstruct (appkit-directory-entry
                (:constructor appkit-directory-entry-create))
   key
@@ -66,6 +82,7 @@
   fold-locked-reason
   primary-action
   item-p
+  markable-p
   unread-p
   payload
   stamp
@@ -82,8 +99,12 @@
   item-inserter
   activate-function
   fold-function
+  operation-function
   action-rows-p
-  anchor-property)
+  anchor-property
+  selection
+  entries
+  mark-indicator)
 
 (defvar-local appkit-directory--surface nil
   "Directory surface owned by the current buffer.")
@@ -118,8 +139,10 @@ Return nil when the current buffer has no directory surface."
              (item-inserter nil item-inserter-p)
              (activate-function nil activate-function-p)
              (fold-function nil fold-function-p)
+             (operation-function nil operation-function-p)
              (action-rows-p nil action-rows-p-supplied-p)
-             (anchor-property nil anchor-property-p))
+             (anchor-property nil anchor-property-p)
+             (mark-indicator nil mark-indicator-p))
   "Configure adapter callbacks and position ownership for SURFACE.
 
 ENTRY-INSERTER receives SURFACE and every non-spacer ENTRY after Appkit has
@@ -130,9 +153,12 @@ entries, or to Appkit's default label renderer otherwise.  ITEM-INSERTER also
 receives SURFACE and one item ENTRY and must insert exactly one terminated
 physical row.  ACTIVATE-FUNCTION receives SURFACE and an item whose primary
 action is item activation.  FOLD-FUNCTION receives SURFACE, the fold entry,
-and its new expanded state.  ACTION-ROWS-P opts into whole-row text buttons;
-ordinary directory modes dispatch through their mode map.  ANCHOR-PROPERTY
-defaults to `appkit-directory-key-property'."
+and its new expanded state.  OPERATION-FUNCTION receives SURFACE, an operation
+symbol, and captured stable target keys; it owns confirmation and mutation.
+ACTION-ROWS-P opts into whole-row text buttons; ordinary directory modes
+dispatch through their mode map.  ANCHOR-PROPERTY defaults to
+`appkit-directory-key-property'.  MARK-INDICATOR is inserted before marked
+rows; nil disables the visual indicator."
   (unless (appkit-directory-surface-p surface)
     (error "Appkit directory configuration requires a surface"))
   (dolist (pair `((entry-inserter
@@ -140,7 +166,9 @@ defaults to `appkit-directory-key-property'."
                   (item-inserter . ,(and item-inserter-p item-inserter))
                   (activate-function
                    . ,(and activate-function-p activate-function))
-                  (fold-function . ,(and fold-function-p fold-function))))
+                  (fold-function . ,(and fold-function-p fold-function))
+                  (operation-function
+                   . ,(and operation-function-p operation-function))))
     (when (and (cdr pair) (not (functionp (cdr pair))))
       (error "Appkit directory %s is not callable" (car pair))))
   (when entry-inserter-p
@@ -152,6 +180,9 @@ defaults to `appkit-directory-key-property'."
           activate-function))
   (when fold-function-p
     (setf (appkit-directory-surface-fold-function surface) fold-function))
+  (when operation-function-p
+    (setf (appkit-directory-surface-operation-function surface)
+          operation-function))
   (when action-rows-p-supplied-p
     (unless (memq action-rows-p '(nil t))
       (error "Appkit directory action-rows-p must be boolean"))
@@ -161,22 +192,39 @@ defaults to `appkit-directory-key-property'."
       (error "Appkit directory anchor property must be a symbol"))
     (setf (appkit-directory-surface-anchor-property surface)
           anchor-property))
+  (when mark-indicator-p
+    (unless (or (null mark-indicator) (stringp mark-indicator))
+      (error "Appkit directory mark indicator must be a string or nil"))
+    (setf (appkit-directory-surface-mark-indicator surface)
+          mark-indicator))
   surface)
 
-(cl-defun appkit-directory-initialize (&key fold-state)
+(cl-defun appkit-directory-initialize
+    (&key fold-state
+          (selection nil selection-p)
+          (mark-indicator "* "))
   "Initialize and return a fresh directory surface in the current buffer.
 
 FOLD-STATE may be an existing hash table whose overrides should be shared by
-the new surface.  This lets an application rebuild or replace its directory
-layout without discarding the user's fold choices."
+the new surface.  SELECTION may seed stable marks; MARK-INDICATOR defaults to
+`* ' and nil disables it."
   (when (and fold-state (not (hash-table-p fold-state)))
     (error "Appkit directory fold-state must be a hash table"))
+  (when (and selection (not (appkit-selection-p selection)))
+    (error "Appkit directory selection must be an appkit-selection"))
+  (unless (or (null mark-indicator) (stringp mark-indicator))
+    (error "Appkit directory mark indicator must be a string or nil"))
   (let ((surface
          (appkit-directory-surface--create
           :node-table (make-hash-table :test #'equal)
           :fold-state (or fold-state (make-hash-table :test #'equal))
           :action-rows-p nil
-          :anchor-property appkit-directory-key-property)))
+          :anchor-property appkit-directory-key-property
+          :selection (if selection-p
+                         selection
+                       (appkit-selection-create))
+          :entries nil
+          :mark-indicator mark-indicator)))
     (let ((inhibit-read-only t)
           (buffer-undo-list t))
       (erase-buffer)
@@ -218,6 +266,233 @@ the result true without mutating the user's stored fold override."
       (remhash fold-key (appkit-directory-surface-fold-state surface))
     (clrhash (appkit-directory-surface-fold-state surface))))
 
+(defun appkit-directory-selection (&optional surface)
+  "Return SURFACE's stable-key selection value."
+  (or (appkit-directory-surface-selection
+       (or surface (appkit-directory-surface)))
+      (appkit-selection-create)))
+
+(defun appkit-directory-selected-keys (&optional surface)
+  "Return a fresh list of SURFACE's marked stable keys."
+  (copy-sequence (appkit-selection-keys
+                  (appkit-directory-selection surface))))
+
+(defun appkit-directory-marked-p (key &optional surface)
+  "Return non-nil when stable KEY is marked in SURFACE."
+  (appkit-selection-member-p (appkit-directory-selection surface) key))
+
+(defun appkit-directory--markable-entry-p (entry)
+  "Return non-nil when ENTRY can carry a mark."
+  (and (appkit-directory-entry-markable-p entry) t))
+
+(defun appkit-directory--markable-entry-at-point (&optional position surface)
+  "Return the markable entry at POSITION in SURFACE."
+  (let ((entry (appkit-directory-entry-at-point position surface)))
+    (and entry
+         (appkit-directory--markable-entry-p entry)
+         entry)))
+
+(defun appkit-directory--markable-key-at-point (&optional position surface)
+  "Return the markable stable key at POSITION in SURFACE."
+  (when-let* ((entry (appkit-directory--markable-entry-at-point
+                      position surface)))
+    (appkit-directory-entry-key entry)))
+
+(defun appkit-directory--markable-positions (surface)
+  "Return visible markable row starts in SURFACE order."
+  (appkit-directory--entry-positions
+   surface
+   (lambda (entry) (appkit-directory--markable-entry-p entry))))
+
+(defun appkit-directory--keys-at-positions (positions)
+  "Return stable keys for directory POSITIONS in order."
+  (let (keys)
+    (dolist (position positions (nreverse keys))
+      (when-let* ((key (appkit-directory-key-at-point position)))
+        (push key keys)))))
+
+(defun appkit-directory--keys-in-region (surface)
+  "Return markable stable keys in the active region of SURFACE."
+  (let ((begin (region-beginning))
+        (end (region-end)))
+    (appkit-directory--keys-at-positions
+     (seq-filter
+      (lambda (position) (and (>= position begin) (< position end)))
+      (appkit-directory--markable-positions surface)))))
+
+(defun appkit-directory--edit-keys (surface)
+  "Return markable keys at the active region or point in SURFACE."
+  (if (use-region-p)
+      (appkit-directory--keys-in-region surface)
+    (when-let* ((key (appkit-directory--markable-key-at-point nil surface)))
+      (list key))))
+
+(defun appkit-directory--refresh-marks (surface keys)
+  "Redraw matching stable KEYS in SURFACE after a mark change."
+  (when (and keys
+             (appkit-directory-surface-entries surface))
+    (appkit-directory-reconcile
+     surface (appkit-directory-surface-entries surface)
+     :force-keys keys)))
+
+(defun appkit-directory--commit-selection (surface selection keys)
+  "Store SELECTION in SURFACE and redraw the changed KEYS."
+  (setf (appkit-directory-surface-selection surface) selection)
+  (appkit-directory--refresh-marks surface keys)
+  selection)
+
+(defun appkit-directory--advance-after-mark (surface)
+  "Move to the next markable row in SURFACE when possible."
+  (appkit-directory-move surface #'appkit-directory--markable-entry-p 1))
+
+(defun appkit-directory-mark ()
+  "Mark the active region or row at point, then advance for a single row."
+  (interactive)
+  (let* ((surface (appkit-directory-surface))
+         (keys (appkit-directory--edit-keys surface)))
+    (unless keys (user-error "No markable directory row"))
+    (let ((selection (appkit-directory-selection surface)))
+      (dolist (key keys)
+        (setq selection (appkit-selection-set selection key t)))
+      (appkit-directory--commit-selection surface selection keys)
+      (unless (use-region-p)
+        (appkit-directory--advance-after-mark surface)))))
+
+(defun appkit-directory-unmark (&optional all-p)
+  "Unmark the active region or row at point.
+With prefix argument ALL-P, clear every mark."
+  (interactive "P")
+  (let ((surface (appkit-directory-surface)))
+    (if all-p
+        (appkit-directory-clear-marks)
+      (let* ((keys (appkit-directory--edit-keys surface)))
+        (unless keys (user-error "No markable directory row"))
+        (let ((selection (appkit-directory-selection surface)))
+          (dolist (key keys)
+            (setq selection (appkit-selection-set selection key nil)))
+          (appkit-directory--commit-selection surface selection keys))))))
+
+(defun appkit-directory-toggle-mark ()
+  "Toggle marks on the active region or row at point."
+  (interactive)
+  (let* ((surface (appkit-directory-surface))
+         (keys (appkit-directory--edit-keys surface)))
+    (unless keys (user-error "No markable directory row"))
+    (let ((selection (appkit-directory-selection surface)))
+      (dolist (key keys)
+        (setq selection
+              (appkit-selection-set
+               selection key
+               (not (appkit-selection-member-p selection key)))))
+      (appkit-directory--commit-selection surface selection keys)
+      (unless (use-region-p)
+        (appkit-directory--advance-after-mark surface)))))
+
+(defun appkit-directory-mark-all ()
+  "Mark every visible markable directory row."
+  (interactive)
+  (let* ((surface (appkit-directory-surface))
+         (keys (appkit-directory--keys-at-positions
+                (appkit-directory--markable-positions surface))))
+    (unless keys (user-error "No visible markable directory rows"))
+    (let ((selection (appkit-directory-selection surface)))
+      (dolist (key keys)
+        (setq selection (appkit-selection-set selection key t)))
+      (appkit-directory--commit-selection surface selection keys))))
+
+(defun appkit-directory-toggle-all-marks ()
+  "Mark all visible markable rows, or unmark them when all are marked."
+  (interactive)
+  (let* ((surface (appkit-directory-surface))
+         (keys (appkit-directory--keys-at-positions
+                (appkit-directory--markable-positions surface))))
+    (unless keys (user-error "No visible markable directory rows"))
+    (let* ((selection (appkit-directory-selection surface))
+           (all-marked-p
+            (cl-every (lambda (key)
+                        (appkit-selection-member-p selection key))
+                      keys)))
+      (dolist (key keys)
+        (setq selection (appkit-selection-set selection key
+                                              (not all-marked-p))))
+      (appkit-directory--commit-selection surface selection keys))))
+
+(defun appkit-directory-clear-marks ()
+  "Clear every mark in the current directory surface."
+  (interactive)
+  (let* ((surface (appkit-directory-surface))
+         (keys (appkit-directory-selected-keys surface)))
+    (appkit-directory--commit-selection
+     surface (appkit-selection-create) keys)
+    keys))
+
+(defun appkit-directory-next-marked ()
+  "Move to the next marked markable row."
+  (interactive)
+  (unless (appkit-directory-move
+           (appkit-directory-surface)
+           (lambda (entry)
+             (and (appkit-directory--markable-entry-p entry)
+                  (appkit-directory-marked-p
+                   (appkit-directory-entry-key entry))))
+           1)
+    (message "Appkit: no next marked directory row")))
+
+(defun appkit-directory-previous-marked ()
+  "Move to the previous marked markable row."
+  (interactive)
+  (unless (appkit-directory-move
+           (appkit-directory-surface)
+           (lambda (entry)
+             (and (appkit-directory--markable-entry-p entry)
+                  (appkit-directory-marked-p
+                   (appkit-directory-entry-key entry))))
+           -1)
+    (message "Appkit: no previous marked directory row")))
+
+(defun appkit-directory-selection-forget (keys &optional surface)
+  "Remove deleted stable KEYS from SURFACE's selection."
+  (let* ((surface (or surface (appkit-directory-surface)))
+         (selection (appkit-selection-forget
+                     (appkit-directory-selection surface) keys)))
+    (appkit-directory--commit-selection surface selection keys)))
+
+(cl-defun appkit-directory-target-keys
+    (&key (captured nil captured-p)
+          (region nil region-p)
+          (marked nil marked-p)
+          (point nil point-p))
+  "Return operation target keys with stable-key precedence.
+An explicit CAPTURED snapshot wins, then an explicit REGION, then MARKED,
+then POINT.  An active empty region never falls back to marks or point."
+  (let* ((surface (appkit-directory-surface))
+         (active-region-p (or region-p (use-region-p)))
+         (region-keys (cond (region-p (copy-sequence region))
+                            ((use-region-p)
+                             (appkit-directory--keys-in-region surface))))
+         (marked-keys
+          (if marked-p
+              (copy-sequence marked)
+            (appkit-directory-selected-keys surface)))
+         (point-key (if point-p
+                        point
+                      (appkit-directory--markable-key-at-point nil surface))))
+    (apply #'appkit-selection-target-keys
+           (append (when captured-p (list :captured captured))
+                   (when active-region-p (list :region region-keys))
+                   (list :marked marked-keys :point point-key)))))
+
+(defun appkit-directory-run-operation (operation &optional targets targets-p)
+  "Dispatch OPERATION to the SURFACE operation adapter.
+TARGETS defaults to `appkit-directory-target-keys'.  The adapter owns
+confirmation, Effects, conflict handling, and reconciliation."
+  (let* ((surface (appkit-directory-surface))
+         (function (appkit-directory-surface-operation-function surface)))
+    (unless (functionp function)
+      (user-error "Appkit directory has no operation adapter"))
+    (funcall function surface operation
+             (if targets-p targets (appkit-directory-target-keys)))))
+
 (defun appkit-directory--validate-entry (entry)
   "Require one complete directory ENTRY."
   (unless (appkit-directory-entry-p entry)
@@ -254,6 +529,9 @@ the result true without mutating the user's stored fold override."
   (when (and (appkit-directory-entry-unread-p entry)
              (not (appkit-directory-entry-item-p entry)))
     (error "Unread Appkit directory rows must be navigable items"))
+  (when (and (appkit-directory-entry-markable-p entry)
+             (not (memq (appkit-directory-entry-role entry) '(group item))))
+    (error "Only group and item rows can be marked"))
   (when (appkit-directory-entry-foldable-p entry)
     (unless (memq (appkit-directory-entry-role entry)
                   '(section group item))
@@ -300,6 +578,7 @@ the result true without mutating the user's stored fold override."
                appkit-directory-group-property
                appkit-directory-item-property
                appkit-directory-unread-property
+               appkit-directory-marked-property
                'help-echo
                'mouse-face))
         custom
@@ -359,10 +638,19 @@ the result true without mutating the user's stored fold override."
   (appkit-directory--validate-entry entry)
   (let* ((surface (appkit-directory-surface))
          (start (point))
+         (key (appkit-directory-entry-key entry))
+         (marked (and (appkit-directory-entry-markable-p entry)
+                      (appkit-directory-marked-p key surface)))
          (indent (or (appkit-directory-entry-indent entry) 0)))
     (pcase (appkit-directory-entry-role entry)
       ('spacer (insert "\n"))
       (_
+       (when (and marked
+                  (appkit-directory-surface-mark-indicator surface))
+         (let ((mark-start (point)))
+           (insert (appkit-directory-surface-mark-indicator surface))
+           (add-face-text-property mark-start (point)
+                                   'appkit-directory-marked-face 'append)))
        (insert (make-string indent ?\s))
        (when (appkit-directory-entry-foldable-p entry)
          (insert (if (appkit-directory-entry-expanded-p entry) "▾ " "▸ ")))
@@ -381,6 +669,9 @@ the result true without mutating the user's stored fold override."
       (error "Appkit directory adapter must render exactly one physical row"))
     (let ((properties (appkit-directory--entry-properties entry)))
       (add-text-properties start (point) properties)
+      (when marked
+        (add-text-properties start (point)
+                             (list appkit-directory-marked-property t)))
       (when-let* ((face (appkit-directory-entry-face entry)))
         (add-face-text-property start (point) face 'append)))
     (when (and (appkit-directory-surface-action-rows-p surface)
@@ -401,6 +692,7 @@ SURFACE's anchor property.  Return the updated key-to-EWOC-node table."
   (unless (appkit-directory-surface-p surface)
     (error "Appkit directory reconciliation requires a surface"))
   (appkit-directory--validate-entries entries)
+  (setf (appkit-directory-surface-entries surface) entries)
   (let ((snapshot
          (and preserve-position-p
               (appkit-position-capture
@@ -607,6 +899,29 @@ activation to remain independent from `appkit-directory-toggle-entry-fold'."
   'previous-item #'appkit-directory-previous-item
   'quit #'quit-window
   'help #'describe-mode)
+
+(defvar appkit-directory-mark-mode-map
+  (make-sparse-keymap)
+  "Opt-in mark commands for Appkit directory surfaces.")
+
+(appkit-bindings-define 'appkit-directory-mark-mode-map 'read-only
+  'mark #'appkit-directory-mark
+  'unmark #'appkit-directory-unmark
+  'clear-marks #'appkit-directory-clear-marks
+  'toggle-mark #'appkit-directory-toggle-mark
+  'mark-all #'appkit-directory-mark-all
+  'toggle-all-marks #'appkit-directory-toggle-all-marks
+  'next-marked #'appkit-directory-next-marked
+  'previous-marked #'appkit-directory-previous-marked)
+
+(define-minor-mode appkit-directory-mark-mode
+  "Opt-in stable-key mark commands for directory surfaces.
+
+The base directory map is deliberately unchanged for compatibility.  Enable
+this in a directory mode hook only when the application supplies markable
+rows and operation semantics."
+  :lighter " Mark"
+  :keymap appkit-directory-mark-mode-map)
 
 (define-derived-mode appkit-directory-mode special-mode "Appkit-Directory"
   "Base mode for non-recursive sectioned directory surfaces."

@@ -30,6 +30,8 @@
     (refresh :native ("C-c g") :read-only ("g") :evil ("g r"))
     (next-item :read-only ("n") :evil ("g j"))
     (previous-item :read-only ("p") :evil ("g k"))
+    (next-marked :read-only ("M-n") :evil ("M-n"))
+    (previous-marked :read-only ("M-p") :evil ("M-p"))
     (next-button :read-only ("TAB" "<tab>") :evil ("TAB" "<tab>"))
     (previous-button :read-only ("<backtab>" "<S-tab>") :evil ("<backtab>" "<S-tab>"))
     (help :native ("C-c ?") :read-only ("?") :evil ("g ?"))
