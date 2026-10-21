@@ -191,7 +191,8 @@ keyed Effect."
      :setup-function setup-function
      :kind (appkit-media-playback-kind playback)
      :animation-loop-policy
-     (appkit-media-playback-animation-loop-policy playback))))
+     (or (appkit-media-playback-animation-loop-policy playback)
+         video-animation-loop-policy))))
 
 (cl-defun appkit-media-playback-session-create
     (playback &key owner)
@@ -220,7 +221,8 @@ inline and dedicated viewer to share one exact player."
      :live (appkit-media-playback-live playback)
      :request-headers (appkit-media-playback-request-headers playback)
      :animation-loop-policy
-     (appkit-media-playback-animation-loop-policy playback))))
+     (or (appkit-media-playback-animation-loop-policy playback)
+         video-animation-loop-policy))))
 
 (defun appkit-media-video-presentation-start
     (_context input _observe resolve reject)

@@ -62,6 +62,8 @@
       (should-not (plist-get args :live))
       (should (equal '(("Referer" . "spotify"))
                      (plist-get args :request-headers)))
+      (should (eq video-animation-loop-policy
+                  (plist-get args :animation-loop-policy)))
       (should-not (plist-get args :start)))))
 
 (ert-deftest appkit-media-playback-inline-autoplay-is-opt-in ()
@@ -131,7 +133,9 @@
       (should (eq t (plist-get args :loop)))
       (should (eq 'owner (plist-get args :owner)))
       (should (equal '(("Referer" . "spotify"))
-                     (plist-get args :request-headers))))))
+                     (plist-get args :request-headers)))
+      (should (eq video-animation-loop-policy
+                  (plist-get args :animation-loop-policy))))))
 
 (provide 'appkit-media-playback-test)
 ;;; appkit-media-playback-test.el ends here
