@@ -110,5 +110,27 @@
             (should (eq evil-state 'insert))))
       (makunbound parent))))
 
+(ert-deftest appkit-bindings-read-actions-are-opt-in-and-share-the-root-key ()
+  (let ((appkit-bindings--adapters (make-hash-table :test #'eq))
+        (appkit-binding-overrides nil)
+        (read-map (make-symbol "appkit-bindings-read"))
+        (toggle-map (make-symbol "appkit-bindings-toggle"))
+        (unsupported-map (make-symbol "appkit-bindings-unsupported")))
+    (unwind-protect
+        (progn
+          (dolist (symbol (list read-map toggle-map unsupported-map))
+            (set symbol (make-sparse-keymap)))
+          (appkit-bindings-define read-map 'read-only 'mark-read #'ignore)
+          (appkit-bindings-define toggle-map 'read-only 'toggle-read #'ignore)
+          (appkit-bindings-define unsupported-map 'read-only 'refresh #'revert-buffer)
+          (dolist (symbol (list read-map toggle-map))
+            (with-temp-buffer
+              (setq buffer-read-only t)
+              (use-local-map (symbol-value symbol))
+              (should (eq #'ignore (key-binding (kbd "r"))))))
+          (should-not (lookup-key (symbol-value unsupported-map) (kbd "r"))))
+      (dolist (symbol (list read-map toggle-map unsupported-map))
+        (makunbound symbol)))))
+
 (provide 'appkit-bindings-test)
 ;;; appkit-bindings-test.el ends here

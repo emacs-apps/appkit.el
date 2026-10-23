@@ -388,6 +388,48 @@
         :role 'note
         :primary-action 'item))))))
 
+(ert-deftest appkit-directory-read-actions-target-only-current-item ()
+  "Read actions ignore marks and region, including for unmarkable items."
+  (appkit-directory-test--with-surface
+    (let ((entries (appkit-directory-test--markable-entries))
+          seen)
+      (setf (appkit-directory-entry-markable-p (nth 2 entries)) nil)
+      (appkit-directory-configure
+       surface :operation-function
+       (lambda (_surface operation targets)
+         (push (list operation targets) seen)))
+      (appkit-directory-reconcile surface entries)
+      (appkit-directory-mark-all)
+      (let ((marks (appkit-directory-selected-keys surface)))
+        (goto-char
+         (ewoc-location
+          (gethash '(item . "one")
+                   (appkit-directory-surface-node-table surface))))
+        (let ((transient-mark-mode t))
+          (push-mark (point-max) t t)
+          (appkit-directory-mark-read)
+          (appkit-directory-toggle-read))
+        (should
+         (equal '((toggle-read ((item . "one")))
+                  (mark-read ((item . "one"))))
+                seen))
+        (should (equal marks (appkit-directory-selected-keys surface)))
+        (should (equal '(item . "one") (appkit-directory-key-at-point)))))))
+
+(ert-deftest appkit-directory-read-actions-reject-passive-or-unsupported-rows ()
+  (appkit-directory-test--with-surface
+    (let (seen)
+      (appkit-directory-configure
+       surface :operation-function
+       (lambda (&rest _) (setq seen t)))
+      (appkit-directory-reconcile surface (appkit-directory-test--entries t))
+      (goto-char (point-min))
+      (should-error (appkit-directory-mark-read) :type 'user-error)
+      (should-not seen)
+      (appkit-directory-next-item)
+      (appkit-directory-configure surface :operation-function nil)
+      (should-error (appkit-directory-toggle-read) :type 'user-error))))
+
 (provide 'appkit-directory-test)
 
 ;;; appkit-directory-test.el ends here

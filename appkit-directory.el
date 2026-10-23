@@ -830,6 +830,25 @@ activation to remain independent from `appkit-directory-toggle-entry-fold'."
     (_
      (user-error "No directory action at point"))))
 
+(defun appkit-directory--run-current-item-operation (operation)
+  "Dispatch OPERATION for the item at point, ignoring marks and region."
+  (let* ((surface (appkit-directory-surface))
+         (entry (appkit-directory-entry-at-point nil surface)))
+    (unless (and entry (appkit-directory-entry-item-p entry))
+      (user-error "No directory item at point"))
+    (appkit-directory-run-operation
+     operation (list (appkit-directory-entry-key entry)) t)))
+
+(defun appkit-directory-mark-read ()
+  "Mark the directory item at point read through its adapter."
+  (interactive)
+  (appkit-directory--run-current-item-operation 'mark-read))
+
+(defun appkit-directory-toggle-read ()
+  "Toggle the directory item at point read through its adapter."
+  (interactive)
+  (appkit-directory--run-current-item-operation 'toggle-read))
+
 (defun appkit-directory-activate ()
   "Activate the row at point, or advance from a passive row."
   (interactive)

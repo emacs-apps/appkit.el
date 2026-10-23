@@ -52,6 +52,8 @@
     (attach-code :native ("C-c '") :evil ("C-c '") :states (normal motion insert))
     (detach :native ("C-c C-d") :evil ("Z d"))
     (message-menu :read-only ("o") :evil ("o"))
+    (mark-read :read-only ("r") :evil ("r"))
+    (toggle-read :read-only ("r") :evil ("r"))
     (reply :read-only ("r") :evil ("r"))
     (forward :read-only ("f") :evil ("R"))
     (edit :read-only ("e") :evil ("i"))
