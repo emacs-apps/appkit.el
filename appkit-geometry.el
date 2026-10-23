@@ -89,8 +89,16 @@ FRAME-PREDICATE restricts candidates by their owning frame."
            (max 1 char-width)
          1))))
 
+(defvar appkit-geometry-line-prefix-columns 0
+  "Display prefix width, in columns, for a row currently being inserted.
+Renderers bind this while inserting content whose `line-prefix' is applied
+only after the row is complete.  Column coordinates include this prefix;
+absolute `:align-to' spacers already use those same coordinates.")
+
 (defun appkit-geometry-current-column ()
-  "Like `current-column', accounting for prior absolute alignment spacers."
+  "Return point's column in the current insertion layout.
+Account for `appkit-geometry-line-prefix-columns' before the first absolute
+alignment spacer; subsequent spacers already include that offset."
   (let* ((bol (line-beginning-position))
          (point-now (point))
          (scan point-now)
@@ -115,7 +123,8 @@ FRAME-PREDICATE restricts candidates by their owning frame."
                        (or align-value 0))
                      (string-width
                       (buffer-substring scan point-now))))))))
-    (or align-column (current-column))))
+    (or align-column
+        (+ appkit-geometry-line-prefix-columns (current-column)))))
 
 (cl-defun appkit-geometry-display-space
     (&key (columns nil columns-p)

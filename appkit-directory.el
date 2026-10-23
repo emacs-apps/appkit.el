@@ -27,6 +27,7 @@
 (require 'appkit-ewoc)
 (require 'appkit-position)
 (require 'appkit-ui)
+(require 'appkit-geometry)
 (require 'appkit-selection)
 (require 'appkit-bindings)
 
@@ -642,7 +643,9 @@ confirmation, Effects, conflict handling, and reconciliation."
          (key (appkit-directory-entry-key entry))
          (marked (and (appkit-directory-entry-markable-p entry)
                       (appkit-directory-marked-p key surface)))
-         (indent (or (appkit-directory-entry-indent entry) 0)))
+         (indent (or (appkit-directory-entry-indent entry) 0))
+         (appkit-geometry-line-prefix-columns
+          (+ appkit-geometry-line-prefix-columns indent)))
     (pcase (appkit-directory-entry-role entry)
       ('spacer (insert "\n"))
       (_

@@ -461,6 +461,52 @@
       (should (equal '(item . "one") (appkit-directory-key-at-point)))
       (should-not (string-match-p "^ +" (buffer-string))))))
 
+(ert-deftest appkit-directory-display-indent-preserves-aligned-row-width ()
+  "Presentation adapters measure display-only indentation before rendering."
+  (require 'appkit-presentation)
+  (dolist (preview (list "Short" (make-string 90 ?b)))
+    (let ((row (appkit-presentation-one-line-row-create
+                :context (make-string 60 ?A)
+                :preview (appkit-ui-one-line-preview-create :text preview)
+                :time "12:30"))
+          baseline)
+      (cl-labels
+          ((insert-row ()
+             (appkit-presentation-insert-one-line-row
+              row :width 70 :icon-slot-width 0
+              :context-width-spec '(0.45 20) :time-slot-width 6))
+           (layout (start)
+             (list (buffer-substring-no-properties start (point-max))
+                   (let (displays)
+                     (while (< start (point-max))
+                       (when-let* ((display (get-text-property start 'display)))
+                         (push display displays))
+                       (setq start
+                             (next-single-property-change
+                              start 'display nil (point-max))))
+                     (nreverse displays)))))
+        (with-temp-buffer
+          (insert (make-string 8 ?\s))
+          (let ((start (point)))
+            (insert-row)
+            (setq baseline (layout start))))
+        (appkit-directory-test--with-surface
+          (appkit-directory-configure
+           surface :entry-inserter
+           (lambda (_surface _entry)
+             (should (= 8 (appkit-geometry-current-column)))
+             (insert-row)
+             t))
+          (appkit-directory-reconcile
+           surface
+           (list (appkit-directory-entry-create
+                  :key 'row :role 'note :indent 8)))
+          (should (equal baseline (layout (point-min))))
+          (goto-char (point-min))
+          (should (eq (char-after) ?\[))
+          (should (equal (make-string 8 ?\s)
+                         (get-text-property (point) 'line-prefix))))))))
+
 (provide 'appkit-directory-test)
 
 ;;; appkit-directory-test.el ends here
