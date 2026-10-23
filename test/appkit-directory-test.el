@@ -71,7 +71,7 @@
      :item-inserter #'appkit-directory-test--item-inserter)
     (appkit-directory-reconcile
      surface (appkit-directory-test--entries t))
-    (should (equal "▾ Scope\n  ▾ Group\n    One\n    Two\n  Note\n\n"
+    (should (equal "▾ Scope\n▾ Group\nOne\nTwo\nNote\n\n"
                    (buffer-string)))
     (goto-char (point-min))
     (search-forward "One")
@@ -114,7 +114,7 @@
          :section-key 'section
          :indent 2
          :item-p t)))
-      (should (equal "Custom section\n  Handled\n" (buffer-string)))
+      (should (equal "Custom section\nHandled\n" (buffer-string)))
       (should-not item-fallback-called))))
 
 (ert-deftest appkit-directory-entry-inserter-nil-falls-back ()
@@ -429,6 +429,37 @@
       (appkit-directory-next-item)
       (appkit-directory-configure surface :operation-function nil)
       (should-error (appkit-directory-toggle-read) :type 'user-error))))
+
+(ert-deftest appkit-directory-indent-is-display-only-and-composes-with-adapters ()
+  "Rows expose content at BOL while preserving the adapter's display prefix."
+  (appkit-directory-test--with-surface
+    (appkit-directory-configure
+     surface
+     :entry-inserter
+     (lambda (_surface entry)
+       (when (eq (appkit-directory-entry-role entry) 'item)
+         (let ((start (point)))
+           (insert (appkit-directory-entry-label entry) "\n")
+           (appkit-ui-apply-line-prefix start (point) "icon "))
+         t)))
+    (let ((entries (appkit-directory-test--entries t)))
+      (appkit-directory-reconcile surface entries)
+      (goto-char (point-min))
+      (forward-line 1)
+      (should (eq (char-after) ?▾))
+      (should (equal "  " (get-text-property (point) 'line-prefix)))
+      (appkit-directory-next-item)
+      (should (eq (char-after) ?O))
+      (should (equal "    icon " (get-text-property (point) 'line-prefix)))
+      (should (equal "    icon " (get-text-property (point) 'wrap-prefix)))
+      (forward-char 1)
+      (appkit-directory-reconcile
+       surface entries :force-keys '((item . "one")))
+      (should (eq (char-after) ?n))
+      (beginning-of-line)
+      (should (eq (char-after) ?O))
+      (should (equal '(item . "one") (appkit-directory-key-at-point)))
+      (should-not (string-match-p "^ +" (buffer-string))))))
 
 (provide 'appkit-directory-test)
 

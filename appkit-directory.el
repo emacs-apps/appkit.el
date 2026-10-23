@@ -146,7 +146,8 @@ Return nil when the current buffer has no directory surface."
   "Configure adapter callbacks and position ownership for SURFACE.
 
 ENTRY-INSERTER receives SURFACE and every non-spacer ENTRY after Appkit has
-inserted indentation and an optional fold marker.  A non-nil return value
+inserted an optional fold marker.  Indentation is display-only `line-prefix'
+and is applied to the completed row.  A non-nil return value
 means that it handled the entry by inserting exactly one newline-terminated
 physical row.  A nil return value falls through to ITEM-INSERTER for item
 entries, or to Appkit's default label renderer otherwise.  ITEM-INSERTER also
@@ -651,7 +652,6 @@ confirmation, Effects, conflict handling, and reconciliation."
            (insert (appkit-directory-surface-mark-indicator surface))
            (add-face-text-property mark-start (point)
                                    'appkit-directory-marked-face 'append)))
-       (insert (make-string indent ?\s))
        (when (appkit-directory-entry-foldable-p entry)
          (insert (if (appkit-directory-entry-expanded-p entry) "▾ " "▸ ")))
        (unless (and (functionp
@@ -674,6 +674,10 @@ confirmation, Effects, conflict handling, and reconciliation."
                              (list appkit-directory-marked-property t)))
       (when-let* ((face (appkit-directory-entry-face entry)))
         (add-face-text-property start (point) face 'append)))
+    (when (> indent 0)
+      (appkit-ui-apply-line-prefix
+       start (point) (make-string indent ?\s)
+       (appkit-directory-entry-face entry)))
     (when (and (appkit-directory-surface-action-rows-p surface)
                (or (appkit-directory-entry-foldable-p entry)
                    (appkit-directory-entry-item-p entry)))
