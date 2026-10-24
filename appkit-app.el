@@ -114,6 +114,8 @@
    (appkit-app-command-batch app)
    (appkit-next-commands next)
    (appkit-app-command-limit app))
+  (appkit-command--stage-revocations
+   (appkit-app-effect-runtime app) (appkit-next-commands next))
   (appkit-next-model next))
 
 (defun appkit-app--client-update (app context model message)

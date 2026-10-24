@@ -38,7 +38,8 @@
   observation-pending-limit
   success
   failure
-  cancellation-requirement)
+  cancellation-requirement
+  lifetime)
 
 (cl-defstruct (appkit-effect-runtime
                (:constructor appkit-effect--runtime-create)
@@ -93,6 +94,20 @@
                (:copier nil))
   runtime)
 
+(defvar appkit-effect--current-request-scope nil
+  "Internal keyed request authority of the current client transition.")
+
+(defvar appkit-effect--consumed-request-scope nil
+  "Internal request authority captured while consuming one Effect output.")
+
+(cl-defstruct (appkit-effect--scoped-message
+               (:constructor appkit-effect--scoped-message-create)
+               (:copier nil))
+  scope payload)
+
+(declare-function appkit-routing--report-request "appkit-routing"
+                  (scope target message outcome &optional reason correlation))
+
 (defconst appkit-effect-stale
   (make-symbol "appkit-effect-stale")
   "Result returned when an internal Effect delivery has lost authority.")
@@ -108,7 +123,7 @@
 
 (cl-defun appkit-effect-create
     (&key key input start observe observation-policy observation-pending-limit
-          success failure (cancellation-requirement 'logical))
+          success failure (cancellation-requirement 'logical) (lifetime 'effect))
   "Create one finite Effect specification.
 
 START receives an opaque context, INPUT, and observe/resolve/reject gates.
@@ -116,7 +131,11 @@ SUCCESS and FAILURE map terminal payloads to domain messages.  OBSERVE, when
 present, maps nonterminal payloads.  OBSERVATION-POLICY is one of `lossless',
 `latest', or `coalesce-by-key'.  Lossless and keyed coalescing require a
 positive OBSERVATION-PENDING-LIMIT.  CANCELLATION-REQUIREMENT is `logical' or
-`transport'."
+`transport'.  LIFETIME defaults to `effect', retiring authority at settlement.
+With `request', settlement retains the keyed slot until cancellation or
+replacement.  Directed messages returned while handling its output retain
+that authority across App commits and replies; finish the request with a
+cancel-effect command.  Retained requests count toward the active limit."
   (unless (functionp start)
     (signal 'wrong-type-argument (list 'functionp start)))
   (unless (functionp success)
@@ -126,6 +145,8 @@ positive OBSERVATION-PENDING-LIMIT.  CANCELLATION-REQUIREMENT is `logical' or
   (unless (memq cancellation-requirement '(logical transport))
     (error "Unsupported Effect cancellation requirement: %S"
            cancellation-requirement))
+  (unless (memq lifetime '(effect request))
+    (error "Unsupported Effect lifetime: %S" lifetime))
   (if observe
       (progn
         (unless (functionp observe)
@@ -150,7 +171,8 @@ positive OBSERVATION-PENDING-LIMIT.  CANCELLATION-REQUIREMENT is `logical' or
    :observation-pending-limit observation-pending-limit
    :success success
    :failure failure
-   :cancellation-requirement cancellation-requirement))
+   :cancellation-requirement cancellation-requirement
+   :lifetime lifetime))
 
 (defun appkit-effect--runtime-check (runtime)
   "Return RUNTIME, or signal a type error."
@@ -166,7 +188,7 @@ positive OBSERVATION-PENDING-LIMIT.  CANCELLATION-REQUIREMENT is `logical' or
            'running)))
 
 (defun appkit-effect-runtime-count (runtime)
-  "Return the number of active Effect instances in RUNTIME."
+  "Return the number of active or retained Effect instances in RUNTIME."
   (hash-table-count
    (appkit-effect--runtime-instances
     (appkit-effect--runtime-check runtime))))
@@ -201,7 +223,7 @@ MAX-ACTIVE defaults to 32 and bounds the keyed instance registry."
          (eq instance
              (gethash key (appkit-effect--runtime-instances runtime)))
          (memq (appkit-effect--instance-state instance)
-               '(starting active settlement-pending)))))
+               '(starting active settlement-pending retained)))))
 
 (defun appkit-effect-runtime-current-p (runtime key)
   "Return non-nil when RUNTIME has a current instance under KEY."
@@ -630,6 +652,9 @@ names live work in RUNTIME."
           (progn
             (appkit-effect--ensure-wake runtime)
             appkit-effect-stale)
+        (when (eq (appkit-effect-spec-lifetime
+                   (appkit-effect--instance-spec instance)) 'request)
+          (setq appkit-effect--consumed-request-scope instance))
         (let ((observation (appkit-effect--first-observation instance))
               (settlement (appkit-effect--instance-settlement instance))
               (spec (appkit-effect--instance-spec instance)))
@@ -643,10 +668,13 @@ names live work in RUNTIME."
                    (appkit-effect-spec-input spec)
                    (appkit-effect-observation-payload observation)))
            (settlement
-            ;; Retire authority before calling client mapping code.
-            (remhash (appkit-effect--instance-key instance)
-                     (appkit-effect--runtime-instances runtime))
-            (setf (appkit-effect--instance-state instance) 'terminal
+            ;; Request authority outlives the transport settlement.
+            (unless (eq (appkit-effect-spec-lifetime spec) 'request)
+              (remhash (appkit-effect--instance-key instance)
+                       (appkit-effect--runtime-instances runtime)))
+            (setf (appkit-effect--instance-state instance)
+                  (if (eq (appkit-effect-spec-lifetime spec) 'request)
+                      'retained 'terminal)
                   (appkit-effect--instance-settlement instance) nil
                   (appkit-effect--instance-cancellation instance) nil)
             (appkit-effect--ensure-wake runtime)
@@ -663,15 +691,31 @@ names live work in RUNTIME."
 (defun appkit-effect-runtime-dispatch
     (runtime client-update model input)
   "Dispatch INPUT through RUNTIME before CLIENT-UPDATE.
-
-Internal Effect delivery is mapped to one domain message in this loop turn.
-Stale delivery becomes a normal rejection without calling CLIENT-UPDATE."
-  (if (appkit-effect-delivery-p input)
-      (let ((message (appkit-effect-runtime-consume runtime input)))
-        (if (eq message appkit-effect-stale)
-            (appkit-loop-reject 'stale-effect-output)
-          (funcall client-update model message)))
-    (funcall client-update model input)))
+Request-scoped messages are checked at consumption, including every routed
+hop.  An obsolete request never reaches client domain update code."
+  (cond
+   ((appkit-effect--scoped-message-p input)
+    (let ((scope (appkit-effect--scoped-message-scope input))
+          (payload (appkit-effect--scoped-message-payload input)))
+      (if (not (appkit-effect--current-p scope))
+          (appkit-loop-reject 'stale-request-output)
+        (let* ((appkit-effect--current-request-scope scope)
+               (result (funcall client-update model payload)))
+          (when (and (appkit-loop-rejected-p result)
+                     (not (eq runtime (appkit-effect--instance-runtime scope))))
+            (appkit-routing--report-request
+             scope nil payload 'rejected (appkit-loop-rejected-reason result)))
+          result))))
+   ((appkit-effect-delivery-p input)
+    (let* ((appkit-effect--consumed-request-scope nil)
+           (message (appkit-effect-runtime-consume runtime input))
+           (appkit-effect--current-request-scope
+            appkit-effect--consumed-request-scope))
+      (if (eq message appkit-effect-stale)
+          (appkit-loop-reject 'stale-effect-output)
+        (funcall client-update model message))))
+   (t (let ((appkit-effect--current-request-scope nil))
+        (funcall client-update model input)))))
 
 (defun appkit-effect-runtime-stop (runtime)
   "Revoke and cancel every instance owned by RUNTIME.
@@ -699,6 +743,25 @@ failures, warns for conditions after the first, then re-signals the first."
       (when-let* ((condition (car conditions)))
         (signal (car condition) (cdr condition)))
       t)))
+
+(defun appkit-effect-runtime-stage-revocation (runtime key)
+  "Revoke KEY logically once its replacement/cancellation is accepted.
+Keep its cancellation capability and registry slot until the post-commit
+phase performs physical cleanup.  This also fences later messages in the
+same loop pass, before deferred commands execute."
+  (when-let* ((instance (gethash key (appkit-effect--runtime-instances runtime))))
+    (setf (appkit-effect--instance-state instance) 'revocation-pending)))
+
+(defun appkit-effect-runtime-request (runtime key)
+  "Return KEY's opaque current request identity, or nil.
+The result may only be retained and compared with `eq'.  It exposes no
+transport or mutable application state, and is nil for ordinary Effects."
+  (appkit-effect--runtime-check runtime)
+  (let ((instance (gethash key (appkit-effect--runtime-instances runtime))))
+    (and instance (appkit-effect--current-p instance)
+         (eq (appkit-effect-spec-lifetime (appkit-effect--instance-spec instance))
+             'request)
+         instance)))
 
 (provide 'appkit-effect)
 

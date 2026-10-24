@@ -85,7 +85,8 @@ set; its owner runtime validates the applicable capacity."
   target
   message
   delivery
-  reply-correlation)
+  reply-correlation
+  request-scope)
 
 (cl-defun appkit-command-post-message
     (&key target message delivery reply-correlation)
@@ -107,7 +108,8 @@ to attach a return route when TARGET is an address."
    :target target
    :message message
    :delivery delivery
-   :reply-correlation reply-correlation))
+   :reply-correlation reply-correlation
+   :request-scope appkit-effect--current-request-scope))
 
 (cl-defstruct (appkit-command-publish
                (:include appkit-command)
@@ -282,7 +284,8 @@ directed posts."
        (appkit-command-post-message-target command)
        (appkit-command-post-message-message command)
        revision
-       (appkit-command-post-message-reply-correlation command)))))
+       (appkit-command-post-message-reply-correlation command)
+       (appkit-command-post-message-request-scope command)))))
 
 (defun appkit-command--start-effects (runtime commands)
   "Start final Effect COMMANDS in RUNTIME in explicit order."
@@ -300,6 +303,14 @@ directed posts."
      (appkit-command-source-intent-expected-identity command)
      (appkit-command-source-intent-payload command)
      (appkit-command-source-intent-result-mapper command))))
+
+(defun appkit-command--stage-revocations (runtime commands)
+  "Logically revoke accepted Effect COMMANDS in RUNTIME before the next update."
+  (dolist (command commands)
+    (when (or (appkit-command-start-effect-p command)
+              (appkit-command-cancel-effect-p command))
+      (appkit-effect-runtime-stage-revocation
+       runtime (appkit-command--effect-key command)))))
 
 (provide 'appkit-command)
 

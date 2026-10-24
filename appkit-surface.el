@@ -149,6 +149,8 @@
    (appkit-surface-command-batch surface)
    (appkit-next-commands next)
    (appkit-surface-command-limit surface))
+  (appkit-command--stage-revocations
+   (appkit-surface-effect-runtime surface) (appkit-next-commands next))
   (appkit-surface--merge-render surface (appkit-next-render next))
   (appkit-next-model next))
 
