@@ -639,7 +639,8 @@ Do not mutate the returned descriptor.  Rasterization is deferred to display."
     (image resource &key (kind 'image) label (interaction 'media)
            (autoplay t) muted inline-autoplay loop (animated 'auto)
            resolve-function cache-key cache-directory cache-policy live
-           request-headers animation-loop-policy (fit 'contain))
+           request-headers animation-loop-policy (fit 'contain)
+           (slot-key (bound-and-true-p appkit-projection-printing-key)))
   "Return a poster copy of IMAGE prepared to display RESOURCE.
 Ordinary image descriptors are shallow-copied.  Native Canvas images are
 explicitly snapshotted with their pixels into a static poster; a Lisp-only
@@ -656,7 +657,11 @@ image animation, not a request to start playback.  MUTED, INLINE-AUTOPLAY,
 and LOOP are explicit video policy; INLINE-AUTOPLAY is opt-in so ordinary
 video does not start itself.  CACHE-POLICY, LIVE, and REQUEST-HEADERS are
 retained in the plan for the eventual presentation.  RESOLVE-FUNCTION may
-acquire RESOURCE on demand."
+acquire RESOURCE on demand.
+SLOT-KEY identifies this presentation slot within its Surface across reprints;
+it must not include geometry.  The current projection row is the default.
+Use distinct keys for repeated media in a row, or nil to disable retention.
+CACHE-KEY identifies content independently of expiring source URLs."
   (when image
     (let* ((copy (if (eq (plist-get (cdr image) :type) 'canvas)
                      (video-canvas-copy image)
@@ -683,6 +688,8 @@ acquire RESOURCE on demand."
                 :cache-directory cache-directory :cache-policy cache-policy
                 :live live :request-headers request-headers
                 :animation-loop-policy animation-loop-policy :fit fit)))
+      (setcdr copy (plist-put (cdr copy) :appkit-media-slot-key
+                             (copy-tree slot-key)))
       copy)))
 
 (defun appkit-media-image-display-string (image fallback)

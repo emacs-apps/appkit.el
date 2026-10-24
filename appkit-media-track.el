@@ -39,7 +39,8 @@
   (index 0) poster inline-index muted parked relayout)
 
 (cl-defun appkit-media-track-image
-    (items pixel-height pixel-gap &key label session-function open-function)
+    (items pixel-height pixel-gap &key label session-function open-function
+           (slot-key (bound-and-true-p appkit-projection-printing-key)))
   "Prepare ITEMS as an immutable horizontal track, or return nil.
 ITEMS contain :file, :width, :height, :display-width, :fit and :playable-p.
 PIXEL-HEIGHT and PIXEL-GAP determine horizontal strip geometry.  At least
@@ -52,7 +53,10 @@ nil.  PRESENTATION is nil, `dedicated', `frame', or `external'.  These adapters
 run in the mounted occurrence's buffer, not the preparing buffer.
 
 Insert through the image display/slice APIs.  Surface commits mount each
-occurrence independently; elsewhere call `appkit-media-inline-mount'."
+occurrence independently; elsewhere call `appkit-media-inline-mount'.
+SLOT-KEY identifies this presentation slot independently of geometry.
+The current projection row is the default; use distinct keys for separate
+tracks in the same row, or nil to disable retention."
   (when (cl-some (lambda (item)
                    (let ((file (plist-get item :file)))
                      (and (stringp file) (file-readable-p file))))
@@ -79,12 +83,13 @@ occurrence independently; elsewhere call `appkit-media-inline-mount'."
                            prepared (plist-get plan :height) (plist-get plan :gap))))
           (cons 'image
                 (plist-put
-                 (copy-sequence (cdr image)) :appkit-media-track
+                 (plist-put (copy-sequence (cdr image)) :appkit-media-slot-key
+                            (copy-tree slot-key)) :appkit-media-track
                  (appkit-media--track-descriptor-create
                   :plan plan
                   :identity
-                  (and (bound-and-true-p appkit-projection-printing-key)
-                       (cons appkit-projection-printing-key
+                  (and slot-key
+                       (cons slot-key
                              (mapcar (lambda (item) (plist-get item :file)) prepared)))
                   :label label :session-function session-function
                   :open-function open-function))))))))
