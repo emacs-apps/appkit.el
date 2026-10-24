@@ -37,14 +37,15 @@ Inside the monorepo, packages and their load paths are registered in
 | Chapter                                | Covers                                                                    |
 |----------------------------------------+---------------------------------------------------------------------------|
 | [[file:docs/runtime.org][Runtime]]           | Apps, Surfaces, transitions, commands, publish/subscribe, Effects, Sources, Renderers, Resources |
+| [[file:docs/design.org][Design]]             | how to divide an application: state ownership, messages, work, App–Surface traffic, review checklist |
 | [[file:docs/presentation.org][Presentation]] | positions, actions, prefixes and cards, rows, directories, discussions, scrolling, selection, bindings |
 | [[file:docs/chat.org][Chat buffers]]       | chat buffer and composer, timeline, history windows, read state, message leaves, completion |
 | [[file:docs/media.org][Media]]             | resources, images, inline occurrences, tracks, video sessions, audio       |
 | [[file:docs/compose.org][Compose]]         | compose sessions and operations, child editors, chat compose               |
 | [[file:docs/markup.org][Markup]]           | semantic documents, native rendering, codecs, structured objects           |
 
-Read the runtime chapter first.  The chapters explain models and the rules that
-are easy to break; argument details live in docstrings.
+Read the runtime chapter first, then design.  The chapters explain models and
+the rules that are easy to break; argument details live in docstrings.
 
 * Modules
 

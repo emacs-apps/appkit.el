@@ -1,0 +1,170 @@
+#+title: Designing an Appkit application
+#+options: toc:2 num:nil
+
+[[file:runtime.org][The runtime chapter]] says what each piece does.  This chapter says how to
+divide an application among them.  The rules are normative: each one exists
+because a client broke it and paid for it, and the runtime can only order,
+fence and clean up what flows through it.
+
+* State has one owner
+
+Before writing any code, place every piece of state by asking who changes it
+and who must agree on it.
+
+| State                                                        | Owner             |
+|--------------------------------------------------------------+-------------------|
+| protocol objects, accounts, connection state, shared caches  | App model         |
+| what one buffer shows: target, query, window, pending tokens | Surface model     |
+| rendered rows, EWOC nodes, image descriptors                 | Renderer          |
+| composer text and structured input                           | compose / chatbuf |
+| live transport handles                                       | Effect, Source, Resource |
+
+- Domain state never lives in global or buffer-local variables.  An App that
+  only holds lifecycle while a global store holds the domain cannot be
+  ordered, fenced or reset by the runtime; it is a migration state, not a
+  design.
+- The App model never holds Surfaces, buffers, runtime addresses or live
+  transport handles.  It names things by protocol identity.
+- A Surface model holds identities, tokens and view parameters, not copies of
+  canonical objects.  It reads canonical data from the App read view when it
+  renders.
+
+* Boundaries and identity
+
+*One App per failure and stop authority*: usually one per account or backend
+session.  Several accounts sharing one gateway connection are one App with
+account partitions.  Do not split Apps per view, and do not hide a second
+service singleton beside the App.
+
+*One Surface per thing the user looks at*, identified by what it shows:
+~(room ID)~, ~(feed home)~, ~(user ID)~.  Commands open or reuse it through
+~appkit-app-surface~ with that identity, and pass the target as the Surface's
+init input.
+
+* Messages are data
+
+- A message is a tagged list or struct of plain values: ~(page-loaded TOKEN
+  ITEMS)~.  It never carries a closure, a live object (Surface, buffer,
+  process, read view) or a callback to run inside ~update~.
+- Name results for what happened (~page-loaded~, ~send-failed~) and requests
+  for what is wanted (~load-older~).
+- Messages come from three places: user commands (~appkit-surface-send~),
+  work results (Effect and Source mappers), and other owners (replies and
+  topic notifications).
+- An ~update~ handles the messages it defines and rejects the rest with a
+  reason, including ~appkit-delivery-report~ values it does not expect.
+
+* Transitions are functions
+
+Write ~update~ as a function from model and message to ~appkit-next~.
+
+- Helpers return values: a new model, or a list of commands.  The caller
+  combines them with ~append~.  Do not collect commands through dynamic
+  variables, hooks or global queues; a helper that needs work returns the
+  command.
+- Treat models as values: copy what you change.  A rejected transition keeps
+  the old object, and projections compare rows with ~equal~, so an object
+  mutated in place both survives a rejection and hides the change from the
+  diff.  An App-private index such as a hash table may be updated in place
+  only if nothing outside the App holds it; rows carry snapshots or revision
+  stamps, never shared mutable objects.
+- Commands, timers and callbacks never change a model directly.  They send or
+  post a message.
+
+* Work by lifetime
+
+| Work                                                 | Use                     | Owner                                  |
+|------------------------------------------------------+-------------------------+----------------------------------------|
+| one request with one result                          | Effect                  | App if it changes canonical state      |
+| viewer-local work (open a viewer, a preview)         | Effect                  | Surface                                |
+| a connection or stream that lives while logged in    | Source from the model   | App                                    |
+| assets discovered while rendering (covers, avatars)  | Resource demand on rows | rows; the App's coordinator acquires   |
+
+Transport callbacks only reach the runtime through Effect and Source gates, or
+by posting.  A printer or Renderer never starts work.  Transport libraries
+underneath (HTTP, websocket, SSE clients) are not Appkit owners and may use
+processes and timers freely.
+
+* App and Surfaces
+
+Three patterns cover the traffic between an App and its Surfaces.
+
+** Request and reply
+
+#+begin_example
+Surface update   new token in the model; post the request to the parent
+                 with :reply-correlation
+App update       start an Effect whose input keeps the reply route
+App update       commit the result into the canonical model; reply on the route
+Surface update   ignore the reply unless its token is still the model's
+#+end_example
+
+The App commits before replying, so the Surface's read view already contains
+the result.  A Surface that was replaced never sees the old reply.
+
+** Change propagation
+
+The App publishes after committing a canonical change, and Surfaces subscribe
+to what they show:
+
+- coarse topics for account-wide state: ~session~, ~rooms~;
+- keyed topics for scoped data: ~(room ID)~, ~(conversation ID)~.
+
+A change publishes on every topic it affects.  A notification is a hint: the
+Surface re-derives what it shows from the read view, and the projection
+reprints only rows whose value changed.  Use ~level~ delivery unless the
+Surface keeps its own copy of a stream and can resync from the App.
+
+** Interest
+
+When protocol work only matters while someone watches, such as a room's live
+timeline, presence or typing, the App reacts to ~:subscribed~.  It starts the
+work on a topic's first subscriber and stops it on the last.  The set of
+watched topics belongs in the App model, maintained from those messages.
+
+Never: keep Surface addresses in the App model, walk the App's Surface
+registry, call Surface functions from the App, or let a Surface change App
+state directly.
+
+* Rendering
+
+A Surface renders from its own model and the App read view, nothing else.
+
+- Use the projection renderer.  Row keys are stable domain identities; row
+  payloads are what the row shows, as snapshots; ~:dependencies~ name the
+  Resources it waits on.
+- Request the smallest change: ~:keys~ for rows you know changed, ~:full-p~
+  after a model-wide change, ~:frame-p~ for header and footer.  Accept
+  ~appkit-projection-change~ messages in ~update~ and return them as the
+  request.
+- Width-sensitive Surfaces use responsive geometry.  Scroll and visibility
+  observers post messages; they do not page or render by themselves.
+
+* Pending and optimistic state
+
+Domain lanes such as sending, reacting, editing or marking read live in the App
+model with explicit states: desired, in flight, accepted, rejected, unknown.
+Each network attempt is one App Effect.  A local echo gets a temporary row key;
+when the server confirms it, the App replaces the item and Surfaces rekey the
+row (~:rekeys~), keeping point on it.  An unknown
+outcome stays visible until it is resolved; it is never silently retried.
+
+* Testing
+
+- Test ~update~ as a function: build a model, apply a message, inspect the
+  ~appkit-next~.
+- Drive App and Surface interaction deterministically with
+  ~appkit-loop-run-pass~ on each owner's loop, as the runtime's own tests do.
+- Smoke-test presentation in a graphical frame; batch tests do not prove
+  Canvas, playback or touch behavior.
+
+* Review checklist
+
+- Does any domain state live outside an App or Surface model?
+- Does the App model hold a Surface, buffer, address, read view or handle?
+- Does any message carry a closure or live object?
+- Does any helper emit commands other than by returning them?
+- Is any model mutated in place where a row or read view can see it?
+- Is any callback, timer or printer changing a model or starting work?
+- Does any Surface learn of App changes other than by reply or subscription?
+- Does any App code look up, store or call Surfaces?
