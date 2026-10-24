@@ -12,18 +12,16 @@
 ;; Protocol-independent state for one continuous chat history window.
 ;;
 ;; Clients own protocol cursors, remote-frontier observations, read state, and
-;; page-completion rules.  Appkit owns the keyed request operation, transport
-;; lifecycle, exact projected-window invariants, stale callback fencing,
-;; exhausted older history, stalled newer paging, strict edge slicing,
-;; automatic edge gates, and passive delimiter presentation.
+;; page-completion rules.  Surface Effects own requests and stale deliveries.
+;; This companion owns exact projected-window invariants, exhausted older
+;; history, stalled newer paging, strict edge slicing, automatic edge gates,
+;; and passive delimiter presentation.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
-(require 'appkit-core)
-(require 'appkit-surface)
 (require 'appkit-scroll)
 
 (cl-defstruct (appkit-chat-history--state
@@ -35,19 +33,10 @@
   older-loaded-p
   first-key
   last-key
-  owner
   stalled-newer-key)
 
-(cl-defstruct (appkit-chat-history-operation
-               (:constructor appkit-chat-history-operation--create)
-               (:copier nil))
-  "One Surface-scoped history request fence."
-  surface
-  handle
-  alive-p)
-
-(defconst appkit-chat-history--request-key 'appkit-chat-history
-  "Private history request key for a history controller request.")
+(defconst appkit-chat-history-effect-key 'appkit-chat-history
+  "Surface Effect key for the single continuous history request.")
 
 (defvar-local appkit-chat-history--state nil
   "Current buffer's protocol-independent chat history state.")
@@ -61,7 +50,6 @@
    :older-loaded-p nil
    :first-key nil
    :last-key nil
-   :owner nil
    :stalled-newer-key nil))
 
 (defun appkit-chat-history-init-state ()
@@ -75,9 +63,9 @@ window; mode construction must not imply that cached entries are contiguous."
   appkit-chat-history--state)
 
 (defun appkit-chat-history-reset-state ()
-  "Cancel any active request and reset to a fresh unknown history state."
-  (when (appkit-chat-history--state-p appkit-chat-history--state)
-    (appkit-chat-history-request-cancel))
+  "Reset to a fresh unknown history window.
+The owning Surface update must cancel its history Effect when resetting
+a live window.  History state does not own asynchronous work."
   (setq-local appkit-chat-history--state
               (appkit-chat-history--new-state)))
 
@@ -124,7 +112,7 @@ cached entries."
    (appkit-chat-history-init-state)))
 
 (defun appkit-chat-history-loading-p ()
-  "Return non-nil while the current history controller owns a request."
+  "Return non-nil while the history presentation is loading."
   (and (appkit-chat-history-loading) t))
 
 (defun appkit-chat-history-older-loaded-p ()
@@ -133,10 +121,14 @@ cached entries."
         (appkit-chat-history-init-state))
        t))
 
-(defun appkit-chat-history-request-owner ()
-  "Return the operation fence owning the active history request, or nil."
-  (appkit-chat-history--state-owner
-   (appkit-chat-history-init-state)))
+(defun appkit-chat-history-loading-set (kind)
+  "Set the presentation's loading KIND, or nil when settled.
+Call from the owning Surface's update when starting, completing, or
+cancelling its history Effect.  Effect delivery provides stale-result
+fencing and transport cancellation; this state only drives presentation."
+  (setf (appkit-chat-history--state-loading
+         (appkit-chat-history-init-state))
+        kind))
 
 (defun appkit-chat-history-window-set (first-key last-key)
   "Establish one exact history window from FIRST-KEY through LAST-KEY.
@@ -189,7 +181,7 @@ history preceded it."
       state)))
 
 (defun appkit-chat-history-window-clear ()
-  "Make the current history window unknown without changing request ownership.
+  "Make the current history window unknown without changing loading presentation.
 
 Exact edges, older exhaustion, and a newer stall only describe the discarded
 window, so they are cleared together."
@@ -231,66 +223,6 @@ automatic retry at that same edge; moving the window edge clears it."
          (equal (appkit-chat-history--state-stalled-newer-key state)
                 (appkit-chat-history--state-last-key state))
          t)))
-
-(defun appkit-chat-history-request-start (surface kind)
-  "Start SURFACE's keyed history request of opaque KIND."
-  (unless (appkit-surface-live-p surface)
-    (error "Appkit chat history request requires a live Surface"))
-  (unless kind
-    (error "Appkit chat history request kind must be non-nil"))
-  (with-current-buffer (appkit-surface-buffer surface)
-    (appkit-chat-history-request-cancel)
-    (let ((operation
-           (appkit-chat-history-operation--create
-            :surface surface
-            :alive-p t))
-          (state (appkit-chat-history-init-state)))
-      (setf (appkit-chat-history--state-loading state) kind
-            (appkit-chat-history--state-owner state) operation)
-      operation)))
-
-(defun appkit-chat-history-request-bind-handle (owner handle)
-  "Bind transport HANDLE to current history OWNER."
-  (when (appkit-handle-p handle)
-    (if (appkit-chat-history-request-current-p owner)
-        (setf (appkit-chat-history-operation-handle owner) handle)
-      (when (appkit-handle-alive-p handle)
-        (appkit-cancel-handle handle))))
-  handle)
-
-(defun appkit-chat-history-request-current-p (owner)
-  "Return non-nil when OWNER is the current history request fence."
-  (and (appkit-chat-history-operation-p owner)
-       (appkit-chat-history-operation-alive-p owner)
-       (appkit-surface-live-p
-        (appkit-chat-history-operation-surface owner))
-       (eq owner
-           (appkit-chat-history--state-owner
-            (appkit-chat-history-init-state)))))
-
-(defun appkit-chat-history-request-end (owner)
-  "Finish current OWNER and return non-nil when settlement won."
-  (when (appkit-chat-history-request-current-p owner)
-    (setf (appkit-chat-history-operation-alive-p owner) nil
-          (appkit-chat-history-operation-handle owner) nil)
-    (let ((state (appkit-chat-history-init-state)))
-      (setf (appkit-chat-history--state-loading state) nil
-            (appkit-chat-history--state-owner state) nil))
-    t))
-
-(defun appkit-chat-history-request-cancel ()
-  "Cancel and clear the active history request fence."
-  (let* ((state (appkit-chat-history-init-state))
-         (owner (appkit-chat-history--state-owner state)))
-    (setf (appkit-chat-history--state-loading state) nil
-          (appkit-chat-history--state-owner state) nil)
-    (when (appkit-chat-history-operation-p owner)
-      (setf (appkit-chat-history-operation-alive-p owner) nil)
-      (when-let* ((handle (appkit-chat-history-operation-handle owner))
-                  ((appkit-handle-alive-p handle)))
-        (appkit-cancel-handle handle))
-      (setf (appkit-chat-history-operation-handle owner) nil))
-    owner))
 
 (defun appkit-chat-history--slice-result (valid-p entries reason)
   "Return a strict slice result from VALID-P, ENTRIES, and REASON."
