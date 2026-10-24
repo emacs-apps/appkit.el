@@ -35,7 +35,10 @@
   handles
   deferred-check-handle
   checking-p
-  active-p)
+  active-p
+  visibility-function
+  visible-p
+  window-state-function)
 
 (defun appkit-scroll-near-start-p (position start threshold)
   "Return non-nil when POSITION is within THRESHOLD characters of START.
@@ -155,6 +158,7 @@ client pass, and nil otherwise."
       (appkit-retire-handle handle)))
   (when (and (appkit-scroll-observer-active-p observer)
              (appkit-surface-live-p (appkit-scroll-observer-owner observer)))
+    (appkit-scroll-observer--check-visibility observer)
     (dolist (window
              (get-buffer-window-list
               (appkit-scroll-observer-buffer observer) nil t))
@@ -185,6 +189,7 @@ An unredisplayed window defers one lifecycle-owned check instead of exposing a
 stale visible edge."
   (unless (appkit-scroll-observer-p observer)
     (error "Appkit scroll observer is invalid: %S" observer))
+  (appkit-scroll-observer--check-visibility observer)
   (let ((unmeasured-p nil))
     (if window
         (setq unmeasured-p
@@ -212,7 +217,7 @@ stale visible edge."
 
 (cl-defun appkit-scroll-observer-install
     (surface &key start-boundary-function end-boundary-function
-             start-function end-function)
+             start-function end-function visibility-function)
   "Install and return a window-edge observer owned by SURFACE.
 
 START-BOUNDARY-FUNCTION and END-BOUNDARY-FUNCTION run in SURFACE's buffer and
@@ -223,13 +228,19 @@ START-FUNCTION and END-FUNCTION receive (WINDOW POSITION BOUNDARY).  POSITION
 is the actual visible edge, including mouse-wheel, scroll-bar, keyboard, and
 indirect-window scrolling and window resizing.  Callbacks own proximity
 thresholds and all
-application request gates.  At least one callback must be non-nil."
+application request gates.
+
+VISIBILITY-FUNCTION receives a boolean when the buffer gains or loses its
+last displayed window, including when another window or frame closes it.
+Callbacks run after redisplay in the Surface buffer; hiding one of several
+windows does not report a loss of visibility.  At least one callback is needed."
   (unless (appkit-surface-live-p surface)
     (error "Cannot observe scrolling for a dead Generated Surface"))
-  (unless (or (functionp start-function) (functionp end-function))
-    (error "Appkit scroll observer needs an edge callback"))
+  (unless (or (functionp start-function) (functionp end-function)
+              (functionp visibility-function))
+    (error "Appkit scroll observer needs an edge or visibility callback"))
   (dolist (function (list start-boundary-function end-boundary-function
-                          start-function end-function))
+                          start-function end-function visibility-function))
     (unless (or (null function) (functionp function))
       (error "Appkit scroll observer callback is invalid: %S" function)))
   (let* ((buffer (appkit-surface-buffer surface))
@@ -241,17 +252,26 @@ application request gates.  At least one callback must be non-nil."
            :end-boundary-function end-boundary-function
            :start-function start-function
            :end-function end-function
+           :visibility-function visibility-function
+           :visible-p (and (get-buffer-window-list buffer nil t) t)
            :active-p t))
          (post-command-function
           (lambda ()
             (appkit-scroll-observer--defer-check observer)))
          (window-scroll-function
           (lambda (_window &optional _display-start)
-            (appkit-scroll-observer--defer-check observer))))
+            (appkit-scroll-observer--defer-check observer)))
+         (window-state-function
+          (lambda (_frame)
+            (when (or (appkit-scroll-observer-visible-p observer)
+                      (get-buffer-window-list buffer nil t))
+              (appkit-scroll-observer--defer-check observer)))))
     (setf (appkit-scroll-observer-post-command-function observer)
           post-command-function
           (appkit-scroll-observer-window-scroll-function observer)
-          window-scroll-function)
+          window-scroll-function
+          (appkit-scroll-observer-window-state-function observer)
+          window-state-function)
     (with-current-buffer buffer
       (add-hook 'post-command-hook post-command-function nil t)
       (add-hook 'window-scroll-functions window-scroll-function nil t)
@@ -271,7 +291,34 @@ application request gates.  At least one callback must be non-nil."
             surface 'function
             (lambda ()
               (setf (appkit-scroll-observer-active-p observer) nil)))))
+    (when visibility-function
+      (dolist (hook '(window-state-change-functions delete-frame-functions))
+        (add-hook hook window-state-function)
+        (push (appkit-register-handle
+               surface 'hook (list hook window-state-function nil nil))
+              (appkit-scroll-observer-handles observer))))
     observer))
+
+
+(defun appkit-scroll-observer--check-visibility (observer)
+  "Notify OBSERVER when its buffer gains or loses its last displayed window."
+  (when (and (appkit-scroll-observer-active-p observer)
+             (not (appkit-scroll-observer-checking-p observer))
+             (appkit-surface-live-p (appkit-scroll-observer-owner observer))
+             (buffer-live-p (appkit-scroll-observer-buffer observer))
+             (appkit-scroll-observer-visibility-function observer))
+    (if appkit-loop--active-loop
+        (appkit-scroll-observer--defer-check observer)
+      (let ((visible (and (get-buffer-window-list
+                           (appkit-scroll-observer-buffer observer) nil t) t)))
+        (unless (eq visible (appkit-scroll-observer-visible-p observer))
+          (setf (appkit-scroll-observer-visible-p observer) visible
+                (appkit-scroll-observer-checking-p observer) t)
+          (unwind-protect
+              (with-current-buffer (appkit-scroll-observer-buffer observer)
+                (funcall (appkit-scroll-observer-visibility-function observer) visible))
+            (setf (appkit-scroll-observer-checking-p observer) nil)))))))
+
 
 (provide 'appkit-scroll)
 

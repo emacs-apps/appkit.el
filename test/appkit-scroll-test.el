@@ -241,6 +241,55 @@
        (apply callback callback-arguments)
        (should (= calls 1))))))
 
+
+(ert-deftest appkit-scroll-visibility-tracks-last-window-and-owns-global-hooks ()
+  (save-window-excursion
+    (appkit-test-with-surface
+     (let ((buffer appkit-test-buffer)
+           (other (generate-new-buffer " *appkit-visibility-other*"))
+           calls callback-buffers observer second)
+       (unwind-protect
+           (progn
+             (switch-to-buffer buffer)
+             (setq second (split-window-right))
+             (set-window-buffer second buffer)
+             (setq observer
+                   (appkit-scroll-observer-install
+                    appkit-test-surface
+                    :visibility-function
+                    (lambda (visible)
+                      (push visible calls)
+                      (push (current-buffer) callback-buffers))))
+             (let ((function (appkit-scroll-observer-window-state-function observer)))
+               (should (memq function (default-value 'window-state-change-functions)))
+               (should (memq function (default-value 'delete-frame-functions))))
+             (cl-labels
+                 ((redisplay-change ()
+                    ;; Exercise the registered Emacs hook before its deferred
+                    ;; measurement, as an actual redisplay would do.
+                    (run-hook-with-args 'window-state-change-functions (selected-frame))
+                    (should (appkit-scroll-observer-deferred-check-handle observer))
+                    (appkit-scroll-observer--run-deferred-check observer)))
+               (set-window-buffer (selected-window) other)
+               (redisplay-change)
+               (should-not calls)
+               ;; A second window still displays the Surface until it closes.
+               (delete-window second)
+               (redisplay-change)
+               (should (equal calls '(nil)))
+               (set-window-buffer (selected-window) buffer)
+               (redisplay-change)
+               (should (equal calls '(t nil)))
+               (should (equal callback-buffers (list buffer buffer))))
+             (let ((function (appkit-scroll-observer-window-state-function observer)))
+               (appkit-surface-stop appkit-test-surface)
+               (should-not (memq function (default-value 'window-state-change-functions)))
+               (should-not (memq function (default-value 'delete-frame-functions)))
+               (funcall function (selected-frame))
+               (should-not (appkit-scroll-observer-deferred-check-handle observer))))
+         (when (buffer-live-p other) (kill-buffer other)))))))
+
+
 (provide 'appkit-scroll-test)
 
 ;;; appkit-scroll-test.el ends here
