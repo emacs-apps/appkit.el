@@ -26,6 +26,7 @@
 (require 'appkit-context)
 (require 'appkit-effect)
 (require 'appkit-source)
+(require 'appkit-topic)
 (require 'appkit-command)
 (require 'appkit-app)
 (require 'appkit-geometry)

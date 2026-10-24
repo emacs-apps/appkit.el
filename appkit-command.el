@@ -11,7 +11,8 @@
 
 ;; Closed transition results and deferred runtime commands.  Command batches
 ;; validate per-transition input, bound retained keyed deltas, and preserve the
-;; order of each key's final command without executing client code.
+;; order of each key's final command without executing client code.  Directed
+;; posts and topic publications share one FIFO.
 
 ;;; Code:
 
@@ -108,6 +109,20 @@ to attach a return route when TARGET is an address."
    :delivery delivery
    :reply-correlation reply-correlation))
 
+(cl-defstruct (appkit-command-publish
+               (:include appkit-command)
+               (:constructor appkit-command-publish--create)
+               (:copier nil))
+  "Publish PAYLOAD on TOPIC to the App's subscribed Surfaces after commit."
+  topic
+  payload)
+
+(defun appkit-command-publish (topic payload)
+  "Create a command publishing PAYLOAD on TOPIC.
+Only App transitions may publish.  TOPIC is compared with `equal'."
+  (unless topic (error "Published topic must be non-nil"))
+  (appkit-command-publish--create :topic topic :payload payload))
+
 (cl-defstruct (appkit-command-source-intent
                (:include appkit-command)
                (:constructor appkit-command-source-intent--create)
@@ -146,7 +161,8 @@ to attach a return route when TARGET is an address."
   reverse-posts
   reverse-source-intents
   effect-deltas
-  folded-limit)
+  folded-limit
+  publish-p)
 
 (defun appkit-command--check-limit (name value)
   "Return positive integer VALUE or signal an error naming NAME."
@@ -154,13 +170,15 @@ to attach a return route when TARGET is an address."
     (error "%s must be positive: %S" name value))
   value)
 
-(defun appkit-command--batch-create (folded-limit)
-  "Create an empty command batch retaining at most FOLDED-LIMIT keys."
+(defun appkit-command--batch-create (folded-limit &optional publish-p)
+  "Create an empty command batch retaining at most FOLDED-LIMIT keys.
+PUBLISH-P admits topic publications, which only an App may issue."
   (appkit-command--check-limit "Folded command limit" folded-limit)
   (appkit-command--batch-create-internal
    :reverse-effects nil
    :effect-deltas (make-hash-table :test #'equal)
-   :folded-limit folded-limit))
+   :folded-limit folded-limit
+   :publish-p publish-p))
 
 (defun appkit-command--effect-key (command)
   "Return validated Effect folding key for COMMAND."
@@ -188,6 +206,10 @@ oversized lists fail without an unbounded scan."
       (let ((command (pop remaining)))
         (cond
          ((appkit-command-post-message-p command)
+          (push command (appkit-command--batch-reverse-posts batch)))
+         ((appkit-command-publish-p command)
+          (unless (appkit-command--batch-publish-p batch)
+            (error "Only an App transition can publish topics"))
           (push command (appkit-command--batch-reverse-posts batch)))
          ((appkit-command-source-intent-p command)
           (push command
@@ -248,15 +270,19 @@ oversized lists fail without an unbounded scan."
     (when-let* ((condition (car conditions)))
       (signal (car condition) (cdr condition)))))
 
-(defun appkit-command--post-messages (sender revision commands)
-  "Execute routed COMMANDS from SENDER stamped with committed REVISION."
+(defun appkit-command--post-messages (sender revision commands &optional publish)
+  "Execute routed COMMANDS from SENDER stamped with committed REVISION.
+PUBLISH receives each publication command and REVISION, in FIFO order with
+directed posts."
   (dolist (command commands)
-    (appkit-routing--post-command
-     sender
-     (appkit-command-post-message-target command)
-     (appkit-command-post-message-message command)
-     revision
-     (appkit-command-post-message-reply-correlation command))))
+    (if (appkit-command-publish-p command)
+        (funcall publish command revision)
+      (appkit-routing--post-command
+       sender
+       (appkit-command-post-message-target command)
+       (appkit-command-post-message-message command)
+       revision
+       (appkit-command-post-message-reply-correlation command)))))
 
 (defun appkit-command--start-effects (runtime commands)
   "Start final Effect COMMANDS in RUNTIME in explicit order."

@@ -22,6 +22,7 @@
 (require 'appkit-context)
 (require 'appkit-resource)
 (require 'appkit-source)
+(require 'appkit-topic)
 
 (declare-function appkit-surface-stop "appkit-surface")
 (declare-function appkit-surface--parent-fault "appkit-surface")
@@ -33,6 +34,7 @@
   init
   update
   sources
+  subscribed
   shutdown)
 
 (cl-defstruct
@@ -43,6 +45,7 @@
   effect-runtime
   source-runtime
   resource-coordinator
+  topic-hub
   command-batch
   command-limit
   surfaces
@@ -127,10 +130,22 @@
 
 (defun appkit-app--update (app model message)
   "Dispatch MESSAGE and run APP's client update against MODEL."
-  (if (appkit-resource--coordinator-delivery-p message)
-      (if (appkit-resource-consume-coordinator-delivery app message)
-          (appkit-loop-companion-accept)
-        (appkit-loop-reject 'stale-resource-output))
+  (cond
+   ((appkit-resource--coordinator-delivery-p message)
+    (if (appkit-resource-consume-coordinator-delivery app message)
+        (appkit-loop-companion-accept)
+      (appkit-loop-reject 'stale-resource-output)))
+   ((appkit-topic-interest-message-p message)
+    (let ((mapped (appkit-topic-consume-interest
+                   (appkit-app-topic-hub app) message)))
+      (cond
+       ((eq mapped appkit-topic-stale)
+        (appkit-loop-reject 'stale-topic-interest))
+       ((null mapped) (appkit-loop-companion-accept))
+       (t (appkit-app--client-update
+           app (appkit-context--for-loop (appkit-app-loop app))
+           model mapped)))))
+   (t
     (let ((context (appkit-context--for-loop (appkit-app-loop app))))
       (appkit-source-runtime-dispatch
        (appkit-app-source-runtime app)
@@ -140,7 +155,7 @@
           (lambda (current input)
             (appkit-app--client-update app context current input))
           source-model source-input))
-       model message))))
+       model message)))))
 
 (defun appkit-app--commit-pending (app reconcile-sources-p)
   "Execute APP's folded work and optionally reconcile desired Sources."
@@ -162,7 +177,14 @@
     (appkit-command--revoke-effects
      (appkit-app-effect-runtime app) effects 'appkit-app)
     (appkit-command--post-messages
-     loop (appkit-loop-revision loop) posts)
+     loop (appkit-loop-revision loop) posts
+     (lambda (command revision)
+       (appkit-topic-publish
+        (appkit-app-topic-hub app)
+        (appkit-command-publish-topic command)
+        (appkit-command-publish-payload command)
+        (appkit-routing--address loop)
+        revision)))
     (appkit-command--start-effects
      (appkit-app-effect-runtime app) effects)
     (appkit-source-runtime-start-pending source-runtime)
@@ -177,6 +199,7 @@
   "Revoke APP and every child Surface when its loop faults."
   (setf (appkit-app-alive-p app) nil)
   (appkit-command--batch-clear (appkit-app-command-batch app))
+  (appkit-topic-hub-stop (appkit-app-topic-hub app))
   (let (conditions)
     (appkit--run-cleanup-forms conditions
       (appkit-effect-runtime-stop (appkit-app-effect-runtime app))
@@ -230,6 +253,7 @@
         (let (conditions)
           (unwind-protect
               (progn
+                (appkit-topic-hub-stop (appkit-app-topic-hub app))
                 (appkit--run-cleanup-forms conditions
                   (when (appkit-app-effect-runtime app)
                     (appkit-effect-runtime-stop
@@ -268,6 +292,10 @@ bounds owned by this App incarnation."
               (functionp (appkit-app-type-sources type)))
     (signal 'wrong-type-argument
             (list 'functionp (appkit-app-type-sources type))))
+  (unless (or (null (appkit-app-type-subscribed type))
+              (functionp (appkit-app-type-subscribed type)))
+    (signal 'wrong-type-argument
+            (list 'functionp (appkit-app-type-subscribed type))))
   (unless (or (null (appkit-app-type-shutdown type))
               (functionp (appkit-app-type-shutdown type)))
     (signal 'wrong-type-argument
@@ -297,8 +325,11 @@ bounds owned by this App incarnation."
                  :source-runtime
                  (appkit-source-runtime-create loop max-sources)
                  :resource-coordinator nil
+                 :topic-hub
+                 (appkit-topic-hub-create
+                  loop (appkit-app-type-subscribed type))
                  :command-batch
-                 (appkit-command--batch-create folded-command-limit)
+                 (appkit-command--batch-create folded-command-limit t)
                  :command-limit command-limit
                  :handles nil
                  :surfaces (make-hash-table :test #'equal)
@@ -355,6 +386,7 @@ bounds owned by this App incarnation."
                    (appkit-app-source-runtime app))
                   (appkit-resource-coordinator-stop
                    (appkit-app-resource-coordinator app))
+                  (appkit-topic-hub-stop (appkit-app-topic-hub app))
                   (when-let*
                       ((shutdown
                         (appkit-app-type-shutdown

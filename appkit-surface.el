@@ -24,6 +24,7 @@
 (require 'appkit-geometry)
 (require 'appkit-resource)
 (require 'appkit-source)
+(require 'appkit-topic)
 (require 'appkit-context)
 
 (cl-defstruct (appkit-surface-type
@@ -34,6 +35,7 @@
   init
   update
   sources
+  subscriptions
   renderer-factory)
 
 (cl-defstruct (appkit-generated-renderer
@@ -56,6 +58,7 @@
   loop
   effect-runtime
   source-runtime
+  topic-subscriber
   command-batch
   command-limit
   renderer
@@ -195,16 +198,23 @@
 
 (defun appkit-surface--update (surface model message)
   "Dispatch MESSAGE and run SURFACE's client or companion update."
-  (if (appkit-resource--surface-delivery-p message)
-      (progn
-        ;; Companion rendering still consumes one pass-scoped App read view.
-        (appkit-surface--app-read-view surface)
-        (if-let* ((request
-                    (appkit-resource-consume-surface-delivery surface message)))
-            (progn
-              (appkit-surface--merge-render surface request)
-              (appkit-loop-companion-accept))
-          (appkit-loop-reject 'stale-resource-output)))
+  (when (appkit-topic-message-p message)
+    ;; A publication becomes the subscription's own domain message.
+    (setq message (appkit-topic-consume
+                   (appkit-surface-topic-subscriber surface) message)))
+  (cond
+   ((eq message appkit-topic-stale)
+    (appkit-loop-reject 'stale-publication))
+   ((appkit-resource--surface-delivery-p message)
+    ;; Companion rendering still consumes one pass-scoped App read view.
+    (appkit-surface--app-read-view surface)
+    (if-let* ((request
+                (appkit-resource-consume-surface-delivery surface message)))
+        (progn
+          (appkit-surface--merge-render surface request)
+          (appkit-loop-companion-accept))
+      (appkit-loop-reject 'stale-resource-output)))
+   (t
     (let ((context
            (appkit-context--for-loop
             (appkit-surface-loop surface)
@@ -218,7 +228,7 @@
           (lambda (current input)
             (appkit-surface--client-update surface context current input))
           source-model source-input))
-       model message))))
+       model message)))))
 
 (defun appkit-surface--complete-content-update (surface success)
   "Finalize SURFACE presentation once its outer content update has finished.
@@ -291,7 +301,12 @@ Return the successful Renderer's closed companion result."
                   (appkit-surface-type-sources
                    (appkit-surface-type surface))))
            (funcall sources model)
-         nil)))
+         nil))
+      (when-let* ((subscriber (appkit-surface-topic-subscriber surface))
+                  (subscriptions
+                   (appkit-surface-type-subscriptions
+                    (appkit-surface-type surface))))
+        (appkit-topic-reconcile subscriber (funcall subscriptions model))))
     (appkit-command--revoke-effects
      (appkit-surface-effect-runtime surface) effects 'appkit-surface)
     (unless (eq request appkit-render-none)
@@ -350,6 +365,7 @@ Return the successful Renderer's closed companion result."
   (setf (appkit-surface-ready-p surface) nil
         (appkit-surface-pending-render surface) appkit-render-none)
   (appkit-command--batch-clear (appkit-surface-command-batch surface))
+  (appkit-topic-detach (appkit-surface-topic-subscriber surface))
   (appkit-resource-detach-surface surface)
   (appkit-cancel-handles surface)
   (appkit-source-runtime-stop (appkit-surface-source-runtime surface))
@@ -375,6 +391,7 @@ Return the successful Renderer's closed companion result."
           (when owns-stop-p
             (setf (appkit-surface-alive-p surface) nil)
             (appkit--run-cleanup-forms conditions
+              (appkit-topic-detach (appkit-surface-topic-subscriber surface))
               (appkit-cancel-handles surface)
               (when-let* ((runtime
                            (appkit-surface-effect-runtime surface)))
@@ -410,7 +427,8 @@ Return the successful Renderer's closed companion result."
     (type &key app identity input buffer buffer-name select
           (command-limit appkit-command-default-per-next-limit)
           (folded-command-limit appkit-command-default-folded-limit)
-          (max-active-effects 32) (max-sources 32))
+          (max-active-effects 32) (max-sources 32)
+          (max-subscriptions appkit-topic-default-subscription-limit))
   "Create and mount one generated Surface of TYPE.
 
 APP and IDENTITY attach the new Surface to one canonical App and must be
@@ -419,7 +437,8 @@ context.  BUFFER, when non-nil, must be live and unattached; otherwise a fresh
 buffer is created using BUFFER-NAME.  Major mode initialization always
 precedes Surface attachment.  SELECT displays the buffer only after initial
 presentation succeeds.  COMMAND-LIMIT, FOLDED-COMMAND-LIMIT, and
-MAX-ACTIVE-EFFECTS bound deferred work."
+MAX-ACTIVE-EFFECTS bound deferred work.  MAX-SUBSCRIPTIONS bounds the topics
+an attached Surface may follow."
   (appkit-loop--assert-main-thread)
   (cl-check-type type appkit-surface-type)
   (appkit-command--check-limit "Per-next command limit" command-limit)
@@ -427,6 +446,11 @@ MAX-ACTIVE-EFFECTS bound deferred work."
               (functionp (appkit-surface-type-sources type)))
     (signal 'wrong-type-argument
             (list 'functionp (appkit-surface-type-sources type))))
+  (when-let* ((subscriptions (appkit-surface-type-subscriptions type)))
+    (unless (functionp subscriptions)
+      (signal 'wrong-type-argument (list 'functionp subscriptions)))
+    (unless app
+      (error "Surface subscriptions require an attached App")))
   (when (not (eq (not (null app)) (not (null identity))))
     (error "Surface App and identity must be supplied together"))
   (when (and app (not (appkit-app-live-p app)))
@@ -485,7 +509,11 @@ MAX-ACTIVE-EFFECTS bound deferred work."
                     (appkit-surface-effect-runtime surface)
                     (appkit-effect-runtime-create loop max-active-effects)
                     (appkit-surface-source-runtime surface)
-                    (appkit-source-runtime-create loop max-sources)))
+                    (appkit-source-runtime-create loop max-sources)
+                    (appkit-surface-topic-subscriber surface)
+                    (and app
+                         (appkit-topic-subscriber-create
+                          (appkit-app-topic-hub app) loop max-subscriptions))))
             (setq-local appkit--current-surface surface)
             (add-hook 'kill-buffer-hook #'appkit-surface--host-detach nil t)
             (add-hook 'change-major-mode-hook
@@ -566,6 +594,7 @@ MAX-ACTIVE-EFFECTS bound deferred work."
           (unwind-protect
               (progn
                 (appkit--run-cleanup-forms conditions
+                  (appkit-topic-detach (appkit-surface-topic-subscriber surface))
                   (appkit-resource-detach-surface surface)
                   (appkit-cancel-handles surface)
                   (appkit-effect-runtime-stop
