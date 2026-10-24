@@ -137,12 +137,12 @@ CONTEXT MODEL REQUEST VALUE REASON) and returns its transition."
      :success (lambda (input raw) (list 'appkit-operation-result input raw nil))
      :failure (lambda (input _body reason) (list 'appkit-operation-result input nil reason)))))
 
-(defun appkit-operation--replies (waiters request value reason)
-  "Return commands presenting REQUEST's VALUE or REASON to WAITERS."
+(defun appkit-operation--replies (waiters value reason)
+  "Return commands presenting VALUE or REASON for each WAITER's own request."
   (mapcar (lambda (waiter)
             (appkit-command-post-message
              :target (car waiter)
-             :message (list 'appkit-operation-present (cadr waiter) request value reason)
+             :message (list 'appkit-operation-present (cadr waiter) (nth 2 waiter) value reason)
              :delivery 'report))
           (delq nil waiters)))
 
@@ -155,7 +155,7 @@ Return the commands that cancel, publish and reply."
         (let ((entry (gethash key entries)))
           (setq commands
                 (append (appkit-operation--replies
-                         (plist-get entry :waiters) key nil "Data invalidated")
+                         (plist-get entry :waiters) nil "Data invalidated")
                         (list (appkit-command-cancel-effect (cons 'appkit-operation key))
                               (appkit-command-publish topic key))
                         commands))
@@ -206,15 +206,15 @@ account's context.  Changed keys are published on TOPIC."
                         entries))
               (t
                (setq commands (appkit-operation--replies
-                               (list waiter) request nil "Operation already in progress")))))
+                               (list waiter) nil "Operation already in progress")))))
             ((and (not write) (not refresh) (plist-get entry :ready))
              (setq commands (appkit-operation--replies
-                             (list waiter) request (plist-get entry :value) nil)))
+                             (list waiter) (plist-get entry :value) nil)))
             (t
              (let ((steps (apply (plist-get spec :steps) (cdr request))))
                (unless steps (error "Operation %S has no steps" (car request)))
                (setq commands (appkit-operation--replies
-                               (plist-get entry :waiters) request nil "Request superseded"))
+                               (plist-get entry :waiters) nil "Request superseded"))
                (puthash key
                         (list :pending t :request request :error nil
                               :completed 0 :total (length steps) :remaining (cdr steps)
@@ -274,7 +274,7 @@ account's context.  Changed keys are published on TOPIC."
                                (appkit-operation--effect
                                 registry call request key nil (car remaining))))
                       (append
-                       (appkit-operation--replies (plist-get entry :waiters) request value reason)
+                       (appkit-operation--replies (plist-get entry :waiters) value reason)
                        (when-let* ((queued (plist-get entry :queued)))
                          (list (appkit-command-post-message
                                 :target self :delivery 'report
