@@ -544,6 +544,75 @@
         (when (buffer-live-p buffer) (kill-buffer buffer))
         (when (appkit-app-live-p app) (appkit-app-close app))))))
 
+
+(defun appkit-resource-test--retained-surface (loader)
+  "Build a Surface whose model selects its owned resource."
+  (appkit-surface-type-create
+   :name 'appkit-resource-retained-test :mode #'special-mode
+   :init (lambda (_context _input)
+           (appkit-next :model 'one :render 'render))
+   :update (lambda (_context _model message)
+             (appkit-next :model message :render 'render))
+   :renderer-factory
+   (lambda (_surface)
+     (appkit-generated-renderer-create
+      :mount #'ignore :merge (lambda (_left right) right)
+      :render
+      (lambda (_surface _app-view model _request)
+        (appkit-render-result-create
+         :resource-demands
+         (list (appkit-resource-demand-create
+                :key 'cover :input model :loader loader
+                :acquisition-identity (list 'retained model)
+                :sharing-policy 'app-private :cache-policy 'while-interested))
+         :resource-interest-update
+         (appkit-resource-interest-update-create
+          :mode 'replace
+          :entries (list (appkit-resource-interest-create
+                          :key 'cover :row-keys '(row))))))
+      :recover nil :resource-request (lambda (_keys) 'render) :unmount #'ignore))))
+
+(ert-deftest appkit-resource-retained-value-follows-last-interest-and-replacement ()
+  (dolist (synchronous '(nil t))
+    (let ((starts 0) (released 0) callbacks app surfaces)
+      (let* ((value (lambda () (appkit-resource-value-create
+                               :value "retained" :release (lambda () (cl-incf released)))))
+             (type (appkit-resource-test--retained-surface
+                    (lambda (_context _input success _failure)
+                      (cl-incf starts)
+                      (push success callbacks)
+                      (when synchronous (funcall success (funcall value)))
+                      (appkit-cancellation-create :cancel #'ignore)))))
+        (unwind-protect
+            (progn
+              (setq app (appkit-app-start appkit-resource-test--app-type
+                                         :identity (make-symbol "owned-resource")))
+              (dotimes (index 2)
+                (push (appkit-open-generated-surface type :app app :identity index) surfaces))
+              (should (= starts 1))
+              (unless synchronous (funcall (car callbacks) (funcall value)))
+              (appkit-loop-run-pass (appkit-app-loop app))
+              (dolist (surface surfaces) (appkit-loop-run-pass (appkit-surface-loop surface)))
+              (appkit-surface-stop (car surfaces))
+              (should (= released 0))
+              (appkit-surface-send (cadr surfaces) 'two)
+              (should (= starts 2))
+              (should (= released 1))
+              (unless synchronous (funcall (car callbacks) (funcall value)))
+              (appkit-surface-stop (cadr surfaces))
+              (should (= released 2))
+              ;; A late value cannot be leaked after its final consumer left.
+              (let ((late (funcall value)))
+                (funcall (car callbacks) late)
+                (funcall (car callbacks) late)
+                (should (= released 3))))
+          (dolist (surface surfaces)
+            (when (appkit-surface-live-p surface) (appkit-surface-stop surface))
+            (when (buffer-live-p (appkit-surface-buffer surface))
+              (kill-buffer (appkit-surface-buffer surface))))
+          (when app (appkit-app-close app)))))))
+
+
 (provide 'appkit-resource-test)
 
 ;;; appkit-resource-test.el ends here

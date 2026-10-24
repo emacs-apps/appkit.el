@@ -26,6 +26,14 @@
 (declare-function appkit-surface-renderer "appkit-surface")
 (declare-function appkit-generated-renderer-resource-request "appkit-surface")
 
+(cl-defstruct (appkit-resource-value
+               (:constructor appkit-resource-value-create)
+               (:copier nil))
+  "A presentation VALUE with RELEASE owned by its last broker interest.
+A loader may pass this wrapper to its success callback.  RELEASE is called
+once after all interests detach, including for a stale or late completion."
+  value release claimed-p)
+
 (cl-defstruct (appkit-resource-demand
                (:constructor appkit-resource-demand-create)
                (:copier nil))
@@ -100,6 +108,7 @@
   cancellation
   queued-p
   value
+  release
   reason)
 
 (cl-defstruct (appkit-resource--broker
@@ -261,21 +270,25 @@ The first completion wakes the App; later completions share that wake."
             (appkit-resource--acquisition-queued-p acquisition) nil))))
 
 (defun appkit-resource--broker-retire (acquisition cancel-p)
-  "Retire ACQUISITION, release its slot, and continue queued work."
-  (let ((broker (appkit-resource--acquisition-broker acquisition)))
+  "Retire ACQUISITION, release its slot and value, and continue queued work."
+  (let ((broker (appkit-resource--acquisition-broker acquisition))
+        (release (appkit-resource--acquisition-release acquisition)))
     (appkit-resource--broker-remove-queued acquisition)
     (when (eq (appkit-resource--acquisition-state acquisition) 'active)
       (setf (appkit-resource--broker-active-count broker)
             (1- (appkit-resource--broker-active-count broker))))
-    (setf (appkit-resource--acquisition-state acquisition) 'retired)
+    (setf (appkit-resource--acquisition-state acquisition) 'retired
+          (appkit-resource--acquisition-release acquisition) nil)
     (unwind-protect
-        (when (and cancel-p
-                   (appkit-resource--acquisition-cancellation acquisition))
-          (let ((capability
-                 (appkit-resource--acquisition-cancellation acquisition)))
-            (setf (appkit-resource--acquisition-cancellation acquisition) nil)
-            (when-let* ((cancel (appkit-cancellation-cancel capability)))
-              (funcall cancel))))
+        (unwind-protect
+            (when (and cancel-p
+                       (appkit-resource--acquisition-cancellation acquisition))
+              (let ((capability
+                     (appkit-resource--acquisition-cancellation acquisition)))
+                (setf (appkit-resource--acquisition-cancellation acquisition) nil)
+                (when-let* ((cancel (appkit-cancellation-cancel capability)))
+                  (funcall cancel))))
+          (when release (funcall release)))
       (remhash (appkit-resource--acquisition-identity acquisition)
                (appkit-resource--broker-acquisitions broker))
       (appkit-resource--broker-start-next broker))))
@@ -296,22 +309,35 @@ The first completion wakes the App; later completions share that wake."
 
 (defun appkit-resource--broker-settle (acquisition token status payload)
   "Settle ACQUISITION identified by TOKEN with STATUS and PAYLOAD."
-  (when (and (eq token (appkit-resource--acquisition-token acquisition))
-             (eq (appkit-resource--acquisition-state acquisition) 'active))
-    (let ((broker (appkit-resource--acquisition-broker acquisition)))
-      (setf (appkit-resource--acquisition-state acquisition) status
-            (appkit-resource--acquisition-value acquisition)
-            (and (eq status 'ready) payload)
-            (appkit-resource--acquisition-reason acquisition)
-            (and (eq status 'failed) payload)
-            (appkit-resource--acquisition-cancellation acquisition) nil
-            (appkit-resource--broker-active-count broker)
-            (1- (appkit-resource--broker-active-count broker)))
-      (dolist (entry (copy-sequence
-                      (appkit-resource--acquisition-leases acquisition)))
-        (appkit-resource--post-coordinator entry status payload))
-      (appkit-resource--broker-start-next broker)
-      t)))
+  (when (and (appkit-resource-value-p payload)
+             (appkit-resource-value-claimed-p payload))
+    (setq payload nil status 'ignored))
+  (let* ((retained (and (eq status 'ready) (appkit-resource-value-p payload)))
+         (release (and retained (appkit-resource-value-release payload))))
+    (when (and retained (not (functionp release)))
+      (error "Resource value release is not callable"))
+    (when retained
+      (setf (appkit-resource-value-claimed-p payload) t))
+    (if (not (and (not (eq status 'ignored)) (eq token (appkit-resource--acquisition-token acquisition))
+                  (eq (appkit-resource--acquisition-state acquisition) 'active)))
+        (when release (funcall release))
+      (let ((broker (appkit-resource--acquisition-broker acquisition)))
+        (setf (appkit-resource--acquisition-state acquisition) status
+              (appkit-resource--acquisition-value acquisition)
+              (and (eq status 'ready)
+                   (if retained (appkit-resource-value-value payload) payload))
+              (appkit-resource--acquisition-release acquisition) release
+              (appkit-resource--acquisition-reason acquisition)
+              (and (eq status 'failed) payload)
+              (appkit-resource--acquisition-cancellation acquisition) nil
+              (appkit-resource--broker-active-count broker)
+              (1- (appkit-resource--broker-active-count broker)))
+        (dolist (entry (copy-sequence
+                        (appkit-resource--acquisition-leases acquisition)))
+          (appkit-resource--post-coordinator
+           entry status (if retained (appkit-resource-value-value payload) payload)))
+        (appkit-resource--broker-start-next broker)
+        t))))
 
 (defun appkit-resource--broker-fault (acquisition condition)
   "Retire ACQUISITION and route invariant CONDITION through each App gate."
@@ -807,6 +833,9 @@ The first completion wakes the App; later completions share that wake."
       (remhash coordinator appkit-resource--pending-by-coordinator)
       (appkit-resource--release-entries entries)
       t)))
+
+
+
 
 (provide 'appkit-resource)
 
