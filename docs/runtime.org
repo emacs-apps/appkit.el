@@ -13,11 +13,11 @@ model and the rules that are easy to break.
 
 #+begin_example
                  App  (UI-free)
-   canonical model · Effects · Sources · Resources
-          │ read view            ▲ post-message
-          ▼                      │
+   canonical model · Effects · Sources · Resources · topics
+     │ read view    │ publish / reply        ▲ post-message
+     ▼              ▼                        │
                  Surface  (one generated buffer)
-   local model · Effects · Sources · Renderer
+   local model · Effects · Sources · subscriptions · Renderer
 #+end_example
 
 - The *App* owns canonical domain state: accounts, protocol caches, shared
@@ -40,6 +40,7 @@ receives a /transition context/, and every effect it wants is returned as data.
    :init #'example--app-init        ; (context input) -> appkit-next
    :update #'example--app-update    ; (context model message) -> appkit-next
    :sources #'example--app-sources  ; optional: (model) -> desired Sources
+   :subscribed #'example--interest  ; optional: (topic subscribed-p) -> message
    :shutdown #'example--app-shutdown))
 
 (appkit-app-start example--app-type :identity 'default :input nil)
@@ -60,6 +61,7 @@ work and handles, then calls ~shutdown~.
    :mode #'example-feed-mode        ; major mode, set up before attachment
    :init #'example--feed-init
    :update #'example--feed-update
+   :subscriptions #'example--feed-topics ; optional: (model) -> subscriptions
    :renderer-factory #'example--feed-renderer))
 
 (appkit-open-generated-surface
@@ -131,6 +133,7 @@ the owner commits the pass, in a fixed order, and never reenter client code.
 | ~appkit-command-start-effect~     | replace and start the Effect under its key    |
 | ~appkit-command-cancel-effect~    | revoke and cancel the Effect under a key      |
 | ~appkit-command-post-message~     | post a message to an address or reply route   |
+| ~appkit-command-publish~          | notify the subscribers of a topic (Apps only) |
 | ~appkit-command-source-intent~    | send a payload through a declared Source      |
 
 Effect commands fold by key within a pass: the last command for a key wins.
@@ -159,6 +162,53 @@ exact Surface incarnation: a replaced Surface never receives the old reply.
 If the target cannot accept a post, the sender later receives an
 ~appkit-delivery-report~ in its own update.  Handle it rather than assuming
 delivery.
+
+Replies answer one request.  Changes that any number of Surfaces care about are
+published instead.
+
+** Publish and subscribe
+
+A /topic/ is any non-nil value compared with ~equal~: ~session~,
+~(room "!abc")~, ~(conversation C42)~.  An App publishes on topics; each Surface
+declares, from its committed model, which topics it follows.
+
+#+begin_src emacs-lisp
+;; App transition: tell whoever follows this room that its timeline changed.
+(appkit-next :model next :render appkit-render-none
+             :commands (list (appkit-command-publish (list 'room id) 'timeline)))
+
+;; Surface type: follow the room this buffer shows.
+:subscriptions
+(lambda (model)
+  (list (appkit-subscription-create
+         :topic (list 'room (example-room-id model))
+         :notify (lambda (what) (list 'room-changed what)))))
+#+end_src
+
+- Subscriptions are reconciled after each pass that accepts a message, like
+  Sources, and end when the Surface stops.  Notifications still queued for a
+  topic the Surface no longer follows are dropped.
+- A notification reaches the exact Surface incarnation after the publishing
+  App pass commits.  ~:notify~ maps the payload to a message for the Surface's
+  ordinary ~update~, whose App read view is at least as new as the publication.
+- Notifications share the Surface's mailbox with directed replies, so a reply
+  and a publication from one App transition arrive in that order.  A full
+  mailbox does not lose them: they wait behind one control wake per Surface.
+- ~level~ delivery (the default) keeps at most one undelivered notification per
+  topic and replaces its payload.  Payloads are hints: rebuild what you show
+  from the App read view.
+- ~lossless~ delivery keeps every payload in order.  When more than
+  ~:pending-limit~ are undelivered, they are discarded and the ~:resync~
+  message is delivered instead, so the Surface rebuilds from the App read view.
+
+Only Apps publish, and only attached Surfaces subscribe.  Use topics instead of
+keeping Surfaces or their addresses in the App model.
+
+An App type's optional ~:subscribed~ function receives ~(TOPIC SUBSCRIBED-P)~
+when a topic gains its first or loses its last subscriber, and returns an App
+message or nil.  Use it to run protocol work only while someone watches, such
+as a room's live timeline.  A change that reverses before the App sees it is
+not reported.
 
 * Effects
 
@@ -368,7 +418,6 @@ a property update, into errors.  Enable both in tests.
 These are designed but not implemented.  Do not emulate them with direct
 callbacks or by reviving per-client control flow:
 
-- topic publish/subscribe between owners;
 - reset of a Surface in place;
 - select/activate/reset policies for reusing an existing Surface;
 - editable or hybrid Surfaces whose document is owned by an editor rather than

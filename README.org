@@ -36,7 +36,7 @@ Inside the monorepo, packages and their load paths are registered in
 
 | Chapter                                | Covers                                                                    |
 |----------------------------------------+---------------------------------------------------------------------------|
-| [[file:docs/runtime.org][Runtime]]           | Apps, Surfaces, transitions, commands, Effects, Sources, Renderers, Resources |
+| [[file:docs/runtime.org][Runtime]]           | Apps, Surfaces, transitions, commands, publish/subscribe, Effects, Sources, Renderers, Resources |
 | [[file:docs/presentation.org][Presentation]] | positions, actions, prefixes and cards, rows, directories, discussions, scrolling, selection, bindings |
 | [[file:docs/chat.org][Chat buffers]]       | chat buffer and composer, timeline, history windows, read state, message leaves, completion |
 | [[file:docs/media.org][Media]]             | resources, images, inline occurrences, tracks, video sessions, audio       |
@@ -50,7 +50,7 @@ are easy to break; argument details live in docstrings.
 
 | Area         | Modules                                                                                                                      |
 |--------------+------------------------------------------------------------------------------------------------------------------------------|
-| Runtime      | ~loop~ ~app~ ~surface~ ~command~ ~effect~ ~source~ ~resource~ ~context~ ~routing~ ~core~ ~cleanup~ ~transaction~ ~task-queue~ |
+| Runtime      | ~loop~ ~app~ ~surface~ ~command~ ~effect~ ~source~ ~topic~ ~resource~ ~context~ ~routing~ ~core~ ~cleanup~ ~transaction~ ~task-queue~ |
 | Projection   | ~projection~ ~position~ ~ewoc~ ~geometry~ ~scroll~ ~selection~                                                                |
 | Presentation | ~ui~ ~presentation~ ~directory~ ~discussion~ ~name-color~ ~mode-line~ ~fontify~ ~translate~ ~translate-respond~ ~bindings~ ~evil~ |
 | Chat         | ~chatbuf~ ~chat-timeline~ ~chat-history~ ~chat-read~ ~chat-ins~ ~chat-avatar~ ~chat-completion~ ~chat-emoji~                  |
