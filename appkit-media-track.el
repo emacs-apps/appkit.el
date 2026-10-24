@@ -159,29 +159,66 @@ Prepare replacement geometry before retiring the old inline lease."
         (set-window-hscroll (selected-window) 0)))
     index))
 
+(defun appkit-media--track-layout (track)
+  "Return TRACK's live scene geometry in displayed pixels.
+The plan is authored in unscaled pixels, while the poster's display height
+follows the current line height.  Rendering the Canvas and video target at
+that height keeps Emacs from stretching them.  The result contains `:scale',
+`:width', `:height' and `:cells', each cell holding viewport `:x' and `:width'."
+  (let* ((plan (appkit-media--track-plan track))
+         (poster (appkit-media-track-poster track))
+         (displayed (plist-get (cdr poster) :height))
+         (scale (if (and (numberp displayed) (> displayed 0))
+                    (/ (float displayed) (plist-get plan :height))
+                  1.0))
+         (offset (or (plist-get (cdr poster) :appkit-media-strip-offset) 0)))
+    (list :scale scale
+          :width (max 1 (round (* scale (plist-get plan :width))))
+          :height (max 1 (round (* scale (plist-get plan :height))))
+          :cells (mapcar (lambda (cell)
+                           (list :item (plist-get cell :item)
+                                 :x (round (* scale (- (plist-get cell :x) offset)))
+                                 :width (max 1 (round (* scale (plist-get cell :width))))))
+                         (plist-get plan :items)))))
+
+(defun appkit-media--track-scale-map (map scale)
+  "Return image MAP with its rectangle coordinates multiplied by SCALE."
+  (mapcar (lambda (area)
+            (pcase area
+              (`((rect . ((,x0 . ,y0) . (,x1 . ,y1))) . ,rest)
+               `((rect . ((,(round (* scale x0)) . ,(round (* scale y0)))
+                          . (,(round (* scale x1)) . ,(round (* scale y1)))))
+                 . ,(copy-tree rest t)))
+              (_ (copy-tree area t))))
+          map))
+
 (defun appkit-media--track-scene (track)
   "Create TRACK's composite Canvas without modifying any prepared image."
   (let* ((host (appkit-media-track-host track))
-         (plan (appkit-media--track-plan track))
-         (width (plist-get plan :width))
-         (height (plist-get plan :height))
+         (layout (appkit-media--track-layout track))
+         (width (plist-get layout :width))
+         (height (plist-get layout :height))
          (poster (appkit-media-track-poster track))
-         (offset (or (plist-get (cdr poster) :appkit-media-strip-offset) 0))
          (anchor (car (appkit-media-inline-host-overlays host)))
          (background (video-background-color
                       (appkit-media-inline-host-buffer host) (overlay-start anchor)))
          (canvas (video-canvas-create width height background)))
-    (dolist (cell (plist-get plan :items))
+    (dolist (cell (plist-get layout :cells))
       (let* ((item (plist-get cell :item))
              (file (plist-get item :file)))
         (when file
           (video-canvas-draw-source
-           canvas width height file (- (plist-get cell :x) offset) 0
+           canvas width height file (plist-get cell :x) 0
            (plist-get cell :width) height
            :fit (or (plist-get item :fit) 'contain) :background background))))
-    ;; Canvas pixels use intrinsic strip coordinates; display scaling and
-    ;; image-map scaling follow the same authored height as the static SVG.
-    (dolist (property '(:height :appkit-media-nslices :map :original-map
+    ;; Canvas pixels are displayed pixels, so its hotspots scale with them;
+    ;; the slice metadata stays in the poster's authored coordinates.
+    (when-let* ((map (plist-get (cdr poster) :original-map)))
+      (let ((scaled (appkit-media--track-scale-map map (plist-get layout :scale))))
+        (setcdr canvas (plist-put (cdr canvas) :original-map scaled))
+        (setcdr canvas (plist-put (cdr canvas) :map (copy-tree scaled t)))))
+    (setcdr canvas (plist-put (cdr canvas) :height height))
+    (dolist (property '(:appkit-media-nslices
                         :appkit-media-strip-widths :appkit-media-strip-offset))
       (when-let* ((value (plist-get (cdr poster) property)))
         (setcdr canvas (plist-put (cdr canvas) property (copy-tree value t)))))
@@ -200,8 +237,8 @@ Prepare replacement geometry before retiring the old inline lease."
   (or (appkit-media-track-inline track)
       (let* ((host (appkit-media--track-live-host track))
              (index (appkit-media-track-index track))
-             (plan (appkit-media--track-plan track))
-             (cell (nth index (plist-get plan :items)))
+             (layout (appkit-media--track-layout track))
+             (cell (nth index (plist-get layout :cells)))
              (item (plist-get cell :item))
              (function (appkit-media--track-descriptor-session-function
                         (appkit-media-track-descriptor track))))
@@ -217,16 +254,13 @@ Prepare replacement geometry before retiring the old inline lease."
                       (user-error "Media selection changed during session creation"))
                     (setq inline
                           (appkit-media-video-inline-create
-                           session (plist-get cell :width) (plist-get plan :height)
+                           session (plist-get cell :width) (plist-get layout :height)
                            :poster (appkit-media-track-poster track)
                            :fit (or (plist-get item :fit) 'contain)
                            :canvas (appkit-media--track-scene track)
-                           :canvas-width (plist-get plan :width)
-                           :canvas-height (plist-get plan :height)
-                           :destination-x
-                           (- (plist-get cell :x)
-                              (or (plist-get (cdr (appkit-media-track-poster track))
-                                             :appkit-media-strip-offset) 0))
+                           :canvas-width (plist-get layout :width)
+                           :canvas-height (plist-get layout :height)
+                           :destination-x (plist-get cell :x)
                            :anchor (car (appkit-media-inline-host-overlays host))
                            ;; Resolve the host per call: a reprint moves this
                            ;; track and its inline to a new host.
@@ -444,17 +478,16 @@ selected POSTER now and marks the live inline for relayout once placed."
     (when inline
       (video-inline-relocate inline (car (appkit-media-inline-host-overlays host)))
       (when (appkit-media-track-relayout track)
-        (let* ((plan (appkit-media--track-plan track))
-               (cell (nth (appkit-media-track-inline-index track) (plist-get plan :items)))
-               (poster (appkit-media-track-poster track)))
+        (let* ((layout (appkit-media--track-layout track))
+               (cell (nth (appkit-media-track-inline-index track)
+                          (plist-get layout :cells))))
           (video-inline-set-geometry
-           inline (plist-get cell :width) (plist-get plan :height)
-           :poster poster
+           inline (plist-get cell :width) (plist-get layout :height)
+           :poster (appkit-media-track-poster track)
            :canvas (appkit-media--track-scene track)
-           :canvas-width (plist-get plan :width)
-           :canvas-height (plist-get plan :height)
-           :destination-x (- (plist-get cell :x)
-                             (or (plist-get (cdr poster) :appkit-media-strip-offset) 0)))))
+           :canvas-width (plist-get layout :width)
+           :canvas-height (plist-get layout :height)
+           :destination-x (plist-get cell :x))))
       (appkit-media-video-inline-bind-controls surface (appkit-media-inline-host-map host)))
     (setf (appkit-media-track-relayout track) nil)
     ;; A fresh track already displays its own occurrence poster.

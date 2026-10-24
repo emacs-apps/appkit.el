@@ -191,13 +191,18 @@
   (appkit-media-track-test--with-images
     (let* ((prepare (lambda (height)
                       (let ((appkit-projection-printing-key 'row))
-                        (appkit-media-image-display-string
-                         (apply #'appkit-media-track-image
-                                '((:file "/preview-a.png" :display-width 40 :playable-p t)
-                                  (:file "/preview-b.png" :display-width 70 :playable-p t))
-                                height 3 nil)
-                         ;; Payloads compare without properties: vary the text.
-                         (format "preview-%d" height)))))
+                        ;; Line slices size the poster to whole text lines.
+                        ;; Payloads compare without properties: vary the text.
+                        (concat
+                         (mapconcat
+                          #'identity
+                          (appkit-media-image-slice-rows
+                           (apply #'appkit-media-track-image
+                                  '((:file "/preview-a.png" :display-width 40 :playable-p t)
+                                    (:file "/preview-b.png" :display-width 70 :playable-p t))
+                                  height 3 nil))
+                          "\n")
+                         (format "\n%d" height)))))
            (native (video--make-inline :buffer nil))
            (surface-inline (appkit-media--video-inline-create :inline native))
            closed)
@@ -215,15 +220,19 @@
                   (appkit-media-inline-host-inline (appkit-media-inline-host-at-point 1))
                   surface-inline
                   (appkit-media-track-inline-index track) 0)
-            (appkit-surface-send surface (list :body (funcall prepare 30)))
+            ;; A 25px plan displays as three 10px lines: render at 30px, not
+            ;; at the plan's pixels for Emacs to stretch.
+            (appkit-surface-send surface (list :body (funcall prepare 25)))
             (let ((plan (appkit-media--track-plan track)))
               (should (eq (appkit-media-track-at-point 1) track))
               (should-not closed)
-              (should (= (plist-get plan :height) 30))
+              (should (= (plist-get plan :height) 25))
               (should (= (video-inline-height native) 30))
               (should (= (video-inline-width native)
-                         (plist-get (car (plist-get plan :items)) :width)))
-              (should (= (video-inline-canvas-width native) (plist-get plan :width)))
+                         (round (* 1.2 (plist-get (car (plist-get plan :items)) :width)))))
+              (should (= (video-inline-canvas-width native)
+                         (round (* 1.2 (plist-get plan :width)))))
+              (should (= (plist-get (cdr (video-inline-canvas native)) :height) 30))
               (should (eq (video-inline-anchor native)
                           (car (appkit-media-inline-host-overlays
                                 (appkit-media-inline-host-at-point 1))))))))))))
