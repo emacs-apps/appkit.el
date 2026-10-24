@@ -9,13 +9,14 @@
 
 ;;; Commentary:
 
-;; Protocol-independent state for one continuous chat history window.
+;; One continuous slice of a conversation, as an immutable value that lives in
+;; a Surface model.  Transitions return new windows; nothing here owns
+;; requests.  Clients own protocol cursors, remote frontiers and page rules;
+;; this module owns exact edges, older exhaustion, newer stalls, strict
+;; slicing, automatic paging gates and the passive edge delimiter.
 ;;
-;; Clients own protocol cursors, remote-frontier observations, read state, and
-;; page-completion rules.  Surface Effects own requests and stale deliveries.
-;; This companion owns exact projected-window invariants, exhausted older
-;; history, stalled newer paging, strict edge slicing, automatic edge gates,
-;; and passive delimiter presentation.
+;; The `appkit-chat-history-' functions keep one window in a buffer-local
+;; variable for clients that have not moved it into their model yet.
 
 ;;; Code:
 
@@ -24,330 +25,281 @@
 (require 'subr-x)
 (require 'appkit-scroll)
 
-(cl-defstruct (appkit-chat-history--state
-               (:constructor appkit-chat-history--state-create))
-  "Protocol-independent state for one buffer-local history window."
-  known-p
-  empty-p
-  loading
-  older-loaded-p
-  first-key
-  last-key
-  stalled-newer-key)
+(cl-defstruct (appkit-chat-window
+               (:constructor appkit-chat-window--create)
+               (:copier appkit-chat-window--copy))
+  "Immutable exact history window.
+KNOWN-P is nil until a page or live entry establishes edges.  A nil
+FIRST-KEY leaves the older edge unbounded; a nil LAST-KEY attaches the window
+to the live edge.  EMPTY-P marks an authoritative empty conversation."
+  known-p empty-p older-loaded-p first-key last-key stalled-newer-key)
+
+(defconst appkit-chat-window-unknown (appkit-chat-window--create)
+  "The window before anything is known.")
+
+(defconst appkit-chat-window-empty
+  (appkit-chat-window--create :known-p t :empty-p t :older-loaded-p t)
+  "An authoritative empty window attached to the live edge.
+Strict slicing returns no entries even if a cache holds unrelated islands.")
+
+(defun appkit-chat-window-partial-p (window)
+  "Return non-nil when newer entries lie outside known WINDOW."
+  (and (appkit-chat-window-known-p window)
+       (appkit-chat-window-last-key window)
+       t))
+
+(defun appkit-chat-window-set (window first-key last-key)
+  "Return WINDOW with exact edges FIRST-KEY and LAST-KEY.
+Keys are opaque and compared with `equal'.  Moving the newer edge clears a
+stall recorded at the old one."
+  (let ((next (appkit-chat-window--copy window)))
+    (setf (appkit-chat-window-known-p next) t
+          (appkit-chat-window-empty-p next) nil
+          (appkit-chat-window-first-key next) first-key
+          (appkit-chat-window-last-key next) last-key)
+    (unless (equal last-key (appkit-chat-window-last-key window))
+      (setf (appkit-chat-window-stalled-newer-key next) nil))
+    next))
+
+(defun appkit-chat-window-seed-live (window key)
+  "Return empty WINDOW seeded with its first live entry KEY.
+Any other WINDOW is returned unchanged.  The seeded window stays attached to
+the live edge and keeps the fact that nothing older exists."
+  (if (appkit-chat-window-empty-p window)
+      (appkit-chat-window--create :known-p t :older-loaded-p t :first-key key)
+    window))
+
+(defun appkit-chat-window-with-older-loaded (window value)
+  "Return WINDOW recording whether its oldest edge was reached as VALUE."
+  (let ((next (appkit-chat-window--copy window)))
+    (setf (appkit-chat-window-older-loaded-p next) (and value t))
+    next))
+
+(defun appkit-chat-window-stall-newer (window &optional key)
+  "Return WINDOW recording that newer paging made no progress at KEY.
+KEY defaults to the newer edge.  Only automatic paging at that edge stops."
+  (let ((next (appkit-chat-window--copy window)))
+    (setf (appkit-chat-window-stalled-newer-key next)
+          (or key (appkit-chat-window-last-key window)))
+    next))
+
+(defun appkit-chat-window-unstall (window)
+  "Return WINDOW without a recorded newer-paging stall."
+  (let ((next (appkit-chat-window--copy window)))
+    (setf (appkit-chat-window-stalled-newer-key next) nil)
+    next))
+
+(defun appkit-chat-window-newer-stalled-p (window)
+  "Return non-nil when newer paging stalled at partial WINDOW's edge."
+  (and (appkit-chat-window-partial-p window)
+       (equal (appkit-chat-window-stalled-newer-key window)
+              (appkit-chat-window-last-key window))
+       t))
+
+(defun appkit-chat-window-rekey (window old-key new-key)
+  "Return WINDOW with edge OLD-KEY renamed to NEW-KEY."
+  (let ((first (appkit-chat-window-first-key window))
+        (last (appkit-chat-window-last-key window)))
+    (if (and (appkit-chat-window-known-p window)
+             (or (equal first old-key) (equal last old-key)))
+        (appkit-chat-window-set window
+                                (if (equal first old-key) new-key first)
+                                (if (equal last old-key) new-key last))
+      window)))
+
+(defun appkit-chat-window--slice-result (valid-p entries reason)
+  "Return a strict slice result from VALID-P, ENTRIES and REASON."
+  (list :valid-p (and valid-p t) :entries entries :reason reason))
+
+(defun appkit-chat-window-slice (window entries key-function)
+  "Strictly slice ordered ENTRIES to WINDOW.
+
+KEY-FUNCTION returns each entry's opaque key.  Return a plist with
+`:valid-p', `:entries' and `:reason'.  An unknown window or a missing edge is
+invalid, with reason `unknown-window', `missing-first-key',
+`missing-last-key' or `reversed-edges'; never guess a discontinuity.  Slice
+before filtering hidden entries, or a hidden edge looks missing."
+  (cond
+   ((not (appkit-chat-window-known-p window))
+    (appkit-chat-window--slice-result nil nil 'unknown-window))
+   ((appkit-chat-window-empty-p window)
+    (appkit-chat-window--slice-result t nil nil))
+   (t
+    (let* ((keys (mapcar key-function entries))
+           (first-key (appkit-chat-window-first-key window))
+           (last-key (appkit-chat-window-last-key window))
+           (first-index (and first-key (seq-position keys first-key #'equal))))
+      (if (and first-key (null first-index))
+          (appkit-chat-window--slice-result nil nil 'missing-first-key)
+        (let* ((start (or first-index 0))
+               (window-entries (nthcdr start entries))
+               (last-index (and last-key
+                                (seq-position (nthcdr start keys) last-key #'equal))))
+          (cond
+           ((null last-key)
+            (appkit-chat-window--slice-result t (copy-sequence window-entries) nil))
+           (last-index
+            (appkit-chat-window--slice-result
+             t (seq-take window-entries (1+ last-index)) nil))
+           ((seq-position keys last-key #'equal)
+            (appkit-chat-window--slice-result nil nil 'reversed-edges))
+           (t (appkit-chat-window--slice-result nil nil 'missing-last-key)))))))))
+
+(defun appkit-chat-window-autoload-older-p (window loading position start threshold)
+  "Return non-nil when POSITION near START should page WINDOW older.
+LOADING is non-nil while a request is active.  THRESHOLD is a character
+distance; nil disables automatic paging."
+  (and (not loading)
+       (appkit-chat-window-known-p window)
+       (not (appkit-chat-window-older-loaded-p window))
+       (appkit-scroll-near-start-p position start threshold)))
+
+(cl-defun appkit-chat-window-autoload-newer-p
+    (window loading position end threshold &optional (allowed-p t))
+  "Return non-nil when POSITION near END should page partial WINDOW newer.
+LOADING is non-nil while a request is active.  ALLOWED-P lets a client hold
+paging while its composer is in use."
+  (and allowed-p
+       (not loading)
+       (appkit-chat-window-partial-p window)
+       (not (appkit-chat-window-newer-stalled-p window))
+       (appkit-scroll-near-end-p position end threshold)))
+
+(cl-defun appkit-chat-window-delimiter
+    (window loading width &key loading-text (complete-character ?─)
+            (partial-character ?·) (face 'shadow))
+  "Return a passive WIDTH-column delimiter for WINDOW.
+COMPLETE-CHARACTER fills a known window attached to the live edge,
+PARTIAL-CHARACTER anything else.  While LOADING, a non-empty LOADING-TEXT is
+centered.  FACE applies to the whole result when non-nil."
+  (let* ((fill (if (and (appkit-chat-window-known-p window)
+                        (not (appkit-chat-window-partial-p window)))
+                   complete-character
+                 partial-character))
+         (label (and loading
+                     (not (string-empty-p (or loading-text "")))
+                     (truncate-string-to-width
+                      (concat " " loading-text " ") width nil nil "…")))
+         (remaining (max 0 (- width (if label (string-width label) 0))))
+         (left (/ remaining 2))
+         (result (if label
+                     (concat (make-string left fill) label
+                             (make-string (- remaining left) fill))
+                   (make-string width fill))))
+    (if face (propertize result 'face face) result)))
+
+;;; Buffer-local window
 
 (defconst appkit-chat-history-effect-key 'appkit-chat-history
   "Surface Effect key for the single continuous history request.")
 
-(defvar-local appkit-chat-history--state nil
-  "Current buffer's protocol-independent chat history state.")
+(defvar-local appkit-chat-history--window appkit-chat-window-unknown
+  "Current buffer's history window.")
 
-(defun appkit-chat-history--new-state ()
-  "Return a fresh unknown chat history state."
-  (appkit-chat-history--state-create
-   :known-p nil
-   :empty-p nil
-   :loading nil
-   :older-loaded-p nil
-   :first-key nil
-   :last-key nil
-   :stalled-newer-key nil))
-
-(defun appkit-chat-history-init-state ()
-  "Initialize and return the current buffer's chat history state.
-
-Existing state is preserved.  A newly initialized state has an unknown
-window; mode construction must not imply that cached entries are contiguous."
-  (unless (appkit-chat-history--state-p appkit-chat-history--state)
-    (setq-local appkit-chat-history--state
-                (appkit-chat-history--new-state)))
-  appkit-chat-history--state)
+(defvar-local appkit-chat-history--loading nil
+  "Opaque kind of the current buffer's active history request, or nil.")
 
 (defun appkit-chat-history-reset-state ()
-  "Reset to a fresh unknown history window.
-The owning Surface update must cancel its history Effect when resetting
-a live window.  History state does not own asynchronous work."
-  (setq-local appkit-chat-history--state
-              (appkit-chat-history--new-state)))
+  "Reset the current buffer to an unknown window with no request."
+  (setq-local appkit-chat-history--window appkit-chat-window-unknown
+              appkit-chat-history--loading nil))
 
 (defun appkit-chat-history-window-known-p ()
-  "Return non-nil when the current buffer has one exact history window."
-  (and (appkit-chat-history--state-known-p
-        (appkit-chat-history-init-state))
-       t))
+  "Return non-nil when the current buffer has an exact window."
+  (appkit-chat-window-known-p appkit-chat-history--window))
 
 (defun appkit-chat-history-window-partial-p ()
-  "Return non-nil when newer entries lie outside the exact history window.
-
-A non-nil last key is the exact newer cursor.  A nil last key on a known
-window means that the window is attached to the live/latest edge."
-  (and (appkit-chat-history-window-known-p)
-       (appkit-chat-history--state-last-key
-        (appkit-chat-history-init-state))
-       t))
+  "Return non-nil when newer entries lie outside the current window."
+  (appkit-chat-window-partial-p appkit-chat-history--window))
 
 (defun appkit-chat-history-window-empty-p ()
-  "Return non-nil when latest authoritatively established an empty window.
-
-This is distinct from a known attached window whose nil first key leaves its
-older edge unbounded.  An explicit empty window never projects unrelated
-cached entries."
-  (and (appkit-chat-history-window-known-p)
-       (appkit-chat-history--state-empty-p
-        (appkit-chat-history-init-state))
-       t))
+  "Return non-nil when the current window is authoritatively empty."
+  (appkit-chat-window-empty-p appkit-chat-history--window))
 
 (defun appkit-chat-history-window-first-key ()
-  "Return the exact older edge key of the current history window."
-  (appkit-chat-history--state-first-key
-   (appkit-chat-history-init-state)))
+  "Return the current window's older edge key."
+  (appkit-chat-window-first-key appkit-chat-history--window))
 
 (defun appkit-chat-history-window-last-key ()
-  "Return the exact newer edge key, or nil when attached to latest."
-  (appkit-chat-history--state-last-key
-   (appkit-chat-history-init-state)))
-
-(defun appkit-chat-history-loading ()
-  "Return the opaque loading kind of the current history request, or nil."
-  (appkit-chat-history--state-loading
-   (appkit-chat-history-init-state)))
-
-(defun appkit-chat-history-loading-p ()
-  "Return non-nil while the history presentation is loading."
-  (and (appkit-chat-history-loading) t))
+  "Return the current window's newer edge key, or nil at the live edge."
+  (appkit-chat-window-last-key appkit-chat-history--window))
 
 (defun appkit-chat-history-older-loaded-p ()
   "Return non-nil when the current window reached its oldest edge."
-  (and (appkit-chat-history--state-older-loaded-p
-        (appkit-chat-history-init-state))
-       t))
+  (appkit-chat-window-older-loaded-p appkit-chat-history--window))
+
+(defun appkit-chat-history-loading ()
+  "Return the kind of the active history request, or nil."
+  appkit-chat-history--loading)
+
+(defun appkit-chat-history-loading-p ()
+  "Return non-nil while a history request is active."
+  (and appkit-chat-history--loading t))
 
 (defun appkit-chat-history-loading-set (kind)
-  "Set the presentation's loading KIND, or nil when settled.
-Call from the owning Surface's update when starting, completing, or
-cancelling its history Effect.  Effect delivery provides stale-result
-fencing and transport cancellation; this state only drives presentation."
-  (setf (appkit-chat-history--state-loading
-         (appkit-chat-history-init-state))
-        kind))
+  "Set the active request KIND, or nil when settled."
+  (setq-local appkit-chat-history--loading kind))
 
 (defun appkit-chat-history-window-set (first-key last-key)
-  "Establish one exact history window from FIRST-KEY through LAST-KEY.
-
-Both keys are opaque and compared only with `equal'.  Nil FIRST-KEY leaves the
-older edge unbounded.  Nil LAST-KEY marks a known window attached to the
-live/latest edge.  This establishes an ordinary, potentially non-empty window
-and clears an authoritative-empty state.  Moving the newer edge clears a stall
-recorded at the old edge."
-  (let* ((state (appkit-chat-history-init-state))
-         (old-last-key (appkit-chat-history--state-last-key state)))
-    (setf (appkit-chat-history--state-known-p state) t
-          (appkit-chat-history--state-empty-p state) nil
-          (appkit-chat-history--state-first-key state) first-key
-          (appkit-chat-history--state-last-key state) last-key)
-    (unless (equal old-last-key last-key)
-      (setf (appkit-chat-history--state-stalled-newer-key state) nil))
-    state))
+  "Set the current window's exact edges to FIRST-KEY and LAST-KEY."
+  (setq-local appkit-chat-history--window
+              (appkit-chat-window-set appkit-chat-history--window first-key last-key)))
 
 (defun appkit-chat-history-window-establish-empty ()
-  "Establish an authoritative empty window attached to live/latest.
-
-Unlike `appkit-chat-history-window-set' with two nil keys, this transition
-guarantees that strict slicing returns no entries even if the client cache
-contains unrelated islands.  Empty history has also reached its oldest edge."
-  (let ((state (appkit-chat-history-init-state)))
-    (setf (appkit-chat-history--state-known-p state) t
-          (appkit-chat-history--state-empty-p state) t
-          (appkit-chat-history--state-older-loaded-p state) t
-          (appkit-chat-history--state-first-key state) nil
-          (appkit-chat-history--state-last-key state) nil
-          (appkit-chat-history--state-stalled-newer-key state) nil)
-    state))
+  "Make the current window authoritatively empty."
+  (setq-local appkit-chat-history--window appkit-chat-window-empty))
 
 (defun appkit-chat-history-window-seed-live (key)
-  "Seed authoritative empty history with its first live entry KEY.
-
-Return the current state when the empty-to-live transition happened, or nil
-when the window was not authoritatively empty.  KEY must be non-nil.  The new
-one-entry window remains attached to latest and retains the fact that no older
-history preceded it."
-  (unless key
-    (error "Appkit chat history live seed key must be non-nil"))
-  (when (appkit-chat-history-window-empty-p)
-    (let ((state (appkit-chat-history-init-state)))
-      (setf (appkit-chat-history--state-empty-p state) nil
-            (appkit-chat-history--state-first-key state) key
-            (appkit-chat-history--state-last-key state) nil
-            (appkit-chat-history--state-stalled-newer-key state) nil)
-      state)))
+  "Seed an empty current window with live KEY; return nil if not empty."
+  (when (appkit-chat-window-empty-p appkit-chat-history--window)
+    (setq-local appkit-chat-history--window
+                (appkit-chat-window-seed-live appkit-chat-history--window key))))
 
 (defun appkit-chat-history-window-clear ()
-  "Make the current history window unknown without changing loading presentation.
-
-Exact edges, older exhaustion, and a newer stall only describe the discarded
-window, so they are cleared together."
-  (let ((state (appkit-chat-history-init-state)))
-    (setf (appkit-chat-history--state-known-p state) nil
-          (appkit-chat-history--state-empty-p state) nil
-          (appkit-chat-history--state-older-loaded-p state) nil
-          (appkit-chat-history--state-first-key state) nil
-          (appkit-chat-history--state-last-key state) nil
-          (appkit-chat-history--state-stalled-newer-key state) nil)
-    state))
+  "Make the current window unknown, keeping any active request."
+  (setq-local appkit-chat-history--window appkit-chat-window-unknown))
 
 (defun appkit-chat-history-older-loaded-set (value)
-  "Set whether the current history window reached its oldest edge to VALUE."
-  (setf (appkit-chat-history--state-older-loaded-p
-         (appkit-chat-history-init-state))
-        (and value t)))
+  "Record whether the current window reached its oldest edge as VALUE."
+  (setq-local appkit-chat-history--window
+              (appkit-chat-window-with-older-loaded appkit-chat-history--window value)))
 
 (defun appkit-chat-history-newer-stalled-set (&optional key)
-  "Record that newer paging made no progress at KEY.
-
-When KEY is nil, use the current exact newer edge.  The stall suppresses only
-automatic retry at that same edge; moving the window edge clears it."
-  (let* ((state (appkit-chat-history-init-state))
-         (stalled-key (or key (appkit-chat-history--state-last-key state))))
-    (setf (appkit-chat-history--state-stalled-newer-key state) stalled-key)
-    stalled-key))
+  "Record a newer-paging stall at KEY, defaulting to the newer edge."
+  (setq-local appkit-chat-history--window
+              (appkit-chat-window-stall-newer appkit-chat-history--window key))
+  (appkit-chat-window-stalled-newer-key appkit-chat-history--window))
 
 (defun appkit-chat-history-newer-stalled-clear ()
-  "Clear the current window's automatic newer-paging stall."
-  (setf (appkit-chat-history--state-stalled-newer-key
-         (appkit-chat-history-init-state))
-        nil))
+  "Clear the current window's newer-paging stall."
+  (setq-local appkit-chat-history--window
+              (appkit-chat-window-unstall appkit-chat-history--window)))
 
 (defun appkit-chat-history-newer-stalled-p ()
-  "Return non-nil when newer paging stalled at the current exact edge."
-  (let ((state (appkit-chat-history-init-state)))
-    (and (appkit-chat-history-window-partial-p)
-         (equal (appkit-chat-history--state-stalled-newer-key state)
-                (appkit-chat-history--state-last-key state))
-         t)))
-
-(defun appkit-chat-history--slice-result (valid-p entries reason)
-  "Return a strict slice result from VALID-P, ENTRIES, and REASON."
-  (list :valid-p (and valid-p t)
-        :entries entries
-        :reason reason))
+  "Return non-nil when newer paging stalled at the current edge."
+  (appkit-chat-window-newer-stalled-p appkit-chat-history--window))
 
 (defun appkit-chat-history-window-slice (entries key-function)
-  "Strictly slice ordered ENTRIES to the current exact history window.
-
-KEY-FUNCTION returns each entry's stable opaque key.  The return value is a
-plist with `:valid-p', `:entries', and `:reason'.  A known unbounded window may
-legitimately produce `(:valid-p t :entries nil ...)', while an unknown window
-or a missing exact edge is explicitly invalid.
-
-Possible invalid reasons are `unknown-window', `missing-first-key',
-`missing-last-key', and `reversed-edges'.  Clients must call this before
-filtering hidden protocol entries; otherwise a hidden exact boundary would be
-mistaken for a discontinuity."
-  (unless (listp entries)
-    (error "Appkit chat history entries must be a list: %S" entries))
-  (unless (functionp key-function)
-    (error "Appkit chat history key function is invalid: %S" key-function))
-  (if (not (appkit-chat-history-window-known-p))
-      (appkit-chat-history--slice-result nil nil 'unknown-window)
-    (if (appkit-chat-history-window-empty-p)
-        (appkit-chat-history--slice-result t nil nil)
-      (let* ((entries (copy-sequence entries))
-             (keys (mapcar key-function entries))
-             (first-key (appkit-chat-history-window-first-key))
-             (last-key (appkit-chat-history-window-last-key))
-             (first-index (and first-key
-                               (seq-position keys first-key #'equal))))
-        (cond
-         ((and first-key (null first-index))
-          (appkit-chat-history--slice-result nil nil 'missing-first-key))
-         (t
-          (let* ((start-index (or first-index 0))
-                 (window-entries (nthcdr start-index entries))
-                 (window-keys (nthcdr start-index keys))
-                 (last-index (and last-key
-                                  (seq-position window-keys last-key #'equal))))
-            (cond
-             ((null last-key)
-              (appkit-chat-history--slice-result t window-entries nil))
-             (last-index
-              (appkit-chat-history--slice-result
-               t (seq-take window-entries (1+ last-index)) nil))
-             ((seq-position keys last-key #'equal)
-              (appkit-chat-history--slice-result nil nil 'reversed-edges))
-             (t
-              (appkit-chat-history--slice-result
-               nil nil 'missing-last-key))))))))))
+  "Strictly slice ENTRIES to the current window; see `appkit-chat-window-slice'."
+  (appkit-chat-window-slice appkit-chat-history--window entries key-function))
 
 (defun appkit-chat-history-autoload-older-p (position start threshold)
-  "Return non-nil when POSITION should trigger older paging near START.
-
-THRESHOLD is a character distance; nil disables automatic paging.  The gate
-also requires a known window, no active request, and an older edge that is not
-known to be exhausted."
-  (and (appkit-scroll-near-start-p position start threshold)
-       (appkit-chat-history-window-known-p)
-       (not (appkit-chat-history-loading-p))
-       (not (appkit-chat-history-older-loaded-p))))
+  "Return non-nil when POSITION near START should page the window older."
+  (appkit-chat-window-autoload-older-p
+   appkit-chat-history--window appkit-chat-history--loading position start threshold))
 
 (cl-defun appkit-chat-history-autoload-newer-p
     (position end threshold &optional (allowed-p t))
-  "Return non-nil when POSITION should trigger newer paging near END.
+  "Return non-nil when POSITION near END should page the window newer."
+  (appkit-chat-window-autoload-newer-p
+   appkit-chat-history--window appkit-chat-history--loading
+   position end threshold allowed-p))
 
-THRESHOLD is a character distance; nil disables automatic paging.  ALLOWED-P
-lets a client suppress paging while its composer or another application-owned
-interaction is active.  The gate also requires a partial known window, no
-active request, and no recorded stall at its current exact newer edge."
-  (and allowed-p
-       (appkit-scroll-near-end-p position end threshold)
-       (appkit-chat-history-window-partial-p)
-       (not (appkit-chat-history-loading-p))
-       (not (appkit-chat-history-newer-stalled-p))))
-
-(cl-defun appkit-chat-history-delimiter-string
-    (width &key loading-text
-           (complete-character ?─)
-           (partial-character ?·)
-           (face 'shadow))
-  "Return a passive WIDTH-column delimiter for the current history window.
-
-WIDTH is the exact number of display columns in the result.
-COMPLETE-CHARACTER fills a known window attached to latest;
-PARTIAL-CHARACTER fills an unknown or partial window.  While a request is
-active, non-empty LOADING-TEXT is centered in that rule.  FACE is applied to
-the complete result when non-nil."
-  (unless (and (integerp width) (>= width 0))
-    (error "Appkit chat history delimiter width is invalid: %S" width))
-  (unless (characterp complete-character)
-    (error "Appkit complete delimiter must be a character: %S"
-           complete-character))
-  (unless (characterp partial-character)
-    (error "Appkit partial delimiter must be a character: %S"
-           partial-character))
-  (unless (or (null loading-text) (stringp loading-text))
-    (error "Appkit chat history loading text must be a string: %S"
-           loading-text))
-  (let* ((fill-character
-          (if (and (appkit-chat-history-window-known-p)
-                   (not (appkit-chat-history-window-partial-p)))
-              complete-character
-            partial-character))
-         (label
-          (and (appkit-chat-history-loading-p)
-               (not (string-empty-p (or loading-text "")))
-               (truncate-string-to-width
-                (concat " " loading-text " ") width nil nil "…")))
-         (label-width (if label (string-width label) 0))
-         (remaining (max 0 (- width label-width)))
-         (left (/ remaining 2))
-         (right (- remaining left))
-         (result
-          (if label
-              (concat (make-string left fill-character)
-                      label
-                      (make-string right fill-character))
-            (make-string width fill-character))))
-    (if face
-        (propertize result 'face face)
-      result)))
+(defun appkit-chat-history-delimiter-string (width &rest options)
+  "Return the current window's WIDTH-column delimiter.
+OPTIONS are those of `appkit-chat-window-delimiter'."
+  (apply #'appkit-chat-window-delimiter
+         appkit-chat-history--window appkit-chat-history--loading width options))
 
 (provide 'appkit-chat-history)
 

@@ -6,7 +6,6 @@
 
 (ert-deftest appkit-chat-history-reset-is-an-unknown-production-window ()
   (with-temp-buffer
-    (appkit-chat-history-init-state)
     (should-not (appkit-chat-history-window-known-p))
     (should-not (appkit-chat-history-window-partial-p))
     (appkit-chat-history-window-set nil nil)
