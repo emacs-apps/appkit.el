@@ -99,9 +99,13 @@ rules.
   exact edges; a nil newer edge means attached to the live end.
   ~appkit-chat-history-window-establish-empty~ records an authoritative empty
   conversation.
-- Requests are keyed and owned: ~appkit-chat-history-request-start~ returns an
-  owner, and only ~appkit-chat-history-request-end~ for that current owner
-  settles it.  Stale callbacks are ignored.
+- History requests use Surface Effects keyed by
+  ~appkit-chat-history-effect-key~.  Updates return start/cancel commands;
+  Effect result mappers produce data messages.  Resetting a window must also
+  cancel its Effect.  ~appkit-chat-history-loading-set~ records the loading
+  kind for rendering and paging gates; it does not own or cancel a request.
+  If a result crosses an App merge/reply boundary, retain a business request
+  token until the reply is accepted so a replaced window rejects stale replies.
 - ~appkit-chat-history-window-slice~ strictly cuts cached entries to the
   window.  An unknown window or missing edge is reported as invalid rather than
   guessed.
