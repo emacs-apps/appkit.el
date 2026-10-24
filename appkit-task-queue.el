@@ -17,6 +17,7 @@
 
 (require 'cl-lib)
 (require 'appkit-core)
+(require 'appkit-command)
 
 (cl-defstruct (appkit-task-queue--task
                (:constructor appkit-task-queue--task-create)
@@ -43,20 +44,23 @@
   next-sequence
   lifecycle-handle
   alive-p
-  pumping-p)
+  pumping-p
+  effect-p)
 
-(defun appkit-task-queue--check (queue)
-  "Return QUEUE, or signal a type error."
+(defun appkit-task-queue--check (queue &optional mutable)
+  "Return QUEUE, rejecting Effect model state when MUTABLE is requested."
   (unless (appkit-task-queue-p queue)
     (signal 'wrong-type-argument (list 'appkit-task-queue-p queue)))
+  (when (and mutable (appkit-task-queue--effect-p queue))
+    (error "Effect queue state must be changed with appkit-task-queue-effects"))
   queue)
 
 (defun appkit-task-queue-live-p (queue)
-  "Return non-nil when QUEUE and its lifecycle owner are live."
+  "Return non-nil for live QUEUE state.\nCallback queues additionally require their lifecycle owner to remain live."
   (and (appkit-task-queue-p queue)
        (appkit-task-queue--alive-p queue)
-       (appkit-owner-live-p
-        (appkit-task-queue--owner queue))))
+       (or (appkit-task-queue--effect-p queue)
+           (appkit-owner-live-p (appkit-task-queue--owner queue)))))
 
 (defun appkit-task-queue-owner (queue)
   "Return the lifecycle owner of QUEUE."
@@ -198,18 +202,13 @@ waiting."
                           (< (appkit-task-queue--active-count queue)
                              (appkit-task-queue--limit queue))
                           (> (appkit-task-queue--queued-count queue) 0))
-                (let* ((task (appkit-task-queue--dequeue queue))
-                       (token (make-symbol "appkit-task-token"))
+                (let* ((task (appkit-task-queue--activate-next queue))
+                       (token (appkit-task-queue--task-token task))
                        (starting-p t)
                        completion-pending-p
                        pending-arguments
                        start-returned-p
                        error-data)
-                  ;; Register TASK as active before START can call COMPLETION.
-                  (setf (appkit-task-queue--task-state task) 'active
-                        (appkit-task-queue--task-token task) token
-                        (appkit-task-queue--active-count queue)
-                        (1+ (appkit-task-queue--active-count queue)))
                   (condition-case err
                       (unwind-protect
                           (let ((cancellation
@@ -381,31 +380,16 @@ discarded.
 Return non-nil when the task was accepted, and nil for a duplicate KEY.  A
 synchronous START or FINISH error is re-signaled after its slot is released
 and the queue has had an opportunity to advance."
-  (appkit-task-queue--check queue)
+  (appkit-task-queue--check queue t)
   (unless (appkit-task-queue-live-p queue)
     (error "Cannot submit work to a dead appkit task queue"))
   (unless (functionp start)
     (signal 'wrong-type-argument (list 'functionp start)))
   (unless (or (null finish) (functionp finish))
     (signal 'wrong-type-argument (list 'functionp finish)))
-  (let ((missing (make-symbol "missing")))
-    (if (not (eq (gethash key (appkit-task-queue--tasks queue) missing)
-                 missing))
-        nil
-      (let* ((sequence (appkit-task-queue--next-sequence queue))
-             (task (appkit-task-queue--task-create
-                    :key key
-                    :start start
-                    :finish finish
-                    :sequence sequence
-                    :state 'waiting
-                    :token nil
-                    :cancellation nil)))
-        (setf (appkit-task-queue--next-sequence queue) (1+ sequence))
-        (puthash key task (appkit-task-queue--tasks queue))
-        (appkit-task-queue--enqueue queue task)
-        (appkit-task-queue--pump queue)
-        t))))
+  (when (appkit-task-queue--admit queue key start finish)
+    (appkit-task-queue--pump queue)
+    t))
 
 (defun appkit-task-queue-set-limit (queue limit)
   "Set live QUEUE's concurrency LIMIT and return LIMIT.
@@ -413,7 +397,7 @@ and the queue has had an opportunity to advance."
 LIMIT must be positive.  Raising the limit starts newly eligible work
 immediately.  Lowering it leaves active work alone and delays further starts
 until the active count falls below LIMIT."
-  (appkit-task-queue--check queue)
+  (appkit-task-queue--check queue t)
   (unless (appkit-task-queue-live-p queue)
     (error "Cannot resize a dead appkit task queue"))
   (unless (and (integerp limit) (> limit 0))
@@ -431,7 +415,7 @@ KEYS is a list whose elements use the queue's `equal' key comparison.  All
 matching waiting and active tasks are retired before active cancellations run,
 then the queue is pumped once.  Duplicate keys count only once.  Return the
 number of tasks retired."
-  (appkit-task-queue--check queue)
+  (appkit-task-queue--check queue t)
   (let ((missing (make-symbol "missing"))
         (owns-pump-guard (not (appkit-task-queue--pumping-p queue)))
         cancellations
@@ -516,7 +500,7 @@ supports `appkit-handle' values and zero-argument functions."
 
 Cancellation is idempotent.  Completion callbacks from discarded task tokens
 become inert.  Return non-nil only when this call closed the queue."
-  (appkit-task-queue--check queue)
+  (appkit-task-queue--check queue t)
   (when (appkit-task-queue--alive-p queue)
     (let (cancellations first-error lifecycle-handle)
       ;; Invalidate every token before invoking cancellation code, which may
@@ -551,6 +535,126 @@ become inert.  Return non-nil only when this call closed the queue."
       (when first-error
         (appkit-task-queue--resignal first-error))
       t)))
+
+(defun appkit-task-queue--admit (queue key start &optional finish)
+  "Enqueue one unique KEY with START and FINISH in QUEUE."
+  (unless (gethash key (appkit-task-queue--tasks queue))
+    (let* ((sequence (appkit-task-queue--next-sequence queue))
+           (task (appkit-task-queue--task-create
+                  :key key :start start :finish finish
+                  :sequence sequence :state 'waiting)))
+      (setf (appkit-task-queue--next-sequence queue) (1+ sequence))
+      (puthash key task (appkit-task-queue--tasks queue))
+      (appkit-task-queue--enqueue queue task)
+      t)))
+
+(defun appkit-task-queue--activate-next (queue)
+  "Take QUEUE's oldest task and reserve its active slot before starting it."
+  (let ((task (appkit-task-queue--dequeue queue)))
+    (setf (appkit-task-queue--task-state task) 'active
+          (appkit-task-queue--task-token task) (make-symbol "appkit-task-token")
+          (appkit-task-queue--active-count queue)
+          (1+ (appkit-task-queue--active-count queue)))
+    task))
+
+(cl-defstruct (appkit-task-queue-result
+               (:constructor appkit-task-queue--result-create)
+               (:copier nil))
+  "A queue-owned completion receipt and its mapped business message."
+  key token message)
+
+(defun appkit-task-queue-result-current-p (queue result)
+  "Return non-nil if RESULT still owns an active slot in QUEUE."
+  (and (appkit-task-queue-p queue)
+       (appkit-task-queue-result-p result)
+       (let ((task (gethash (appkit-task-queue-result-key result)
+                            (appkit-task-queue--tasks queue))))
+         (and task (eq (appkit-task-queue--task-state task) 'active)
+              (eq (appkit-task-queue--task-token task)
+                  (appkit-task-queue-result-token result))))))
+
+(defun appkit-task-queue--effect-snapshot (queue limit)
+  "Copy QUEUE's scheduling state, or create it, with concurrency LIMIT."
+  (when (and queue (not (appkit-task-queue--effect-p queue)))
+    (error "Callback queues cannot be reduced as Effect state"))
+  (let* ((next (if queue (copy-sequence queue)
+                 (appkit-task-queue--make
+                  :effect-p t :alive-p t :next-sequence 0
+                  :active-count 0 :queued-count 0)))
+         (tasks (make-hash-table :test #'equal))
+         (limit (or limit (appkit-task-queue--limit next) 1)))
+    (unless (and (integerp limit) (> limit 0))
+      (error "Appkit task queue limit must be positive: %S" limit))
+    (when queue
+      (maphash (lambda (key task) (puthash key (copy-sequence task) tasks))
+               (appkit-task-queue--tasks queue)))
+    (setf (appkit-task-queue--tasks next) tasks
+          (appkit-task-queue--limit next) limit
+          (appkit-task-queue--waiting next)
+          (mapcar (lambda (task) (gethash (appkit-task-queue--task-key task) tasks))
+                  (appkit-task-queue--waiting next))
+          (appkit-task-queue--waiting-tail next)
+          (last (appkit-task-queue--waiting next)))
+    next))
+
+(defun appkit-task-queue--effect-command (task)
+  "Describe TASK's Effect with a receipt around each terminal result."
+  (let* ((effect (copy-sequence (appkit-task-queue--task-start task)))
+         (key (appkit-task-queue--task-key task))
+         (token (appkit-task-queue--task-token task))
+         (success (appkit-effect-spec-success effect))
+         (failure (appkit-effect-spec-failure effect)))
+    (setf (appkit-effect-spec-success effect)
+          (lambda (input value)
+            (appkit-task-queue--result-create
+             :key key :token token :message (funcall success input value)))
+          (appkit-effect-spec-failure effect)
+          (lambda (input reason)
+            (appkit-task-queue--result-create
+             :key key :token token :message (funcall failure input reason))))
+    (appkit-command-start-effect effect)))
+
+(cl-defun appkit-task-queue-effects
+    (queue &key limit (keep nil keep-p) submit complete reset)
+  "Reduce bounded Effect scheduling, returning (NEXT-QUEUE . COMMANDS).
+
+QUEUE is nil initially; keep NEXT-QUEUE in the owning App or Surface model.
+Neither QUEUE nor its pending tasks are mutated.  SUBMIT contains Effect
+specifications, deduplicated by key across waiting and active work.  KEEP,
+when supplied, retains only those keys; RESET cancels all existing work
+before admitting SUBMIT.  Cancellation commands precede new starts.
+
+Terminal Effect messages arrive as `appkit-task-queue-result' receipts.
+Pass a current receipt as COMPLETE after its business result commits, possibly
+after an App reply; until then it retains its concurrency slot.  Stale or
+duplicate receipts cannot release a replacement task.  Owner shutdown and
+transport cancellation are managed by the normal Effect runtime."
+  (let ((next (appkit-task-queue--effect-snapshot queue limit)) commands)
+    (dolist (key (appkit-task-queue-pending-keys next))
+      (when (or reset (and keep-p (not (member key keep))))
+        (let ((task (gethash key (appkit-task-queue--tasks next))))
+          (if (eq (appkit-task-queue--task-state task) 'active)
+              (progn
+                (appkit-task-queue--retire-active next task 'cancelled)
+                (push (appkit-command-cancel-effect key) commands))
+            (appkit-task-queue--remove-waiting next task)
+            (remhash key (appkit-task-queue--tasks next))))))
+    (when (appkit-task-queue-result-current-p next complete)
+      (appkit-task-queue--retire-active
+       next (gethash (appkit-task-queue-result-key complete)
+                     (appkit-task-queue--tasks next)) 'finished)
+      (push (appkit-command-cancel-effect
+             (appkit-task-queue-result-key complete)) commands))
+    (dolist (effect submit)
+      (unless (appkit-effect-spec-p effect)
+        (signal 'wrong-type-argument (list 'appkit-effect-spec-p effect)))
+      (appkit-task-queue--admit next (appkit-effect-spec-key effect) effect))
+    (while (and (< (appkit-task-queue--active-count next)
+                   (appkit-task-queue--limit next))
+                (> (appkit-task-queue--queued-count next) 0))
+      (push (appkit-task-queue--effect-command
+             (appkit-task-queue--activate-next next)) commands))
+    (cons next (nreverse commands))))
 
 (provide 'appkit-task-queue)
 

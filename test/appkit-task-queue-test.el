@@ -677,6 +677,82 @@
      (should (equal (appkit-task-queue-pending-keys queue)
                     '(first third))))))
 
+(defun appkit-task-queue-test--effect (key)
+  "Describe KEY without allowing a planning call to start it."
+  (appkit-effect-create
+   :key key :input key
+   :start (lambda (&rest _) (ert-fail "Planning started an Effect"))
+   :success (lambda (input value) (list 'loaded input value))
+   :failure (lambda (input reason) (list 'failed input reason))))
+
+(defun appkit-task-queue-test--receipt (command &optional failure)
+  "Settle COMMAND's mapper without acknowledging its queue slot."
+  (let ((effect (appkit-command-start-effect-effect command)))
+    (funcall (if failure (appkit-effect-spec-failure effect)
+               (appkit-effect-spec-success effect))
+             (appkit-effect-spec-input effect) 'payload)))
+
+(ert-deftest appkit-task-queue-effects-holds-slots-until-commit-and-deduplicates ()
+  (let* ((effects (mapcar #'appkit-task-queue-test--effect '(a b c d)))
+         (plan (appkit-task-queue-effects nil :limit 2 :submit effects))
+         (queue (car plan))
+         (receipt (appkit-task-queue-test--receipt (cadr plan)))
+         (repeat (appkit-task-queue-effects queue :submit effects)))
+    (should (= 2 (appkit-task-queue-active-count queue)))
+    (should (= 2 (appkit-task-queue-queued-count queue)))
+    (should-not (cdr repeat))
+    (should (equal '(loaded a payload) (appkit-task-queue-result-message receipt)))
+    ;; Mapping success alone cannot start another request; the App may still
+    ;; reject the business commit.  Acknowledgment advances exactly one slot.
+    (let* ((committed (appkit-task-queue-effects (car repeat) :complete receipt))
+           (commands (cdr committed)))
+      (should (appkit-command-cancel-effect-p (car commands)))
+      (should (equal 'c (appkit-effect-spec-key
+                        (appkit-command-start-effect-effect (cadr commands)))))
+      (should (equal '(b c d) (appkit-task-queue-pending-keys (car committed))))
+      (should-not (cdr (appkit-task-queue-effects (car committed) :complete receipt)))
+      ;; A discarded next model does not mutate the previously committed one.
+      (should (equal '(a b c d) (appkit-task-queue-pending-keys queue)))
+      (should (appkit-task-queue-result-current-p queue receipt)))))
+
+(ert-deftest appkit-task-queue-effects-prunes-before-start-and-keeps-old-snapshot ()
+  (let* ((plan (appkit-task-queue-effects
+                nil :limit 2
+                :submit (mapcar #'appkit-task-queue-test--effect '(a b c d))))
+         (queue (car plan))
+         (next (appkit-task-queue-effects queue :keep '(d) :limit 1))
+         (commands (cdr next)))
+    (should (equal '(a b)
+                   (mapcar #'appkit-command-cancel-effect-key (butlast commands))))
+    (should (equal 'd (appkit-effect-spec-key
+                      (appkit-command-start-effect-effect (car (last commands))))))
+    (should (= 1 (appkit-task-queue-active-count (car next))))
+    (should (= 0 (appkit-task-queue-queued-count (car next))))
+    (should-error (appkit-task-queue-set-limit queue 10))
+    (should-error (appkit-task-queue-cancel queue))
+    (should (equal '(a b c d) (appkit-task-queue-pending-keys queue)))
+    ;; Independently reducing the old snapshot must still start C, not D.
+    (let* ((receipt (appkit-task-queue-test--receipt (cadr plan) t))
+           (other (appkit-task-queue-effects queue :complete receipt)))
+      (should (equal '(failed a payload) (appkit-task-queue-result-message receipt)))
+      (should (equal 'c (appkit-effect-spec-key
+                        (appkit-command-start-effect-effect (car (last other)))))))))
+
+(ert-deftest appkit-task-queue-effects-reset-rejects-old-and-foreign-receipts ()
+  (let* ((effect (appkit-task-queue-test--effect 'same))
+         (plan (appkit-task-queue-effects nil :submit (list effect)))
+         (old (appkit-task-queue-test--receipt (cadr plan)))
+         (replacement (appkit-task-queue-effects (car plan) :reset t :submit (list effect)))
+         (current (appkit-task-queue-test--receipt (car (last replacement))))
+         (foreign (appkit-task-queue-effects nil :submit (list effect))))
+    (should-not (appkit-task-queue-result-current-p (car replacement) old))
+    (should-not (appkit-task-queue-result-current-p (car foreign) current))
+    (should-not (cdr (appkit-task-queue-effects (car replacement) :complete old)))
+    (should (= 1 (appkit-task-queue-active-count (car replacement))))
+    (should-not
+     (appkit-task-queue-pending-p
+      (car (appkit-task-queue-effects (car replacement) :complete current))))))
+
 (provide 'appkit-task-queue-test)
 
 ;;; appkit-task-queue-test.el ends here
