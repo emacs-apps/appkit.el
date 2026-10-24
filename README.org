@@ -3,66 +3,79 @@
 
 Repository: [[https://github.com/emacs-apps/appkit.el][emacs-apps/appkit.el]].
 
-* What it is
+Appkit is the runtime and presentation library behind the Emacs clients in
+this repository (QQ, Disco, Slackit, Zulip, Matrix, Chirp, Bili, Verse and
+others).  It owns application and buffer lifecycle, the order in which state
+changes and presentation commit, asynchronous work, and reusable buffer UI:
+projections, chat buffers, composers, markup and media.
 
-Appkit is a protocol-neutral runtime for stateful Emacs clients.  Its vNext
-control plane owns serialized App and Surface models, finite keyed Effects,
-generated-buffer lifecycle, and presentation commit ordering.  Reusable
-projection, compose, chat, media, markup, and geometry modules remain
-presentation mechanisms beneath that runtime.  Client packages own protocol
-types, transport adapters, domain transitions, and branding.
-
-Client packages supply protocol models, transport adapters, domain
-transitions, and branding.  Appkit does not define Discord, QQ, Slack,
-channel, or message models.
-
-* Install
-
-#+begin_src emacs-lisp
-;; straight.el
-(use-package appkit
-  :straight (:host github :repo "emacs-apps/appkit.el"))
-
-;; package-vc (Emacs 29+)
-(use-package appkit
-  :vc (:url "https://github.com/emacs-apps/appkit.el"))
-#+end_src
+Clients own their protocol: data models, transport, validation, persistence,
+identity, faces and branding.  Appkit defines no channel, message or account
+model.
 
 * Requirements
 
-- Emacs 32.0+
+- Emacs 32.0 or newer, graphical for images and video
 - ~plz~ 0.8+
 - ~video.el~ 0.1+ with its native module built
+- Optional: Evil (bindings load after it), the Markdown Tree-sitter grammars
+  (Markdown codec), Respond (default translation backend)
 
-* Depend
-
-Sibling packages load it as a local file dependency:
+~(require 'appkit)~ loads every module.  Appkit keeps no compatibility aliases;
+use the public ~appkit-*~ names directly.
 
 #+begin_src emacs-lisp
-(depends-on "appkit" :file "../appkit.el")
+(use-package appkit
+  :straight (:host github :repo "emacs-apps/appkit.el"))
 #+end_src
 
-No consumer compatibility aliases are provided.  Use the public
-~appkit-*-~ namespaces directly.
+Inside the monorepo, packages and their load paths are registered in
+[[file:../../emacs-dev/dev-registry.el][emacs-dev/dev-registry.el]].
 
 * Documentation
 
-Human-facing, integration, and accepted design documentation uses Org.  Keep one
-Org source for each design surface and do not add a parallel ~README.md~ that
-would hide this landing page.
+| Chapter                                | Covers                                                                    |
+|----------------------------------------+---------------------------------------------------------------------------|
+| [[file:docs/runtime.org][Runtime]]           | Apps, Surfaces, transitions, commands, Effects, Sources, Renderers, Resources |
+| [[file:docs/presentation.org][Presentation]] | positions, actions, prefixes and cards, rows, directories, discussions, scrolling, selection, bindings |
+| [[file:docs/chat.org][Chat buffers]]       | chat buffer and composer, timeline, history windows, read state, message leaves, completion |
+| [[file:docs/media.org][Media]]             | resources, images, inline occurrences, tracks, video sessions, audio       |
+| [[file:docs/compose.org][Compose]]         | compose sessions and operations, child editors, chat compose               |
+| [[file:docs/markup.org][Markup]]           | semantic documents, native rendering, codecs, structured objects           |
 
-- [[file:docs/integrator.org][Integrator guide]] — vNext ownership, closed transitions, generated Surfaces, and tests
-- [[file:docs/compose.org][Compose surfaces]] — implemented compose lifecycle and chat-specific geometry
-- [[file:docs/markup.org][Markup documents]] — accepted markup design and Slackit/Disco adaptation
+Read the runtime chapter first.  The chapters explain models and the rules that
+are easy to break; argument details live in docstrings.
+
+* Modules
+
+| Area         | Modules                                                                                                                      |
+|--------------+------------------------------------------------------------------------------------------------------------------------------|
+| Runtime      | ~loop~ ~app~ ~surface~ ~command~ ~effect~ ~source~ ~resource~ ~context~ ~routing~ ~core~ ~cleanup~ ~transaction~ ~task-queue~ |
+| Projection   | ~projection~ ~position~ ~ewoc~ ~geometry~ ~scroll~ ~selection~                                                                |
+| Presentation | ~ui~ ~presentation~ ~directory~ ~discussion~ ~name-color~ ~mode-line~ ~fontify~ ~translate~ ~translate-respond~ ~bindings~ ~evil~ |
+| Chat         | ~chatbuf~ ~chat-timeline~ ~chat-history~ ~chat-read~ ~chat-ins~ ~chat-avatar~ ~chat-completion~ ~chat-emoji~                  |
+| Compose      | ~compose~ ~compose-edit~ ~chat-compose~ ~markup-compose~                                                                      |
+| Markup       | ~markup~ ~markup-ui~ ~markup-codec~ ~markup-codecs~ ~markup-markdown-ts~                                                      |
+| Media        | ~media~ ~media-resource~ ~media-effect~ ~media-image~ ~media-inline~ ~media-track~ ~media-grid~ ~media-playback~ ~media-video~ ~media-player~ ~media-card~ |
+
+Each name is ~appkit-NAME.el~.
 
 * Development
 
-Eask owns package activation and load paths:
+Tests live in ~test/~.  Run them in an Emacs daemon with
+[[file:../../emacs-dev/dev.el][emacs-dev/dev.el]] loaded, preferably a fresh
+~emacs -Q~ daemon whose ~load-path~ comes from the package registry:
 
-#+begin_src sh
-eask recompile
-scripts/eask-ert-brief test/*.el
+#+begin_src emacs-lisp
+(dev-run-test-files
+ (directory-files "~/Projects/dev-monorepo/appkit-apps/appkit.el/test"
+                  t "-test\\.el\\'"))
 #+end_src
 
-The brief runner recompiles immediately before testing and forwards
-its arguments to ~eask test ert~.
+~dev-run-test-files~ runs only the tests declared in those files and returns
+counts plus unexpected results.  Wrap loading in ~dev-with-source-loads~ (or set
+~load-prefer-newer~) so stale ~.elc~ files in the tree cannot hide source edits.
+
+Canvas geometry, real playback and touch input need a graphical frame.  Tests
+that skip in batch prove nothing about them.  Smoke-test those paths in a
+running client.

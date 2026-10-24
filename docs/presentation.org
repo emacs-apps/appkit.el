@@ -1,0 +1,220 @@
+#+title: Appkit presentation
+#+options: toc:2 num:nil
+
+These modules build the text of generated buffers.  They insert and decorate
+text inside a Renderer's content update (see [[file:runtime.org][runtime]]).
+They never start transport, own protocol objects, or install client keymaps.
+
+* Positions
+
+~appkit-position~ captures point and each window's start as semantic anchors: a
+stable key found through an anchor text property, plus an offset.  Restoring
+finds the same keyed row after a redraw, even when everything above it changed.
+The projection renderer does this automatically.  Custom renderers wrap their
+mutation in ~appkit-position-render-preserving~, or use
+~appkit-position-capture~ / ~appkit-position-restore~.  Restoring accepts a map
+for promoted keys.
+
+~appkit-ewoc-reconcile~ is the keyed EWOC primitive underneath: it deletes,
+moves and inserts nodes to match a keyed entry list, and reprints only
+changed or forced entries.
+
+* Actions
+
+An action span is a region carrying one zero-argument client action.
+
+- ~appkit-ui-add-action~ makes a span activatable by ~RET~, graphical
+  ~<return>~ and primary click.  ~:help-echo~ describes the action; Appkit does
+  not infer a target.  Protocol metadata goes in ~:properties~.
+- ~appkit-ui-add-fallback-action~ fills only unclaimed parts of a region, so
+  inner actions, buttons and custom keymaps keep their own behavior.
+- Use ~appkit-ui-insert-action-button~ for text buttons,
+  ~appkit-ui-make-action-row~ for whole rows, and ~appkit-ui-button-map~ for
+  native buttons.  These maps own both Return events.  Putting activation only
+  in a major-mode or Evil map breaks graphical Return, because native Wayland
+  may deliver ~<return>~ rather than ~RET~.
+
+Touch drags over actions, rows and embedded cards scroll the buffer; only a
+completed tap activates.  Bind passive ~down-mouse-1~ to ~appkit-ui-ignore-mouse~,
+not ~ignore~, to keep native scrolling and long-press.  Bind image-map hotspots
+with ~appkit-ui-bind-image-map~.  Primary-click maps must not advertise
+~follow-link~: a native tap would become an unhandled ~mouse-2~.
+
+* Prefixes, cards and copied text
+
+Indentation, gutters and borders are display properties, never literal text.
+Copying then yields clean body text, and protocol entity offsets stay valid.
+
+- ~appkit-ui-apply-line-prefix~ and ~appkit-ui-insert-prefixed-lines~ apply
+  first-line and continuation prefixes; an optional prefix face styles only the
+  decoration.
+- A /prefix state/ (~appkit-ui-make-prefix-state~) is a mutable first/rest prefix
+  consumed once.  Nested leaves (reply previews, cards, media) take the state
+  so the outer row's first-line decoration is applied exactly once.
+- ~appkit-ui-insert-card~ inserts a bordered card through an inserter that
+  receives the prefix state.  Cards add only their border;
+  ~appkit-ui-card-indent-prefix-state~ reuses an existing body gutter, whose last
+  column becomes the border.
+- ~appkit-ui-apply-source-line-prefix~ visually replaces protocol source markers
+  (such as quote markers) one character for one character.  Cursor columns
+  stay real, and copying keeps the source characters.
+
+Generated readers install ~appkit-ui-buffer-substring-filter~ as their
+~filter-buffer-substring-function~.  It keeps source characters and drops
+~display~, ~line-prefix~ and ~wrap-prefix~.  ~appkit-discussion-mode~ installs it
+for the whole buffer; ~appkit-chatbuf-mode~ installs it for generated content
+before the composer.
+
+Soft wrapping goes through ~appkit-ui-set-soft-wrap~.  It enables native
+~visual-line-mode~ without generating continuation prefixes, so rendered
+~wrap-prefix~ geometry survives.
+
+* Rows and lists
+
+~appkit-presentation~ holds the generic leaves: heading, label and note lines,
+fields, action buttons, list specs, and string elision by display columns.
+
+A /one-line row/ (~appkit-presentation-one-line-row~) is a compact list row
+with an icon, context, preview and time.  Its ~:context-open~ / ~:context-close~
+delimiters are client text whose display widths Appkit measures.
+
+A /one-line preview/ (~appkit-ui-one-line-preview-create~) is bounded content
+for one physical line: an optional styled ~:label~ and ~:separator~, body
+~:text~, and an optional atomic ~:visual~ whose graphical width is declared in
+~:visual-columns~.  The visual's underlying text is its terminal fallback.  The
+same preview fills a row column or the second line of a chat reply/edit card.
+
+* Directories
+
+~appkit-directory~ renders a domain hierarchy as a flat stream of entries with
+roles ~section~, ~group~, ~item~, ~note~ and ~spacer~.  Derive the buffer's mode
+from ~appkit-directory-mode~.
+
+- The client projects ~appkit-directory-entry~ values and calls
+  ~appkit-directory-reconcile~; Appkit keeps keyed rows, fold state, position
+  and activation.
+- ~appkit-directory-configure~ supplies inserters for custom rows, plus
+  activation, fold and operation callbacks.  Indentation is a display prefix
+  applied to the completed row.
+- Folds are keyed and survive redraws.  Keep a fold-state table across Surfaces
+  by passing it to ~appkit-directory-initialize~.
+- Marks are opt-in: set ~:markable-p~ on entries and enable
+  ~appkit-directory-mark-mode~.  ~appkit-directory-run-operation~ hands the
+  operation symbol and captured target keys to the client, which owns
+  confirmation, Effects and reconciliation.
+
+Operation targets follow one precedence (~appkit-directory-target-keys~):
+an explicit captured snapshot, then an active region, then marks, then point.
+An active region that selects nothing is an empty target, not a fallback to
+marks or point.
+
+* Discussions
+
+~appkit-discussion~ renders post details, comments and reviews.  Derive the
+mode from ~appkit-discussion-mode~, which owns soft wrapping: do not repeat
+~visual-line-mode~, ~word-wrap~ or ~truncate-lines~ setup.
+
+An ~appkit-discussion-entry~ has a key and parent key, an avatar, heading, time,
+body inserter and footer.  /Depth/ is visual reply nesting.  A /connector/
+continues or ends a linear ancestor chain without changing depth.  Optional
+pre-heading context is client text; Appkit does not interpret it as a repost,
+reply or quote.  ~appkit-discussion-connector-style~ selects ~fringe~ (graphical
+default, with a text fallback on terminals), ~text~ or ~none~.
+
+* Scroll edges
+
+~appkit-scroll-observer-install~ watches a Surface's windows for content that
+pages near the start or end.  It unifies command, scroll and size hooks.
+Measurements run after redisplay and validate the owning Surface and every
+displayed window.  Edge callbacks own thresholds, cursors, loading and
+exhaustion gates, requests and retries.
+
+The request callback must close its loading gate synchronously, before
+starting asynchronous work.  After a page has been committed and projected,
+call ~appkit-scroll-observer-check~ so that a short page can request the next
+one.  Viewport observation is independent of projection: a height-only resize
+changes the visible edges without reflowing rows.
+
+An optional ~:visibility-function~ receives a boolean when the buffer gains or
+loses its last displayed window, including when another window or frame closes
+it.  Hiding one of several windows is not a loss of visibility.  Use it to
+release interests (such as media) while nothing shows the buffer.
+
+* Selection
+
+~appkit-selection~ values live in the Surface model.  Transitions return
+replacements through ~appkit-selection-set~, ~appkit-selection-toggle~ and
+~appkit-selection-forget~.  Projection caches never own selection.  A row
+leaving the projection does not mean it was deleted.  Only the client's
+authoritative deletion transition forgets a key.
+
+~appkit-selection-target-keys~ applies the same precedence as directories for
+message batches: captured, then region, then marked, then point.  Capture the
+targets before Transient or Evil deactivates the region, and carry that capture
+through submenus instead of recapturing at the suffix.  Resolve the captured
+keys against current canonical objects when the action runs.  Single-target
+actions reject a multiple-target capture instead of taking its first member.
+
+* Key bindings
+
+Clients declare which semantic actions they implement.  A shared theme
+(~appkit-binding-defaults~) assigns keys to those roles for native Emacs and
+for Evil:
+
+#+begin_src emacs-lisp
+(appkit-bindings-define 'example-mode-map 'read-only
+  'activate #'example-open
+  'refresh #'example-refresh
+  'app-menu #'example-transient
+  'quit #'quit-window)
+#+end_src
+
+The context is ~read-only~ or ~input~.  Undeclared roles stay unbound.
+Protocol-specific controls stay in the client's own keymap.  Native bindings
+work without Evil.  An optional Evil setup calls
+~appkit-bindings-enable-evil~ on the same map, in any order relative to the
+declaration.  Native read-only bindings step aside in modal states, so Evil
+search and visual motions keep working.
+
+~appkit-binding-overrides~ changes individual theme properties (an explicit nil
+removes a property; ~:enabled nil~ disables a role).  ~appkit-bindings-refresh~
+reapplies the theme to live maps.  The Evil helpers in ~appkit-evil~ set
+initial states and normalize buffers.  Snipe eligibility is centralized in
+~appkit-bindings-buffer-p~.
+
+Message roles follow Telega and evil-collection's Telega adapter: edit, delete,
+forward and attachment keys.  Refresh, pagination, marks and explicit
+submission are Appkit conventions.
+
+* Small helpers
+
+- ~appkit-name-color-face~ maps a stable identity string onto a face palette.
+  The client decides self and system overrides.
+- ~appkit-mode-line-install~ installs a cached mode-line provider, and
+  ~appkit-mode-line-indicator~ renders a clickable indicator.
+- ~appkit-fontify-string~ returns source text with faces from a trusted,
+  client-selected major mode.  It runs in a disposable buffer marked
+  ~untrusted-content~, suppresses mode hooks, and never installs grammars.  It is
+  not a sandbox for arbitrary mode code.
+- ~appkit-geometry~ measures the display window: line pixel height, column
+  widths, display spaces and alignment.
+
+* Inline translation
+
+~appkit-translate~ translates displayed text on explicit user request only.
+
+- A source is a plist with an account-scoped ~:key~, the displayed snapshot's
+  ~:version~, plain ~:text~ exported by the client, and optional backend ~:data~.
+  Never pass rendered buffer text or hidden content.
+- ~appkit-translate-enable~ attaches translation state to an App or Surface.
+  By default a state change posts ~(appkit-projection-change :keys (list KEY))~
+  to the Surface.
+- ~appkit-translate-request~ / ~appkit-translate-request-many~ start work in that
+  owner; stopping the owner cancels queued work and fences late callbacks.
+- Printers call ~appkit-translate-insert~ below the unchanged original.  It
+  reads state only and never starts a request.
+
+~appkit-translate-target-language~ defaults to ~"zh"~.
+~appkit-translate-backend-function~ defaults to the optional Respond backend
+(~appkit-translate-respond~), which needs its own Codex authentication.  There
+is no automatic retry or fallback chain.

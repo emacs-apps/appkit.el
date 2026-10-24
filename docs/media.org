@@ -1,0 +1,219 @@
+#+title: Appkit media
+#+options: toc:2 num:nil
+
+Appkit media prepares images and playable media for generated buffers, mounts
+them where they are inserted, and keeps playback alive while presentation
+changes.  Playback itself is video.el's.
+
+* Ownership
+
+| Owner    | Responsibilities                                                                                                                      |
+|----------+---------------------------------------------------------------------------------------------------------------------------------------|
+| video.el | GStreamer players, playback state, sparse buffering, render targets and Canvas transport, waiting UI, presentation leases, dedicated viewers |
+| Appkit   | canonical resources, acquisition, persistent cache policy and identity, playback plans, occurrence and owner lifetimes                 |
+| Client   | adapting protocol objects, credentials, decryption and concealed-content policy, cache keys, layout choices                           |
+
+A video.el /session/ owns one player plus the leases of every place it is
+presented.  The player closes after its last lease is released.  Appkit never
+creates a second player for an existing presentation: promoting an inline
+video to a viewer passes the same session.
+
+* Resources and acquisition
+
+A canonical resource is the alist built by ~appkit-media-resource-create~, with
+~file~, ~url~, ~name~ and ~mime-type~.  Remote transfers are HTTPS only, with
+HTTPS-only redirects.  Media opens never fall back to a browser.
+
+Work is owned the usual runtime way (see [[file:runtime.org][runtime]]):
+
+- *Explicit opens* (the user asks to view a file) are Effects of the
+  initiating Surface.  ~appkit-media-acquisition-start~ and
+  ~appkit-media-image-acquisition-start~ acquire a local file and only settle
+  the Effect.  A later committed update starts
+  ~appkit-media-file-presentation-start~ or
+  ~appkit-media-video-presentation-start~.
+- *Shared previews and avatars* are Resource demands rendered by rows.  Use
+  ~appkit-media-image-resource-load~ or ~appkit-media-acquisition-resource-load~
+  as the demand's loader, never a fetch inside a printer.
+- *Downloads to a user path* are a separate action:
+  ~appkit-media-copy-or-download-resource-async~.
+
+Clients supply a stable ~:cache-key~ derived from protocol identity, so rotating
+signed URLs address the same cache entry.  Request headers configure transport
+and are never part of resource or cache identity.
+
+* Images
+
+Preview factories turn a local file into an immutable, opaque display
+descriptor.  Treat descriptors as values: do not unpack them or attach runtime
+state.
+
+- ~appkit-media-preview-image-from-file~: an inline preview within a
+  default-scale pixel budget.  Its line count follows text zoom while keeping
+  the aspect ratio.
+- ~appkit-media-one-line-preview-image-from-file~: a thumbnail one text line
+  tall, two unscaled columns wide by default, ~cover~ fit unless ~contain~ is
+  requested.  On Canvas displays a bounded pool of first-frame decoders (two
+  at a time) fills it asynchronously, so even detached strings get a real first
+  frame without keeping a player.
+- ~appkit-media-cropped-preview-image-from-file~ center-crops into an exact box
+  with optional transparent insets.  ~appkit-media-circular-image-from-file~
+  makes avatars.
+- ~appkit-media-horizontal-strip-image~ composes several items into one
+  unbreakable scene with pixel gutters, image-map hotspots and an optional
+  play marker.
+
+Display goes through ~appkit-media-image-display-string~,
+~appkit-media-one-line-image-display-string~, ~appkit-media-insert-image-slices~
+or ~appkit-media-image-slice-rows~.  Each insertion gets its own display slice,
+so adjacent copies of one cached image stay separate.
+
+~appkit-media-insert-grid~ lays out caller-supplied bands of
+~appkit-media-grid-cell~ values.  Appkit owns line slices, padding, gutters and
+prefixes.  The client chooses topology, item limits and crops.  A grid never
+acquires media or mounts a player.
+
+* Inline occurrences
+
+A prepared poster can carry a /playback plan/, which makes it interactive where
+it is inserted:
+
+#+begin_src emacs-lisp
+(appkit-media-image-with-resource
+ poster original-resource
+ :kind 'video
+ :interaction 'media     ; nil keeps enclosing actions; `open' always opens a viewer
+ :muted t :inline-autoplay t :loop t
+ :cache-key (list 'example media-id))
+#+end_src
+
+The same plan is available on its own through ~appkit-media-playback-create~.  A
+plan holds a canonical resource and policy, never bytes, a player or a lease.
+
+- ~:interaction~ ~media~ toggles animated images and videos on Return or click,
+  and opens still images in the viewer.  ~nil~ (the default of the plain
+  preview factories) leaves enclosing links and buttons alone.
+- ~:autoplay~ lets visible animated /images/ start after insertion, when
+  ~appkit-media-inline-animation-enabled~ is set and Canvas is available.
+  Video starts by itself only with the explicit ~:inline-autoplay~.
+- Without a resource, ~:resolve-function~ acquires one on activation.  It
+  receives success and failure callbacks and returns a cancellation function.
+  Retiring the occurrence cancels it, and late results are ignored.  The
+  client keeps authority over credentials, decryption and concealed content.
+
+** Mounting
+
+Prepared text is inert until it is /mounted/: Appkit then creates an overlay
+host that owns its display, keymap, and any inline player.  Mounting happens at
+these boundaries:
+
+- the end of a Surface content update, after the whole render commits,
+  including header, footer and custom renderer output;
+- the end of a chatbuf input insertion;
+- elsewhere, an explicit ~appkit-media-inline-mount~ after insertion and the
+  final property writes.
+
+Leaf printers, cards and reaction helpers only prepare text; they never mount.
+Mounting is idempotent.  Every insertion, including a repeated insertion of the
+same string, has independent runtime state, and all slices of one image share
+one host.  Reinserting copied text creates a new occurrence; it never borrows
+another occurrence's player.
+
+A host retires when its text is replaced, its source plan changes, the buffer
+dies or changes mode, or its owner stops.  Styling the text does not retire it.
+~appkit-media-inline-host-at-point~, ~appkit-media-inline-host-live-p~ and
+~appkit-media-inline-host-activate~ (nil follows the interaction policy;
+~dedicated~ or ~frame~ promotes the exact session) work on live hosts.
+
+Header-line strings, completion affixations and display-only prefixes are not
+insertion boundaries.  Images there stay static posters.
+
+* Tracks
+
+A /track/ is a carousel: several media items in one horizontal scene, with one
+selected item playable inline.
+
+#+begin_src emacs-lisp
+(appkit-media-track-image
+ items pixel-height pixel-gap        ; items: :file :width :height :display-width :fit :playable-p
+ :label "Example"
+ :session-function (lambda (index muted) (example-session index muted)) ; nil declines
+ :open-function (lambda (index inline presentation) ...))
+#+end_src
+
+Insert the result with the ordinary image or slice helpers.  The session
+adapter lazily returns an Appkit video session for the selected item.  The open
+adapter handles viewer, frame and external opens for the exact selection.
+Left/right select, Return toggles, ~m~ mutes, ~L~ loops, ~F~ promotes to a frame,
+and ~C-RET~ / ~S-RET~ open a viewer or an external player.  Taps activate the
+item that was clicked.  ~M-RET~ stays the enclosing application's action.
+~appkit-media-track-at-point~, ~appkit-media-track-index~ and
+~appkit-media-track-inline~ expose the live selection.
+
+** Surviving redraws
+
+A track printed by a projection row is a retained instance, identified by the
+row key and its item files (~appkit-projection-printing-key~ is bound while a
+row prints).  When the owning Surface reprints the row (resize, text scaling,
+resource arrival, a full rerender), the old occurrence is parked rather than
+closed, and the reprinted occurrence adopts it.  Selection, mute state and a
+live player continue; a paused video stays paused.
+
+If the reprint changes geometry (a different pixel plan, or a different line
+height for the same plan), the scene Canvas is rebuilt and the live target is
+resized in place with ~video-inline-set-geometry~.  Scenes and targets render at
+the poster's displayed pixel size, so text zoom changes resolution instead of
+stretching a small frame.  A parked track that the render does not reprint,
+because its row was removed, is released when the render completes.
+
+Tracks inserted outside projection rows, and tracks whose row is rekeyed, do not
+carry over: their reprint starts a fresh track.
+
+* Video sessions and presentations
+
+Use ~appkit-media-video-session-create~ when one video may be presented in more
+than one place.  It wraps a video.el session with canonical resource, cache key
+and cache policy.  Separate user activations get separate sessions; they are
+not deduplicated by cache key.
+
+- ~appkit-media-video-inline-create~ creates an in-buffer presentation of a
+  session.  Hosts that own their pointer policy pass ~:controls-p nil~.
+- ~appkit-media-present-video-inline~ promotes that exact inline to a viewer.
+  ~appkit-media-present-video-session~ presents a session directly.  Closing
+  either presentation leaves the other playing.
+- ~appkit-media-playback-presentation-create~ builds managed viewer input from
+  a plan, for ~appkit-media-video-presentation-start~.  When an inline and a
+  viewer must share one player, create the session once with
+  ~appkit-media-playback-session-create~.
+
+Remote playback starts at once and stays range-seekable; it never waits for a
+full download.  Under ~appkit-media-video-cache-policy~ ~automatic~, the sparse
+buffer is kept under ~appkit-media-video-cache-directory~ only once it is
+complete, and complete entries open locally.  Use ~none~ for live streams.
+Looping waits until the player reports seekability; ~:live t~ forces live,
+non-seekable behavior.
+
+Hosts that draw their own Canvas pass the display overlay or marker as
+~:anchor~ with ~:visible-function~, ~:alive-function~ and ~:activate-function~.
+video.el derives the background from the anchor, so no color callback is
+needed.  ~video-inline-relocate~ and ~video-inline-set-geometry~ move or resize a
+live inline without touching playback.
+
+* Audio
+
+~appkit-media-player-start-file~ plays finite local audio through an external
+player in an ~appkit-media-player-session~, which owns the process, progress
+timer and position.  Following Telega's ffplay model, pause stops the process
+and resume starts a new one at the retained position.  Clients provide the
+local file, duration and identity.  They never handle player processes or
+sentinels.
+
+* Cards and previews
+
+~appkit-media-card~ locates the media card context at point and dispatches its
+actions: open, download, cancel, save as and copy URL.  The client supplies the
+card context and the actions it supports.  ~appkit-chat-ins-insert-media-card~
+draws the card (see [[file:chat.org][chat]]).
+
+~appkit-media-start-video-preview~ extracts a static JPG poster from a video.
+Playback always uses the original resource, never a generated preview movie.

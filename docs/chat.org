@@ -1,0 +1,201 @@
+#+title: Appkit chat buffers
+#+options: toc:2 num:nil
+
+A chat buffer follows Telega's shape: one buffer holds a generated, read-only
+timeline and a trailing editable composer.  Appkit owns that geometry and the
+composer's canonical state.  Clients own messages, ordering, read receipts,
+transport and every protocol meaning.
+
+The Surface around a chat buffer is an ordinary Generated Surface (see
+[[file:runtime.org][runtime]]) whose Renderer drives ~appkit-chat-timeline~.
+
+* Buffer and composer
+
+Derive the major mode from ~appkit-chatbuf-mode~.  Register a minor mode for
+timeline-only commands with ~appkit-chatbuf-use-timeline-mode~: it is active
+outside the composer, so message keys never reach typed input.
+
+- Generated content stays read-only even when the composer is hidden.  Prompt
+  motion is clamped, and input deletion and replacement respect
+  ~buffer-read-only~.
+- The composer's canonical input (~appkit-chatbuf-input-state~,
+  ~appkit-chatbuf-input-string~) preserves text properties.  Rendering reads
+  that state; never read input back from generated buffer text while rendering
+  or recovering.
+- Set ~appkit-chatbuf-input-sync-function~ to mirror protocol draft state.  Do
+  not install a second after-change controller.
+- Copying strips display-only properties from generated content but keeps the
+  composer's structured objects, even when one selection spans both.
+
+** Structured input objects
+
+Mentions, custom emoji and attachments are /structured input objects/: text in
+the composer carrying an opaque payload, a unique occurrence identity, the
+original visible text and boundary sentinels.  Build one with
+~appkit-chatbuf-input-object-string~ or insert it with
+~appkit-chatbuf-input-insert~ and ~:object~.
+
+Equal adjacent payloads stay separate occurrences.  Deletion removes whole
+occurrences, and a repair pass removes any occurrence whose sentinels or
+interior were damaged.  Shared input history skips entries that contain
+objects.
+
+** Composer context
+
+A reply or edit target is /aux state/: ~appkit-chatbuf-aux-set~ stores a client
+plist without replacing the draft.  ~appkit-chatbuf-aux-render~ draws the shared
+two-line context card (title, one-line preview, accent, cancel action) above
+the input.  Per-send options such as silent or spoiler go in
+~appkit-chatbuf-input-options-set~.  The client decides what each means.
+
+** Return
+
+~appkit-chatbuf-dispatch-return~ routes Return by geometry.  In the composer it
+runs the client's input command once; the client decides whether that sends or
+edits.  In the timeline it activates the exact action or button at point, then an
+optional client content command.  Without an action, point, draft and modal
+state do not change; Return never implicitly jumps into the composer.  Command
+remapping, prefix arguments and both ~RET~ and ~<return>~ are honored.
+
+* Timeline
+
+~appkit-chat-timeline~ is the projected message list inside the chat buffer.
+It uses the same keyed projection as other Surfaces, while keeping the header,
+footer and composer as separate regions.
+
+#+begin_src emacs-lisp
+;; In the Renderer's mount callback:
+(appkit-chat-timeline-ensure :printer #'example--print-message
+                             :anchor-property 'example-message-key)
+
+;; In its render callback:
+(appkit-chat-timeline-sync
+ (appkit-chat-timeline-project messages #'example-message-key
+                               :context-function #'example--grouping
+                               :dependencies-function #'example--resources)
+ :changed-resources resource-keys)
+(appkit-chat-timeline-set-frame header footer)
+#+end_src
+
+- Row context (from the previous message) drives sender grouping and dividers.
+  A context change redraws the row.
+- ~appkit-chat-timeline-set-frame~ updates header and footer in place.  It can
+  never delete and recreate the user's input.
+- ~appkit-chat-timeline-invalidate~ with ~:defer-while-mark-active~ postpones
+  redraws until the region is released (~appkit-chat-timeline-flush-deferred~).
+- ~appkit-chat-timeline-keys-in-range~ maps a rendered range to message keys,
+  excluding the composer.  ~appkit-chat-timeline-key-at-point~ and
+  ~appkit-chat-timeline-key-position~ go the other way.
+- A timeline cache belongs to one Surface incarnation, even when a replacement
+  Surface reuses the same buffer.
+
+* History windows
+
+~appkit-chat-history~ tracks which contiguous slice of a conversation the
+buffer shows.  Clients still own cursors, remote frontiers and page-completion
+rules.
+
+- The window starts /unknown/.  ~appkit-chat-history-window-set~ establishes
+  exact edges; a nil newer edge means attached to the live end.
+  ~appkit-chat-history-window-establish-empty~ records an authoritative empty
+  conversation.
+- Requests are keyed and owned: ~appkit-chat-history-request-start~ returns an
+  owner, and only ~appkit-chat-history-request-end~ for that current owner
+  settles it.  Stale callbacks are ignored.
+- ~appkit-chat-history-window-slice~ strictly cuts cached entries to the
+  window.  An unknown window or missing edge is reported as invalid rather than
+  guessed.
+- ~appkit-chat-history-autoload-older-p~ / ~-newer-p~ gate automatic paging:
+  the window must be known, no request active, and the edge not exhausted
+  (older) or stalled (newer).
+- ~appkit-chat-timeline-install-history-observer~ connects these gates to the
+  Surface's scroll observer.  ~appkit-chat-history-delimiter-string~ draws the
+  passive edge delimiter.
+
+* Read state
+
+~appkit-chat-read~ separates the moving read frontier from the boundary where
+reading began.
+
+~appkit-chat-read-update~ receives ordered message keys and the authoritative
+~:first-unread-key~.  The boundary stays fixed while the user reads.  An exact
+~:unread-count~ of zero or an explicit ~:all-read-p~ removes it, including
+completion reported by another client.  Nil counts, unloaded keys, empty caches
+and notification badges are not evidence of completion.  Use ~:known-p nil~ when
+the boundary itself is unknown.  Never derive a key from a count.
+
+- Render the returned key with ~appkit-chat-read-insert-divider~, and break
+  sender grouping there.
+- ~appkit-chat-read-clear~ dismisses a confirmed read-all boundary.
+  ~appkit-chat-read-rebase~ moves to a newly confirmed explicit unread target.
+- ~appkit-chat-read-target~ selects the row at point, or from the composer the
+  newest eligible loaded row.  Dividers have no read target.
+- Headers use ~appkit-chat-read-count-text~ for reliable positive counts in the
+  current conversation.
+
+State belongs to the Surface: a replacement Surface starts fresh, and none of
+these helpers sends a receipt.
+
+* Message leaves
+
+~appkit-chat-ins~ holds small insertion helpers shared by message printers.
+
+- *Headings*: sender heading lines take ~appkit-chat-heading~ over the whole
+  line, including its newline.  Identity colors and timestamps keep precedence.
+- *Avatars*: ~appkit-chat-avatar-prefixes~ returns Telega's two-slice avatar as
+  ~:header~ / ~:first-body~ / ~:rest-body~ prefixes.
+  ~appkit-chat-avatar-one-line-string~ sizes an identity image to one text line
+  in character units, so it follows text zoom.
+- *Reply quotes*: ~appkit-chat-ins-insert-reply-preview~ takes a one-line preview
+  and the message's mutable body prefix.  It replaces the body's last indent
+  column with the shared border instead of adding a gutter.  The client supplies
+  the exact action to open the original.  Never infer mentions from plain text.
+- *Selection*: after inserting a selected message, call
+  ~appkit-chat-ins-apply-message-selection~ once with its heading and body
+  bounds, excluding dividers.  Customize ~appkit-chat-selection-marker~.
+- *Dividers, service rows, reactions*: full-width dividers, Telega-style
+  service rows with a right-aligned time, and reaction lines with
+  ~appkit-chat-reaction~ / ~appkit-chat-reaction-selected~.
+- *Transfers*: ~appkit-chat-ins-insert-transfer~ draws one upload or download
+  with direction, state, optional progress and byte counts, and one client
+  action.  It is presentation only, not an HTTP request or job.
+- *Media cards*: ~appkit-chat-ins-insert-media-card~ draws one attachment's
+  title, details, status and transfer line.  See [[file:media.org][media]] for
+  previews and playback.
+
+* Completion
+
+~appkit-chat-completion~ provides token bounds, candidate metadata, a CAPF, a
+picker and ordered TAB dispatch.  Clients provide member and emoji lookup,
+avatar acquisition and the insertion callback.  A selected mention becomes a
+client-defined structured input object.
+
+- ~appkit-chat-completion-read~ suits large or dynamic catalogs.  Candidate
+  ~group~ metadata becomes the native ~group-function~.
+- ~appkit-chat-completion-read-visual~ suits bounded image catalogs.  Previews
+  come through the native ~affixation-function~, so a frontend may strip
+  candidate properties without losing them.  For catalogs loaded
+  asynchronously, pass ~:subscribe~: it is called once the minibuffer is active
+  with a ~publish~ function for replacement candidates and a status line.
+  Exiting fences late publications.
+- ~appkit-chat-emoji~ adds ~:unicode_name:~ candidates from Emacs's built-in
+  emoji database, grouped by Unicode category.
+
+Do not hold a Surface render pass open for the lifetime of a picker.
+
+* Attachment keys
+
+Composer attachment keys follow Telega.  None of them sends a message:
+
+| Key       | Meaning                                         |
+|-----------+-------------------------------------------------|
+| ~C-c C-a~ | choose an attachment action                     |
+| ~C-c C-f~ | attach local media or files                     |
+| ~C-c C-v~ | attach clipboard files or image bytes           |
+
+A universal prefix forces a generic document only where the provider has a
+separate document kind.  ~appkit-media-read-file-name~ reads one readable regular
+file.  ~appkit-media-clipboard-source~ returns ~(:files PATHS)~ or ~(:mime-type
+MIME :suffix SUFFIX :data BYTES)~; local file URIs win over image bytes.  The
+client owns any private staging file it writes.  Clients without uploads leave
+these keys unbound.

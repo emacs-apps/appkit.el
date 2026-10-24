@@ -1,0 +1,375 @@
+#+title: Appkit runtime
+#+options: toc:2 num:nil
+
+An Appkit client runs as one *App* and any number of *Surfaces*.  Client code
+describes transitions, deferred work and presentation.  The runtime owns
+message order, the lifetime of asynchronous work, buffer lifecycle, and when
+presentation is committed.  Every other Appkit module builds on this contract.
+
+Detailed argument contracts live in docstrings.  This chapter explains the
+model and the rules that are easy to break.
+
+* Shape of a client
+
+#+begin_example
+                 App  (UI-free)
+   canonical model · Effects · Sources · Resources
+          │ read view            ▲ post-message
+          ▼                      │
+                 Surface  (one generated buffer)
+   local model · Effects · Sources · Renderer
+#+end_example
+
+- The *App* owns canonical domain state: accounts, protocol caches, shared
+  realtime connections.  It has no buffer.
+- A *Surface* owns one buffer and a viewer-local model.  It sees the App only
+  through a read view captured for the current pass.
+- Each owner runs on its own ~appkit-loop~: main thread only, a bounded
+  mailbox, one transition at a time.  Messages are processed in passes with a
+  frozen cutoff, so work queued during a pass runs in a later one.
+
+Client code never receives a loop, registry, or another owner's buffer.  It
+receives a /transition context/, and every effect it wants is returned as data.
+
+* Apps
+
+#+begin_src emacs-lisp
+(defconst example--app-type
+  (appkit-app-type-create
+   :name 'example
+   :init #'example--app-init        ; (context input) -> appkit-next
+   :update #'example--app-update    ; (context model message) -> appkit-next
+   :sources #'example--app-sources  ; optional: (model) -> desired Sources
+   :shutdown #'example--app-shutdown))
+
+(appkit-app-start example--app-type :identity 'default :input nil)
+#+end_src
+
+~appkit-app-start~ also takes positive bounds for commands, active Effects,
+Sources and attached Surfaces.  ~appkit-app-surface~ finds an attached Surface by
+identity, which is how a client reuses an open buffer instead of opening a
+second one.  ~appkit-app-close~ stops every attached Surface, cancels owned
+work and handles, then calls ~shutdown~.
+
+* Surfaces
+
+#+begin_src emacs-lisp
+(defconst example--surface-type
+  (appkit-surface-type-create
+   :name 'example-feed
+   :mode #'example-feed-mode        ; major mode, set up before attachment
+   :init #'example--feed-init
+   :update #'example--feed-update
+   :renderer-factory #'example--feed-renderer))
+
+(appkit-open-generated-surface
+ example--surface-type
+ :app app :identity '(feed home)    ; supplied together
+ :input initial-model
+ :buffer-name "*Example Home*"
+ :select t)                         ; display after the first presentation
+#+end_src
+
+~appkit-current-surface~ returns the Surface owning the current buffer.  The
+buffer is persistent ownership; windows are temporary viewports.
+
+- Killing the exact buffer or changing its major mode stops the Surface
+  synchronously.
+- Renaming, burying, hiding every window, or killing an indirect clone does
+  not.
+- ~appkit-surface-stop~ detaches the Surface and keeps the buffer.
+
+* Transitions
+
+~init~ receives ~(context input)~ and ~update~ receives ~(context model
+message)~.  Both return one of two values:
+
+- ~(appkit-next :model MODEL :render REQUEST :commands COMMANDS)~ accepts the
+  message.  ~:render~ is mandatory.  ~appkit-render-none~ requests no
+  presentation; any other value, including nil, is a request for the Surface's
+  Renderer.  Apps have no Renderer and use ~appkit-render-none~.
+- ~(appkit-next-reject REASON)~ is an expected domain rejection.  The model is
+  unchanged and nothing is rendered.
+
+The update function is the only place a model changes.  Callbacks, timers,
+renderers and process filters never mutate it directly.  A rejection keeps the
+previous model object, so a transition that may reject must not modify that
+object in place first.
+
+External code enters a loop in two ways:
+
+- ~appkit-app-send~ / ~appkit-surface-send~ deliver synchronously and return a
+  terminal ticket.  They are for commands and other host events that need the
+  result now.
+- ~appkit-app-post~ / ~appkit-surface-post~ enqueue and return ~enqueued~,
+  ~full~, ~stopped~ or ~faulted~.
+
+Neither may be called from inside a pass.  A transition, renderer, Effect
+starter or mapper that needs more work returns a command instead.
+
+** Transition context
+
+The context is opaque except for these accessors:
+
+- ~appkit-transition-context-owner-address~: this owner's address;
+- ~appkit-transition-context-parent-address~: the App, for an attached Surface;
+- ~appkit-transition-context-reply-route~: the route back to the sender of a
+  message that requested correlation;
+- ~appkit-transition-context-app-read-view~: the committed App snapshot for a
+  Surface pass.  Read it with ~appkit-app-read-view-model~.
+
+A read view is valid only for the current pass.  Do not store it in a model, a
+cache, or deferred work.
+
+* Commands
+
+Commands are the closed set of things a transition can ask for.  They run after
+the owner commits the pass, in a fixed order, and never reenter client code.
+
+| Constructor                       | Meaning                                       |
+|-----------------------------------+-----------------------------------------------|
+| ~appkit-command-start-effect~     | replace and start the Effect under its key    |
+| ~appkit-command-cancel-effect~    | revoke and cancel the Effect under a key      |
+| ~appkit-command-post-message~     | post a message to an address or reply route   |
+| ~appkit-command-source-intent~    | send a payload through a declared Source      |
+
+Effect commands fold by key within a pass: the last command for a key wins.
+Per-transition and per-pass counts are bounded.
+
+** Messages between owners
+
+#+begin_src emacs-lisp
+;; Surface → App, asking for a correlated reply.
+(appkit-command-post-message
+ :target (appkit-transition-context-parent-address context)
+ :message (list 'detail 'request token id)
+ :delivery 'report
+ :reply-correlation token)
+
+;; App → that exact Surface incarnation.
+(appkit-command-post-message
+ :target (appkit-transition-context-reply-route context)
+ :message (list 'detail 'loaded token value)
+ :delivery 'report)
+#+end_src
+
+The App commits before its reply is admitted, so a Surface that receives the
+reply already sees the new App state in its read view.  A reply route names an
+exact Surface incarnation: a replaced Surface never receives the old reply.
+If the target cannot accept a post, the sender later receives an
+~appkit-delivery-report~ in its own update.  Handle it rather than assuming
+delivery.
+
+* Effects
+
+An Effect is finite keyed work: an HTTP request, a decode, a file transfer.
+
+#+begin_src emacs-lisp
+(appkit-command-start-effect
+ (appkit-effect-create
+  :key (list 'page token)
+  :input request
+  :start (lambda (_context input observe resolve reject)
+           ;; Start transport; call RESOLVE or REJECT once, OBSERVE for progress.
+           (appkit-cancellation-create :kind 'transport :cancel #'abort))
+  :success (lambda (input value) (list 'page 'loaded input value))
+  :failure (lambda (input reason) (list 'page 'failed input reason))
+  :cancellation-requirement 'transport))
+#+end_src
+
+- Gate calls only stage payloads.  ~:success~, ~:failure~ and ~:observe~ mappers
+  run in a later pass and return the message delivered to ~update~.
+- The starter returns an ~appkit-cancellation~, or nil when it settled
+  synchronously.  ~logical~ revokes authority only; ~transport~ also aborts the
+  physical work and is required when the Effect demands it.
+- Starting another Effect with an equal key revokes the old one's authority
+  before cancelling it.  Late callbacks from revoked work are ignored.
+- Progress uses ~:observation-policy~ ~lossless~, ~latest~ or
+  ~coalesce-by-key~.  Lossless and keyed coalescing need a positive
+  ~:observation-pending-limit~.
+
+Effects that change canonical state belong to the App.  Only viewer-local work
+(for example, opening a media viewer from one buffer) belongs to a Surface.
+
+* Sources
+
+A Source is a long-lived producer: a websocket, an event stream, a watcher.
+Owners declare them instead of starting them:
+
+#+begin_src emacs-lisp
+:sources (lambda (model)
+           (when (example-logged-in-p model)
+             (list (appkit-source-spec-create
+                    :key 'realtime
+                    :identity (example-session-id model)
+                    :input (example-endpoint model)
+                    :start #'example--realtime-start
+                    :event #'example--realtime-event   ; payload -> message
+                    :closed #'example--realtime-closed
+                    :emission-policy 'lossless
+                    :pending-limit 256))))
+#+end_src
+
+After each pass that accepts a message, the runtime reconciles this desired
+set.  An unchanged key and
+identity keeps the running producer.  A changed identity revokes the old
+producer before starting its successor.  A key missing from the set stops it.
+A terminated Source stays as a tombstone until its identity changes or its key
+disappears, so a closed connection is not restarted on every pass.
+
+Event and close callbacks enter the runtime gate only.  Their mappers run in
+later passes.  Outbound sends use ~appkit-command-source-intent~ with the
+expected identity and a function-symbol result mapper.  The outcome is
+~accepted~, ~backpressured~, ~closed~ or ~stale~.  A ~quiescent-transport~ Source
+delays its replacement until the old transport reports quiescence.
+
+* Rendering
+
+A Surface's ~renderer-factory~ returns an ~appkit-generated-renderer~.  The
+runtime calls it only after the pass has committed:
+
+| Callback           | Called with                               | Role                                  |
+|--------------------+-------------------------------------------+---------------------------------------|
+| ~mount~            | ~(surface app-read-view model)~           | build the initial presentation cache  |
+| ~merge~            | ~(pending request)~                       | combine requests folded in one pass   |
+| ~render~           | ~(surface app-read-view model request)~   | update the buffer                     |
+| ~recover~          | ~(surface app-read-view model condition)~ | rebuild after a failed ~render~       |
+| ~unmount~          | ~(surface)~                               | drop presentation state               |
+| ~resource-request~ | ~(keys)~                                  | turn ready Resources into a request   |
+
+A Renderer reads the committed model and writes the buffer.  It does not change
+the model, post messages or start work.  ~render~ returns nil or an
+~appkit-render-result~ carrying Resource demands.
+
+Recovery must discard the damaged presentation cache and rebuild from the
+committed model.  Reissuing a full request against the same cache is not
+recovery.  Without ~recover~, a render error faults the Surface.
+
+** Projection renderer
+
+Most Surfaces are lists of keyed rows.  ~appkit-projection-renderer-create~
+supplies the whole Renderer:
+
+#+begin_src emacs-lisp
+(appkit-projection-renderer-create
+ :project-all #'example--rows        ; (surface app-read-view model) -> rows
+ :project-frame #'example--frame     ; optional -> (HEADER . FOOTER)
+ :printer #'example--print-row       ; (surface app-read-view row), inserts
+ :anchor-property 'example-row-key
+ :geometry-mode 'redraw)             ; or `reproject'
+#+end_src
+
+Rows are ~appkit-projection-row~ values with a stable ~:key~, a ~:payload~, an
+optional render ~:context~, presentation ~:dependencies~ and
+~:resource-demands~.  The row key is persistent identity: it anchors point and
+window positions across redraws, and retained presentation instances such as
+media tracks are keyed by it (see ~appkit-projection-printing-key~).
+
+Requests are ~appkit-projection-change~ values and merge field by field:
+
+| Field         | Effect                                                         |
+|---------------+----------------------------------------------------------------|
+| ~:full-p~     | reproject every row; unchanged rows are not reprinted          |
+| ~:keys~       | reproject and force-redraw these rows                          |
+| ~:resources~  | redraw rows depending on these keys, without reprojecting      |
+| ~:frame-p~    | recompute header and footer                                    |
+| ~:geometry-p~ | redraw every row (~redraw~), or reproject them (~reproject~)   |
+| ~:rekeys~     | promote old keys to new ones, keeping position and instances   |
+| ~:position~   | ~preserve~, ~first~, a row key, or a position snapshot         |
+
+Reconciliation compares each whole row with ~equal~, which ignores text
+properties: a row whose only change is in string properties needs ~:keys~ to be
+redrawn.  A row that moves is deleted and reinserted.
+
+Printers only insert.  Printing runs inside a content update, so prepared media
+in the inserted text is mounted once the whole render commits.
+
+Some helpers request redraws by posting an ~appkit-projection-change~ to the
+Surface as a message (translation, typical geometry callbacks).  A projection
+Surface's ~update~ should accept such a message and return it as its ~:render~
+request.
+
+** Buffer mutation boundaries
+
+Generated buffers change only through these forms:
+
+- ~appkit-with-content-update~: undo-free generated text changes.  Nested
+  updates coalesce, and completion mounts prepared media.
+- ~appkit-with-property-update~: display properties only.  It must not change
+  text (checked under ~appkit-strict-boundaries~).
+- ~appkit-with-edit-transaction~: an ordinary undoable edit, for editable
+  regions such as a composer.
+- ~appkit-with-raw-buffer-mutation~: an audited escape hatch with a reason.
+
+Editable document state (composers, compose buffers) stays under the module that
+owns it and is never rewritten by a Renderer.
+
+* Resources
+
+Resources are presentation assets discovered while rendering: covers, avatars,
+previews.  Rows declare them instead of fetching them:
+
+#+begin_src emacs-lisp
+(appkit-projection-row-create
+ :key key :payload item
+ :dependencies (list cover-key)          ; redraw this row when it is ready
+ :resource-demands
+ (list (appkit-resource-demand-create
+        :key cover-key
+        :input acquisition
+        :loader #'appkit-media-image-resource-load
+        :acquisition-identity (list 'cover url)
+        :sharing-policy 'shared             ; or `app-private'
+        :cache-policy 'while-interested)))  ; or `retain'
+#+end_src
+
+- Demands are committed only after a successful render.  The App's coordinator
+  deduplicates them and a process-wide broker bounds active and queued loads.
+- A loader receives ~(context input resolve reject)~ and returns a cancellation
+  capability.  Resolve with an ~appkit-resource-value~ when the value needs a
+  release function.
+- Completion redraws only rows that list the key in ~:dependencies~.  It never
+  calls ~update~, reprojects, or advances a revision.  Listing a demand does not
+  add the dependency; name the key in both places.
+- The printer reads ~(appkit-resource-state surface key)~: status ~pending~,
+  ~ready~ (with ~value~) or ~failed~ (with ~reason~).
+
+* Geometry
+
+Width-sensitive Surfaces call ~appkit-surface-enable-responsive-geometry~ with
+a callback that posts a geometry request, then
+~appkit-surface-refresh-responsive-geometry~ once the buffer is displayed.  The
+callback receives ~(surface width)~.  Renderers read the canonical window's width
+through ~appkit-surface-responsive-width~.
+
+Window and line-number changes notify only when the measured width changes.
+Text scaling always notifies, because image heights follow the line height even
+when the column count does not change.
+
+* Owned helpers
+
+- ~appkit-register-handle~ attaches a timer, process, hook or cleanup function
+  to an App or Surface.  The owner stopping cancels it.
+  ~appkit-retire-handle~ forgets a handle without cancelling it.
+- ~appkit-task-queue-create~ gives an owner a keyed FIFO with a live adjustable
+  concurrency limit.  Equal keys deduplicate across queued and active work.
+  Every completion carries a one-shot token, so stale or duplicate callbacks are
+  inert.  Prefer Effects or Resources for new work; the queue suits pools of
+  homogeneous background jobs.
+
+* Debugging
+
+~appkit-debug~ validates ownership and mutation invariants at runtime.
+~appkit-strict-boundaries~ turns boundary violations, such as text changes inside
+a property update, into errors.  Enable both in tests.
+
+* Not provided
+
+These are designed but not implemented.  Do not emulate them with direct
+callbacks or by reviving per-client control flow:
+
+- topic publish/subscribe between owners;
+- reset of a Surface in place;
+- select/activate/reset policies for reusing an existing Surface;
+- editable or hybrid Surfaces whose document is owned by an editor rather than
+  the Renderer.
