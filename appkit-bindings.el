@@ -66,6 +66,8 @@
     (latest :native ("C-c >") :evil ("g b"))
     (compose :read-only ("c") :evil ("c"))
     (search :read-only ("s") :evil ("g s"))
+    (filter-search :native ("C-c /") :read-only ("s") :evil ("S"))
+    (filter-cancel :evil ("_"))
     (mark :read-only ("m") :evil ("m"))
     (unmark :read-only ("u") :evil ("u"))
     (clear-marks :read-only ("U") :evil ("U"))
