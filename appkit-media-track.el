@@ -10,7 +10,8 @@
 ;; A track printed by a projection row is a retained instance identified by the
 ;; row key and its item files.  When its owner's render reprints that row, the
 ;; track is parked instead of closed and the reprinted occurrence adopts it, so
-;; selection, audio state and a live player survive redraws.
+;; selection, audio state and a live player survive redraws.  A changed
+;; geometry plan relays out the scene and the live target in place.
 
 ;;; Code:
 
@@ -35,7 +36,7 @@
                (:copier nil))
   "One retained selection; its current inline host owns the display spans."
   host descriptor
-  (index 0) poster inline-index muted parked)
+  (index 0) poster inline-index muted parked relayout)
 
 (cl-defun appkit-media-track-image
     (items pixel-height pixel-gap &key label session-function open-function)
@@ -394,29 +395,36 @@ M-RET remains the enclosing application's action.")
   "Mark TRACK as PARKED between its reaped and reprinted occurrences."
   (setf (appkit-media-track-parked track) parked))
 
-(defun appkit-media--track-adopt (host descriptor)
+(defun appkit-media--track-adopt (host descriptor poster)
   "Move a parked track matching DESCRIPTOR to HOST, or return nil.
-Only an identical geometry plan is compatible; anything else stays parked
-until its render completes and releases it."
+The identity fixes the items, so a changed geometry plan only rebuilds the
+selected POSTER now and marks the live inline for relayout once placed."
   (when-let* ((identity (appkit-media--track-descriptor-identity descriptor))
-              (plan (appkit-media--track-descriptor-plan descriptor))
               (old (cl-find-if
                     (lambda (parked)
-                      (let ((descriptor (appkit-media-track-descriptor
-                                         (appkit-media-inline-host-track parked))))
-                        (and (equal identity (appkit-media--track-descriptor-identity descriptor))
-                             (equal (appkit-media--track-descriptor-plan descriptor)
-                                    plan))))
+                      (equal identity
+                             (appkit-media--track-descriptor-identity
+                              (appkit-media-track-descriptor
+                               (appkit-media-inline-host-track parked)))))
                     appkit-media--inline-parked)))
-    (let ((track (appkit-media-inline-host-track old))
-          (inline (appkit-media-inline-host-inline old)))
+    (let* ((track (appkit-media-inline-host-track old))
+           (inline (appkit-media-inline-host-inline old))
+           (relayout (not (equal (appkit-media--track-descriptor-plan descriptor)
+                                 (appkit-media--track-plan track)))))
       (setq appkit-media--inline-parked (delq old appkit-media--inline-parked))
       (setf (appkit-media-inline-host-inline old) nil
             (appkit-media-inline-host-track old) nil
             (appkit-media-inline-host-inline host) inline
             (appkit-media-track-host track) host
             (appkit-media-track-descriptor track) descriptor
-            (appkit-media-track-parked track) nil)
+            (appkit-media-track-parked track) nil
+            (appkit-media-track-relayout track) relayout)
+      (when relayout
+        ;; Derive the selected viewport from the new occurrence's slices.
+        (setf (appkit-media-track-poster track) poster)
+        (unless (zerop (appkit-media-track-index track))
+          (setf (appkit-media-track-poster track)
+                (appkit-media--track-poster track (appkit-media-track-index track)))))
       track)))
 
 (defun appkit-media--track-placed (host)
@@ -428,7 +436,20 @@ until its render completes and releases it."
          (target (and inline (video-inline-target inline))))
     (when inline
       (video-inline-relocate inline (car (appkit-media-inline-host-overlays host)))
+      (when (appkit-media-track-relayout track)
+        (let* ((plan (appkit-media--track-plan track))
+               (cell (nth (appkit-media-track-inline-index track) (plist-get plan :items)))
+               (poster (appkit-media-track-poster track)))
+          (video-inline-set-geometry
+           inline (plist-get cell :width) (plist-get plan :height)
+           :poster poster
+           :canvas (appkit-media--track-scene track)
+           :canvas-width (plist-get plan :width)
+           :canvas-height (plist-get plan :height)
+           :destination-x (- (plist-get cell :x)
+                             (or (plist-get (cdr poster) :appkit-media-strip-offset) 0)))))
       (appkit-media-video-inline-bind-controls surface (appkit-media-inline-host-map host)))
+    (setf (appkit-media-track-relayout track) nil)
     ;; A fresh track already displays its own occurrence poster.
     (when (or inline
               (not (eq (appkit-media-track-poster track)
@@ -444,7 +465,7 @@ until its render completes and releases it."
   "Attach typed state to HOST for DESCRIPTOR and POSTER at POSITION.
 Adopt a parked track with the same identity, else create one.  Return an
 occurrence-local keymap; the inline host owns all overlays/hooks."
-  (let* ((track (or (appkit-media--track-adopt host descriptor)
+  (let* ((track (or (appkit-media--track-adopt host descriptor poster)
                     (appkit-media--track-create
                      :host host :descriptor descriptor :poster poster)))
          (map (make-sparse-keymap))

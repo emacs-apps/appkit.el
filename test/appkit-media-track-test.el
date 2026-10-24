@@ -187,6 +187,47 @@
             (should (equal closed '(lease)))
             (should-not appkit-media--inline-parked)))))))
 
+(ert-deftest appkit-media-track-row-reprint-relays-out-live-inline ()
+  (appkit-media-track-test--with-images
+    (let* ((prepare (lambda (height)
+                      (let ((appkit-projection-printing-key 'row))
+                        (appkit-media-image-display-string
+                         (apply #'appkit-media-track-image
+                                '((:file "/preview-a.png" :display-width 40 :playable-p t)
+                                  (:file "/preview-b.png" :display-width 70 :playable-p t))
+                                height 3 nil)
+                         ;; Payloads compare without properties: vary the text.
+                         (format "preview-%d" height)))))
+           (native (video--make-inline :buffer nil))
+           (surface-inline (appkit-media--video-inline-create :inline native))
+           closed)
+      (cl-letf (((symbol-function 'appkit-media-video-inline-close)
+                 (lambda (lease) (push lease closed)))
+                ((symbol-function 'appkit-media-video-inline-bind-controls) #'ignore)
+                ((symbol-function 'video-background-color) (lambda (&rest _) "black"))
+                ((symbol-function 'video-canvas-create)
+                 (lambda (width height _) (list 'image :type 'canvas :width width :height height)))
+                ((symbol-function 'video-canvas-draw-source) #'ignore)
+                ((symbol-function 'canvas-refresh) #'ignore))
+        (appkit-media-inline-test--with-surface (list :body (funcall prepare 20))
+          (let ((track (appkit-media-track-at-point 1)))
+            (setf (video-inline-buffer native) (current-buffer)
+                  (appkit-media-inline-host-inline (appkit-media-inline-host-at-point 1))
+                  surface-inline
+                  (appkit-media-track-inline-index track) 0)
+            (appkit-surface-send surface (list :body (funcall prepare 30)))
+            (let ((plan (appkit-media--track-plan track)))
+              (should (eq (appkit-media-track-at-point 1) track))
+              (should-not closed)
+              (should (= (plist-get plan :height) 30))
+              (should (= (video-inline-height native) 30))
+              (should (= (video-inline-width native)
+                         (plist-get (car (plist-get plan :items)) :width)))
+              (should (= (video-inline-canvas-width native) (plist-get plan :width)))
+              (should (eq (video-inline-anchor native)
+                          (car (appkit-media-inline-host-overlays
+                                (appkit-media-inline-host-at-point 1))))))))))))
+
 (ert-deftest appkit-media-track-unclaimed-session-is-closed-on-scene-failure ()
   (with-temp-buffer
     (appkit-media-track-test--with-images
