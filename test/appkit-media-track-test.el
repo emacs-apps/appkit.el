@@ -161,6 +161,32 @@
           (appkit-surface-stop surface)
           (should-not appkit-media--inline-hosts))))))
 
+(ert-deftest appkit-media-track-row-reprint-retains-instance-until-removal ()
+  (appkit-media-track-test--with-images
+    (let* ((image (let ((appkit-projection-printing-key 'row))
+                    (appkit-media-track-test--image)))
+           (text (appkit-media-image-display-string image "preview"))
+           closed)
+      (cl-letf (((symbol-function 'appkit-media-video-inline-close)
+                 (lambda (lease) (push lease closed))))
+        (appkit-media-inline-test--with-surface (list :body text)
+          (let ((track (appkit-media-track-at-point 1))
+                (host (appkit-media-inline-host-at-point 1)))
+            (appkit-media-track-select track 1)
+            (setf (appkit-media-inline-host-inline host) 'lease)
+            ;; New trailing text forces the row to be reprinted.
+            (appkit-surface-send surface (list :body (concat text "!")))
+            (should (eq (appkit-media-track-at-point 1) track))
+            (should-not (eq (appkit-media-inline-host-at-point 1) host))
+            (should (= (appkit-media-track-index track) 1))
+            (should (eq (appkit-media-inline-host-inline
+                         (appkit-media-inline-host-at-point 1))
+                        'lease))
+            (should-not closed)
+            (appkit-surface-send surface nil)
+            (should (equal closed '(lease)))
+            (should-not appkit-media--inline-parked)))))))
+
 (ert-deftest appkit-media-track-unclaimed-session-is-closed-on-scene-failure ()
   (with-temp-buffer
     (appkit-media-track-test--with-images

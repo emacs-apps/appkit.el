@@ -4,8 +4,13 @@
 
 ;;; Commentary:
 ;; A prepared track contains only a static image and immutable geometry and
-;; adapters.  Each mounted occurrence borrows the existing inline host's
-;; overlays, owner fence and video lease; cached source text never changes.
+;; adapters.  Each mounted track borrows its current inline host's overlays,
+;; owner fence and video lease; cached source text never changes.
+;;
+;; A track printed by a projection row is a retained instance identified by the
+;; row key and its item files.  When its owner's render reprints that row, the
+;; track is parked instead of closed and the reprinted occurrence adopts it, so
+;; selection, audio state and a live player survive redraws.
 
 ;;; Code:
 
@@ -13,11 +18,14 @@
 (require 'appkit-media-inline)
 (require 'appkit-ui)
 
+(defvar appkit-projection-printing-key)
+
 (cl-defstruct (appkit-media--track-descriptor
                (:constructor appkit-media--track-descriptor-create)
                (:copier nil))
   "Immutable geometry and application policy for a prepared media track."
   (plan nil :read-only t)
+  (identity nil :read-only t)
   (label nil :read-only t)
   (session-function nil :read-only t)
   (open-function nil :read-only t))
@@ -25,10 +33,9 @@
 (cl-defstruct (appkit-media-track
                (:constructor appkit-media--track-create)
                (:copier nil))
-  "One occurrence's selection; its inline host owns all runtime resources."
-  (host nil :read-only t)
-  (descriptor nil :read-only t)
-  (index 0) poster inline-index muted)
+  "One retained selection; its current inline host owns the display spans."
+  host descriptor
+  (index 0) poster inline-index muted parked)
 
 (cl-defun appkit-media-track-image
     (items pixel-height pixel-gap &key label session-function open-function)
@@ -73,7 +80,12 @@ occurrence independently; elsewhere call `appkit-media-inline-mount'."
                 (plist-put
                  (copy-sequence (cdr image)) :appkit-media-track
                  (appkit-media--track-descriptor-create
-                  :plan plan :label label :session-function session-function
+                  :plan plan
+                  :identity
+                  (and (bound-and-true-p appkit-projection-printing-key)
+                       (cons appkit-projection-printing-key
+                             (mapcar (lambda (item) (plist-get item :file)) prepared)))
+                  :label label :session-function session-function
                   :open-function open-function))))))))
 
 (defun appkit-media-track-at-point (&optional position)
@@ -215,23 +227,31 @@ Prepare replacement geometry before retiring the old inline lease."
                               (or (plist-get (cdr (appkit-media-track-poster track))
                                              :appkit-media-strip-offset) 0))
                            :anchor (car (appkit-media-inline-host-overlays host))
+                           ;; Resolve the host per call: a reprint moves this
+                           ;; track and its inline to a new host.
                            :visible-function
-                           (lambda (_) (appkit-media--inline-visible-p host))
+                           (lambda (_)
+                             (appkit-media--inline-visible-p (appkit-media-track-host track)))
                            :alive-function
-                           (lambda (_) (appkit-media-inline-host-live-p host))
+                           (lambda (_)
+                             (or (appkit-media-track-parked track)
+                                 (appkit-media-inline-host-live-p
+                                  (appkit-media-track-host track))))
                            :activate-function
                            (lambda (native canvas)
-                             (when-let* ((surface (appkit-media-inline-host-inline host))
-                                         ((eq native
-                                              (appkit-media-video-inline-inline surface))))
-                               (appkit-media--inline-show-canvas host native canvas)))
+                             (let ((host (appkit-media-track-host track)))
+                               (when-let* ((surface (appkit-media-inline-host-inline host))
+                                           ((eq native
+                                                (appkit-media-video-inline-inline surface))))
+                                 (appkit-media--inline-show-canvas host native canvas))))
                            :close-function
                            (lambda (surface)
-                             (when (eq surface (appkit-media-inline-host-inline host))
-                               (setf (appkit-media-inline-host-inline host) nil
-                                     (appkit-media-track-inline-index track) nil)
-                               (appkit-media--inline-show-canvas
-                                host surface (appkit-media-track-poster track))))))
+                             (let ((host (appkit-media-track-host track)))
+                               (when (eq surface (appkit-media-inline-host-inline host))
+                                 (setf (appkit-media-inline-host-inline host) nil
+                                       (appkit-media-track-inline-index track) nil)
+                                 (appkit-media--inline-show-canvas
+                                  host surface (appkit-media-track-poster track)))))))
                     (setf (appkit-media-inline-host-inline host) inline
                           (appkit-media-track-inline-index track) index)
                     (appkit-media-video-inline-bind-controls
@@ -370,11 +390,63 @@ M-RET remains the enclosing application's action.")
       (appkit-media--track-select-index track index (appkit-media-track-poster track)))
     (appkit-media-track-activate track)))
 
+(defun appkit-media--track-set-parked (track parked)
+  "Mark TRACK as PARKED between its reaped and reprinted occurrences."
+  (setf (appkit-media-track-parked track) parked))
+
+(defun appkit-media--track-adopt (host descriptor)
+  "Move a parked track matching DESCRIPTOR to HOST, or return nil.
+Only an identical geometry plan is compatible; anything else stays parked
+until its render completes and releases it."
+  (when-let* ((identity (appkit-media--track-descriptor-identity descriptor))
+              (plan (appkit-media--track-descriptor-plan descriptor))
+              (old (cl-find-if
+                    (lambda (parked)
+                      (let ((descriptor (appkit-media-track-descriptor
+                                         (appkit-media-inline-host-track parked))))
+                        (and (equal identity (appkit-media--track-descriptor-identity descriptor))
+                             (equal (appkit-media--track-descriptor-plan descriptor)
+                                    plan))))
+                    appkit-media--inline-parked)))
+    (let ((track (appkit-media-inline-host-track old))
+          (inline (appkit-media-inline-host-inline old)))
+      (setq appkit-media--inline-parked (delq old appkit-media--inline-parked))
+      (setf (appkit-media-inline-host-inline old) nil
+            (appkit-media-inline-host-track old) nil
+            (appkit-media-inline-host-inline host) inline
+            (appkit-media-track-host track) host
+            (appkit-media-track-descriptor track) descriptor
+            (appkit-media-track-parked track) nil)
+      track)))
+
+(defun appkit-media--track-placed (host)
+  "Bind HOST's adopted live inline and selection to its new overlays."
+  (let* ((track (appkit-media-inline-host-track host))
+         (surface (appkit-media-inline-host-inline host))
+         (inline (and surface (not (appkit-media-video-inline-closed-p surface))
+                      (appkit-media-video-inline-inline surface)))
+         (target (and inline (video-inline-target inline))))
+    (when inline
+      (video-inline-relocate inline (car (appkit-media-inline-host-overlays host)))
+      (appkit-media-video-inline-bind-controls surface (appkit-media-inline-host-map host)))
+    ;; A fresh track already displays its own occurrence poster.
+    (when (or inline
+              (not (eq (appkit-media-track-poster track)
+                       (appkit-media--occurrence-image
+                        (appkit-media-inline-host-occurrence host)))))
+      (appkit-media--inline-show-canvas
+       host inline
+       (if (and target (video-inline-active inline))
+           (video-target-canvas target)
+         (appkit-media-track-poster track))))))
+
 (defun appkit-media--track-mount (host descriptor poster position)
   "Attach typed state to HOST for DESCRIPTOR and POSTER at POSITION.
-Return an occurrence-local keymap; the inline host owns all overlays/hooks."
-  (let* ((track (appkit-media--track-create
-                 :host host :descriptor descriptor :poster poster))
+Adopt a parked track with the same identity, else create one.  Return an
+occurrence-local keymap; the inline host owns all overlays/hooks."
+  (let* ((track (or (appkit-media--track-adopt host descriptor)
+                    (appkit-media--track-create
+                     :host host :descriptor descriptor :poster poster)))
          (map (make-sparse-keymap))
          (outer (get-text-property position 'keymap)))
     (setf (appkit-media-inline-host-track host) track)

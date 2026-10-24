@@ -15,6 +15,11 @@
 (require 'video-inline)
 
 (autoload 'appkit-media--track-mount "appkit-media-track")
+(autoload 'appkit-media--track-placed "appkit-media-track")
+(declare-function appkit-media-track-descriptor "appkit-media-track" (track))
+(declare-function appkit-media--track-descriptor-identity "appkit-media-track"
+                  (descriptor))
+(declare-function appkit-media--track-set-parked "appkit-media-track" (track parked))
 (autoload 'appkit-media-track-activate "appkit-media-track")
 
 (cl-defstruct (appkit-media-inline-host
@@ -34,6 +39,10 @@
 
 (defvar-local appkit-media--inline-prune-tick nil
   "Last character tick accounted for by normal modification hooks.")
+
+(defvar-local appkit-media--inline-parked nil
+  "Track hosts detached by their owner's running render, awaiting adoption.
+Each keeps its track and live inline; overlays and owner handle are gone.")
 
 (defun appkit-media-inline-host-live-p (host)
   "Return non-nil while HOST owns all its original prepared image spans."
@@ -108,6 +117,46 @@
           (setq appkit-media--inline-hosts
                 (delq host appkit-media--inline-hosts)))))))
 
+(defun appkit-media--inline-retainable-p (host)
+  "Return non-nil when HOST's track may survive its owner's running render."
+  (and appkit-surface--rendering
+       (eq appkit-surface--rendering (appkit-media-inline-host-owner host))
+       (when-let* ((track (appkit-media-inline-host-track host)))
+         (appkit-media--track-descriptor-identity
+          (appkit-media-track-descriptor track)))))
+
+(defun appkit-media--inline-release-parked ()
+  "Close every parked track that its render did not remount."
+  (let ((parked appkit-media--inline-parked))
+    (setq appkit-media--inline-parked nil)
+    (dolist (host parked)
+      (let ((track (appkit-media-inline-host-track host))
+            (inline (appkit-media-inline-host-inline host)))
+        (appkit-media--track-set-parked track nil)
+        (setf (appkit-media-inline-host-inline host) nil)
+        (when inline (appkit-media-video-inline-close inline))))))
+
+(defun appkit-media--inline-retire (host)
+  "Close dead HOST, or park its track while its owner's render may reprint it."
+  (if (not (appkit-media--inline-retainable-p host))
+      (appkit-media--inline-close host)
+    (let ((track (appkit-media-inline-host-track host))
+          (inline (appkit-media-inline-host-inline host))
+          (buffer (current-buffer)))
+      (appkit-media--track-set-parked track t)
+      (setf (appkit-media-inline-host-inline host) nil)
+      (appkit-media--inline-close host)
+      (setf (appkit-media-inline-host-inline host) inline)
+      (unless appkit-media--inline-parked
+        ;; Render completion releases leftovers; this only covers a render
+        ;; that never reached its completion boundary.
+        (run-at-time 0 nil (lambda ()
+                             (when (buffer-live-p buffer)
+                               (with-current-buffer buffer
+                                 (appkit-media--inline-release-parked))))))
+      (setq appkit-media--inline-parked
+            (append appkit-media--inline-parked (list host))))))
+
 (defun appkit-media--inline-hosts-in-region (start end)
   "Return distinct owned hosts whose overlays intersect START..END."
   (let (hosts)
@@ -129,10 +178,12 @@ FORCE also checks property-only changes and externally removed overlays."
     (setq appkit-media--inline-prune-tick (buffer-chars-modified-tick))
     (dolist (host appkit-media--inline-hosts)
       (unless (appkit-media-inline-host-live-p host)
-        (appkit-media--inline-close host)))))
+        (appkit-media--inline-retire host)))))
 
 (defun appkit-media--inline-before-change (start end)
-  "Remember owned spans intersecting the pending buffer change."
+  "Remember owned spans intersecting the pending buffer change.
+Mark retainable tracks parked first: video.el's own change hook must not
+close their inline before the reap below decides between park and close."
   (appkit-media--inline-prune)
   (setq appkit-media--inline-change
         (cons
@@ -145,16 +196,21 @@ FORCE also checks property-only changes and externally removed overlays."
                       (and (< (overlay-start overlay) start)
                            (< start (overlay-end overlay))))
                     (appkit-media-inline-host-overlays host))
-               (list host)))))))
+               (list host))))))
+  (dolist (host (cdr appkit-media--inline-change))
+    (when (appkit-media--inline-retainable-p host)
+      (appkit-media--track-set-parked (appkit-media-inline-host-track host) t))))
 
 (defun appkit-media--inline-reap (&rest _ignored)
   "Retire character replacements, preserving hosts across property styling."
   (let ((change appkit-media--inline-change))
     (setq appkit-media--inline-change nil)
     (dolist (host (cdr change))
-      (when (or (/= (car change) (buffer-chars-modified-tick))
-                (not (appkit-media-inline-host-live-p host)))
-        (appkit-media--inline-close host))))
+      (if (or (/= (car change) (buffer-chars-modified-tick))
+              (not (appkit-media-inline-host-live-p host)))
+          (appkit-media--inline-retire host)
+        (when-let* ((track (appkit-media-inline-host-track host)))
+          (appkit-media--track-set-parked track nil)))))
   (setq appkit-media--inline-prune-tick (buffer-chars-modified-tick)))
 
 (defun appkit-media--inline-release-all ()
@@ -163,7 +219,8 @@ FORCE also checks property-only changes and externally removed overlays."
     (cancel-timer appkit-media--inline-start-timer))
   (setq appkit-media--inline-start-timer nil)
   (dolist (host (copy-sequence appkit-media--inline-hosts))
-    (appkit-media--inline-close host)))
+    (appkit-media--inline-close host))
+  (appkit-media--inline-release-parked))
 
 (defun appkit-media--inline-canvas-p (host)
   "Return non-nil if HOST's buffer has a Canvas-capable graphical window."
@@ -519,6 +576,7 @@ interactions use a viewer."
                               (t "RET: open viewer"))))))
           (setf (appkit-media-inline-host-overlays host)
                 (nreverse (appkit-media-inline-host-overlays host)))
+          (when descriptor (appkit-media--track-placed host))
           (push host appkit-media--inline-hosts)
           (add-hook 'before-change-functions #'appkit-media--inline-before-change nil t)
           (add-hook 'after-change-functions #'appkit-media--inline-reap nil t)
@@ -558,7 +616,7 @@ Return newly created hosts in order."
   ;; Retire it before deciding whether its replacement needs an overlay.
   (dolist (host (appkit-media--inline-hosts-in-region start end))
     (unless (appkit-media-inline-host-live-p host)
-      (appkit-media--inline-close host)))
+      (appkit-media--inline-retire host)))
   (unless (text-property-not-all start end 'appkit-media-occurrence nil)
     (cl-return-from appkit-media-inline-mount nil))
   (let ((position start)

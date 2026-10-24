@@ -62,12 +62,17 @@
   rekeys
   position)
 
+(defvar appkit-projection-printing-key nil
+  "Stable key of the row whose printer is running, or nil outside printers.
+Retained presentation instances combine it with their own slot identity.")
+
 (defun appkit-projection--print-row (projection row)
   "Render projected ROW through PROJECTION's client printer."
   (let ((printer (appkit-projection--engine-printer projection)))
     (unless (functionp printer)
       (error "Appkit projection has no row printer"))
-    (funcall printer row)))
+    (let ((appkit-projection-printing-key (appkit-projection-row-key row)))
+      (funcall printer row))))
 
 (cl-defun appkit-projection-create
     (printer anchor-property &key header footer no-separator-p)

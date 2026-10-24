@@ -44,6 +44,7 @@
 (declare-function video-session-inline-create "video-inline" (session width height &rest args))
 (declare-function video-inline-prepare "video-inline" (inline))
 (declare-function appkit-media--inline-prune "appkit-media-inline" (&optional force))
+(declare-function appkit-media--inline-release-parked "appkit-media-inline" ())
 
 (autoload 'appkit-media-inline-mount "appkit-media-inline"
   "Mount prepared media between START and END." nil)
@@ -58,7 +59,10 @@ retire stale hosts; they never start presentation of partial output."
       (appkit-media--inline-prune t)))
    ((or (featurep 'appkit-media-inline)
         (text-property-not-all start end 'appkit-media-occurrence nil))
-    (appkit-media-inline-mount start end owner))))
+    (appkit-media-inline-mount start end owner)))
+  ;; Tracks parked by this render and not remounted are truly removed.
+  (when (featurep 'appkit-media-inline)
+    (appkit-media--inline-release-parked)))
 
 (defgroup appkit-media nil
   "Media rendering primitives for Appkit applications."
