@@ -177,7 +177,7 @@
             ;; New trailing text forces the row to be reprinted.
             (appkit-surface-send surface (list :body (concat text "!")))
             (should (eq (appkit-media-track-at-point 1) track))
-            (should-not (eq (appkit-media-inline-host-at-point 1) host))
+            (should (eq (appkit-media-inline-host-at-point 1) host))
             (should (= (appkit-media-track-index track) 1))
             (should (eq (appkit-media-inline-host-inline
                          (appkit-media-inline-host-at-point 1))
@@ -233,6 +233,11 @@
               (should (= (video-inline-canvas-width native)
                          (round (* 1.2 (plist-get plan :width)))))
               (should (= (plist-get (cdr (video-inline-canvas native)) :height) 30))
+              ;; A text-only update relocates the lease without rebuilding pixels.
+              (let ((canvas (video-inline-canvas native)))
+                (appkit-surface-send surface
+                                     (list :body (concat (funcall prepare 25) "!")))
+                (should (eq canvas (video-inline-canvas native))))
               (should (eq (video-inline-anchor native)
                           (car (appkit-media-inline-host-overlays
                                 (appkit-media-inline-host-at-point 1))))))))))))

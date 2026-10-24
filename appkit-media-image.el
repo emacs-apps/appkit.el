@@ -50,19 +50,19 @@
   "Mount prepared media between START and END." nil)
 
 (defun appkit-media--render-complete (owner start end success)
-  "Reconcile OWNER's final prepared image spans after a content update.
-Do not load the playback adapter for text-only buffers.  Failed updates only
-retire stale hosts; they never start presentation of partial output."
-  (cond
-   ((not success)
+  "Reconcile OWNER's final media spans and release unclaimed instances.
+A failed render never starts presentation of partial output.  Cleanup also
+runs when mounting or relayout of a replacement occurrence fails."
+  (unwind-protect
+      (cond
+       ((not success)
+        (when (featurep 'appkit-media-inline)
+          (appkit-media--inline-prune t)))
+       ((or (featurep 'appkit-media-inline)
+            (text-property-not-all start end 'appkit-media-occurrence nil))
+        (appkit-media-inline-mount start end owner)))
     (when (featurep 'appkit-media-inline)
-      (appkit-media--inline-prune t)))
-   ((or (featurep 'appkit-media-inline)
-        (text-property-not-all start end 'appkit-media-occurrence nil))
-    (appkit-media-inline-mount start end owner)))
-  ;; Tracks parked by this render and not remounted are truly removed.
-  (when (featurep 'appkit-media-inline)
-    (appkit-media--inline-release-parked)))
+      (appkit-media--inline-release-parked))))
 
 (defgroup appkit-media nil
   "Media rendering primitives for Appkit applications."
