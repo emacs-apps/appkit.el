@@ -409,8 +409,15 @@ selected POSTER now and marks the live inline for relayout once placed."
                     appkit-media--inline-parked)))
     (let* ((track (appkit-media-inline-host-track old))
            (inline (appkit-media-inline-host-inline old))
-           (relayout (not (equal (appkit-media--track-descriptor-plan descriptor)
-                                 (appkit-media--track-plan track)))))
+           (relayout
+            (or (not (equal (appkit-media--track-descriptor-plan descriptor)
+                            (appkit-media--track-plan track)))
+                ;; Line height rescales the same pixel plan into new slices.
+                (cl-some (lambda (property)
+                           (not (equal (plist-get (cdr poster) property)
+                                       (plist-get (cdr (appkit-media-track-poster track))
+                                                  property))))
+                         '(:width :height :scale :appkit-media-nslices)))))
       (setq appkit-media--inline-parked (delq old appkit-media--inline-parked))
       (setf (appkit-media-inline-host-inline old) nil
             (appkit-media-inline-host-track old) nil
