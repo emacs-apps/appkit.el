@@ -717,7 +717,7 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
         (should-not (nth 2 entry))
         (should (eq (nth 3 entry) 'blocked))))))
 
-(ert-deftest appkit-surface-fault-remains-attached-until-owner-stop ()
+(ert-deftest appkit-surface-fault-is-reaped-by-identity-lookup ()
   (let (app surface buffer)
     (unwind-protect
         (progn
@@ -764,7 +764,8 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
             (should (eq (appkit-current-surface) surface)))
           (should-error (appkit-surface-send surface 'after-fault)
                         :type 'error)
-          (should (appkit-app-close app))
+          ;; Looking the identity up reaps the dead Surface so it can reopen.
+          (should-not (appkit-app-surface app 'faulted))
           (should (eq (appkit-surface-status surface) 'stopped))
           (should (= (appkit-app-surface-count app) 0))
           (should (buffer-live-p buffer))

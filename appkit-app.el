@@ -25,6 +25,7 @@
 (require 'appkit-topic)
 
 (declare-function appkit-surface-stop "appkit-surface")
+(declare-function appkit-surface-status "appkit-surface")
 (declare-function appkit-surface--parent-fault "appkit-surface")
 
 (cl-defstruct (appkit-app-type
@@ -83,10 +84,16 @@
   (hash-table-count (appkit-app-surfaces app)))
 
 (defun appkit-app-surface (app identity)
-  "Return APP's registered Surface for IDENTITY, or nil."
+  "Return APP's registered Surface for IDENTITY, or nil.
+A faulted Surface never recovers, so a live APP stops it here and returns nil;
+the caller then opens a fresh Surface on the detached buffer."
   (unless (appkit-app-p app)
     (signal 'wrong-type-argument (list 'appkit-app-p app)))
-  (cdr (gethash identity (appkit-app-surfaces app))))
+  (let ((surface (cdr (gethash identity (appkit-app-surfaces app)))))
+    (if (and surface (appkit-app-live-p app)
+             (eq (appkit-surface-status surface) 'faulted))
+        (ignore (appkit-surface-stop surface))
+      surface)))
 
 (defun appkit-app--read-view (app)
   "Capture APP's current committed read view, or signal if APP is unavailable."
