@@ -20,6 +20,7 @@
 ;;; Code:
 
 (require 'appkit-cleanup)
+(require 'appkit-url)
 (require 'appkit-core)
 (require 'appkit-loop)
 (require 'appkit-routing)
