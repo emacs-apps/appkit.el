@@ -709,7 +709,8 @@
               (appkit-media--inline-release-all))))))))
 
 (ert-deftest appkit-media-inline-hidden-images-release-playback-and-can-reopen ()
-  (let ((appkit-media--inline-image-hosts nil)
+  (let ((appkit-media--inline-image-sessions (make-hash-table :test #'equal))
+        (appkit-media--inline-image-hosts nil)
         (visible t)
         players)
     (with-temp-buffer
@@ -769,6 +770,73 @@
             (should (eq inline (appkit-media-inline-host-inline host)))
             (appkit-media--inline-close host)
             (should (video-player-closed (car players)))))))))
+
+(ert-deftest appkit-media-inline-auto-images-share-only-compatible-sessions ()
+  (let ((appkit-media--inline-image-hosts nil)
+        (appkit-media--inline-image-sessions (make-hash-table :test #'equal))
+        (first-buffer (generate-new-buffer " *inline shared first*"))
+        (second-buffer (generate-new-buffer " *inline shared second*"))
+        players)
+    (cl-letf (((symbol-function 'appkit-media--inline-schedule-start) #'ignore)
+              ((symbol-function 'video-native-close) #'ignore)
+              ((symbol-function 'appkit-media-video-session-create)
+               (lambda (resource _label &rest options)
+                 (let* ((player (video--make-player
+                                 :source "https://example.invalid/animation.gif"
+                                 :kind 'image :handle (make-symbol "native-player")))
+                        (session (video--make-session :player player :auto-close t)))
+                   (setf (video-player-session player) session)
+                   (push player players)
+                   (appkit-media--video-session-create
+                    :resource resource :kind (plist-get options :kind)
+                    :video-session session)))))
+      (unwind-protect
+          (cl-labels ((host (buffer)
+                        (with-current-buffer buffer
+                          (let ((host (appkit-media-inline-test--insert
+                                       (appkit-media-inline-test--thumbnail t))))
+                            (setf (appkit-media-inline-host-resource host)
+                                  '((url . "https://example.invalid/animation.gif")))
+                            host))))
+            (let* ((first (host first-buffer))
+                   (second (host second-buffer))
+                   (first-inline (appkit-media--inline-ensure first))
+                   (second-inline (appkit-media--inline-ensure second))
+                   (session (appkit-media-video-inline-session first-inline))
+                   (player (car players)))
+              (should-not (eq first-inline second-inline))
+              (should (eq session (appkit-media-video-inline-session second-inline)))
+              (should (= 1 (length players)))
+              (appkit-media--inline-close first)
+              (should (video-player-live-p player))
+              (should (= 1 (video-session-presentation-count
+                            (appkit-media-video-session-video-session session))))
+              ;; A failed second presentation must not close another lease.
+              (let ((failed (host first-buffer)))
+                (cl-letf (((symbol-function 'appkit-media-video-inline-create)
+                           (lambda (&rest _) (error "Cannot create this presentation"))))
+                  (should-error (appkit-media--inline-ensure failed)))
+                (should (video-player-live-p player))
+                (should (= 1 (length players))))
+              (let ((once (host first-buffer))
+                    (headers (host first-buffer)))
+                (setf (appkit-media-playback-animation-loop-policy
+                       (appkit-media-inline-host-plan once)) 'once
+                      (appkit-media-playback-request-headers
+                       (appkit-media-inline-host-plan headers))
+                      '(("Authorization" . "different-account")))
+                (appkit-media--inline-ensure once)
+                (appkit-media--inline-ensure headers)
+                (should (= 3 (length players))))
+              (appkit-media-video-inline-close second-inline)
+              (should (video-player-closed player))
+              (appkit-media--inline-ensure second)
+              (should (= 4 (length players)))
+              (should (video-player-live-p (car players)))))
+        (kill-buffer first-buffer)
+        (kill-buffer second-buffer))
+      (should (cl-every #'video-player-closed players))
+      (should-not appkit-media--inline-image-hosts))))
 
 (provide 'appkit-media-inline-test)
 ;;; appkit-media-inline-test.el ends here

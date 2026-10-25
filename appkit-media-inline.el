@@ -45,6 +45,10 @@
   "Hosts detached by their owner's render, awaiting another occurrence.
 Their owner handle, pending resolver and playback lease remain owned.")
 
+(defvar appkit-media--inline-image-sessions
+  (make-hash-table :test #'equal :weakness 'value)
+  "Live sessions shared by automatic inline images with identical sources.")
+
 (defvar appkit-media--inline-image-hosts nil
   "Hosts retaining inline image playback across buffers.")
 
@@ -438,6 +442,44 @@ so a reprint with unchanged dimensions and selection keeps its native scene."
     (when-let* ((condition (car conditions)))
       (signal (car condition) (cdr condition)))))
 
+(defun appkit-media--inline-session (host)
+  "Acquire HOST's session, sharing automatic image playback by source.
+Each inline surface owns a separate lease and target.  The weak cache does
+not retain a session after its last presentation closes."
+  (let* ((plan (appkit-media-inline-host-plan host))
+         (kind (appkit-media-playback-kind plan))
+         (resource (appkit-media-inline-host-resource host))
+         (headers (appkit-media-playback-request-headers plan))
+         (policy (or (appkit-media-playback-animation-loop-policy plan)
+                     video-animation-loop-policy))
+         (key
+          (when (and (eq kind 'image)
+                     (appkit-media--playback-inline-autoplay-p plan))
+            (let ((file (alist-get 'file resource)))
+              (list (if (appkit-media-file-present-p file)
+                        (list 'file (expand-file-name file))
+                      (list 'url (alist-get 'url resource) (copy-tree headers)))
+                    policy (appkit-media-playback-live plan)))))
+         (existing (and key (gethash key appkit-media--inline-image-sessions))))
+    (if (and existing (appkit-media-video-session-live-p existing))
+        existing
+      (let ((session
+             (appkit-media-video-session-create
+              resource (or (appkit-media-playback-label plan) "media")
+              :kind kind :owner (appkit-media-inline-host-owner host)
+              :cache-key (appkit-media-playback-cache-key plan)
+              :cache-directory (appkit-media-playback-cache-directory plan)
+              :cache-policy
+              (or (appkit-media-playback-cache-policy plan)
+                  (if (eq kind 'image) 'none 'automatic))
+              :muted (or (appkit-media-playback-muted plan) (eq kind 'image))
+              :loop (and (eq kind 'video) (appkit-media-playback-loop plan))
+              :live (appkit-media-playback-live plan)
+              :request-headers headers
+              :animation-loop-policy policy)))
+        (when key (puthash key session appkit-media--inline-image-sessions))
+        session))))
+
 (defun appkit-media--inline-ensure (host)
   "Create HOST's playback lease lazily, or return its existing lease."
   (let ((existing (appkit-media-inline-host-inline host)))
@@ -450,26 +492,7 @@ so a reprint with unchanged dimensions and selection keeps its native scene."
                  (size (appkit-media--inline-display-size host poster))
                  (width (car size))
                  (height (cdr size))
-                 (session
-                  (appkit-media-video-session-create
-                   (appkit-media-inline-host-resource host)
-                   (or (appkit-media-playback-label plan) "media")
-                   :kind kind :owner (appkit-media-inline-host-owner host)
-                   :cache-key (appkit-media-playback-cache-key plan)
-                   :cache-directory (appkit-media-playback-cache-directory plan)
-                   :cache-policy
-                   (or (appkit-media-playback-cache-policy plan)
-                       (if (eq kind 'image) 'none 'automatic))
-                   :muted (or (appkit-media-playback-muted plan)
-                              (eq kind 'image))
-                   :loop (and (eq kind 'video)
-                              (appkit-media-playback-loop plan))
-                   :live (appkit-media-playback-live plan)
-                   :request-headers
-                   (appkit-media-playback-request-headers plan)
-                   :animation-loop-policy
-                   (or (appkit-media-playback-animation-loop-policy plan)
-                       video-animation-loop-policy)))
+                 (session (appkit-media--inline-session host))
                  inline opened)
             (unwind-protect
                 (progn
@@ -505,7 +528,10 @@ so a reprint with unchanged dimensions and selection keeps its native scene."
                   inline)
               (unless opened
                 (when inline (appkit-media-video-inline-close inline))
-                (appkit-media-video-session-close session))))))))
+                (when (and (appkit-media-video-session-live-p session)
+                           (zerop (video-session-presentation-count
+                                   (appkit-media-video-session-video-session session))))
+                  (appkit-media-video-session-close session)))))))))
 
 (defun appkit-media--inline-toggle-p (host)
   "Whether HOST's normal action controls inline playback."
@@ -797,7 +823,8 @@ A parked host is still inside a render transaction and keeps its lease."
 OWNER defaults to the exact current Surface; otherwise the buffer owns media.
 During a Surface render, defer to its final commit boundary.  Mounting does not
 modify source text, display properties, undo history, or enclosing action maps.
-Each repeated insertion has independent runtime state; slices share one host.
+Repeated insertions own separate targets and leases; automatic images can
+share playback.  Slices share one host.
 Return newly created hosts in order."
   (setq owner (or owner (appkit-current-surface)))
   (when (and owner (eq owner appkit-surface--rendering))
