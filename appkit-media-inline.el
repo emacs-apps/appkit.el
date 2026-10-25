@@ -45,6 +45,12 @@
   "Hosts detached by their owner's render, awaiting another occurrence.
 Their owner handle, pending resolver and playback lease remain owned.")
 
+(defvar appkit-media--inline-image-hosts nil
+  "Hosts retaining inline image playback across buffers.")
+
+(defvar appkit-media--inline-hidden-timer nil
+  "Coalesced release of image playback after window state changes.")
+
 (defun appkit-media-inline-host-live-p (host)
   "Return non-nil while HOST owns all its original prepared image spans."
   (and (appkit-media-inline-host-p host)
@@ -94,6 +100,8 @@ Their owner handle, pending resolver and playback lease remain owned.")
 
 (defun appkit-media--inline-close (host)
   "Fence HOST callbacks, remove its spans and release its work exactly once."
+  (setq appkit-media--inline-image-hosts
+        (delq host appkit-media--inline-image-hosts))
   (let ((overlays (appkit-media-inline-host-overlays host))
         (handle (appkit-media-inline-host-owner-handle host))
         (cancel (appkit-media-inline-host-cancel host))
@@ -481,11 +489,15 @@ so a reprint with unchanged dimensions and selection keeps its native scene."
                          (lambda (surface)
                            (when (eq surface (appkit-media-inline-host-inline host))
                              (setf (appkit-media-inline-host-inline host) nil)
+                             (setq appkit-media--inline-image-hosts
+                                   (delq host appkit-media--inline-image-hosts))
                              (appkit-media--inline-show-canvas
                               host surface (appkit-media--inline-poster host))))))
                   (setf (appkit-media-inline-host-inline host) inline
                         (appkit-media-inline-host-layout host)
                         (appkit-media--inline-layout host))
+                  (when (eq kind 'image)
+                    (cl-pushnew host appkit-media--inline-image-hosts))
                   (when (appkit-media--inline-toggle-p host)
                     (appkit-media-video-inline-bind-controls
                      inline (appkit-media-inline-host-map host)))
@@ -609,9 +621,39 @@ interactions use a viewer."
     (user-error "Canvas inline media is unavailable"))
   (appkit-media--inline-use host presentation))
 
+(defun appkit-media--inline-release-hidden ()
+  "Release image playback outside every visible window.
+Keep each host and its poster so returning to it can start a fresh player.
+A parked host is still inside a render transaction and keeps its lease."
+  (dolist (host (copy-sequence appkit-media--inline-image-hosts))
+    (let ((inline (appkit-media-inline-host-inline host)))
+      (cond
+       ((or (null inline) (appkit-media-video-inline-closed-p inline))
+        (setq appkit-media--inline-image-hosts
+              (delq host appkit-media--inline-image-hosts)))
+       ((and (not (appkit-media-inline-host-parked host))
+             (not (appkit-media--inline-visible-p host)))
+        (appkit-media-video-inline-close inline))))))
+
+(defun appkit-media--inline-schedule-release-hidden ()
+  "Release hidden image players after redisplay yields."
+  (when (and appkit-media--inline-image-hosts
+             (not (timerp appkit-media--inline-hidden-timer)))
+    (setq appkit-media--inline-hidden-timer
+          (run-at-time
+           0 nil
+           (lambda ()
+             (setq appkit-media--inline-hidden-timer nil)
+             (appkit-media--inline-release-hidden))))))
+
+;; Buffer-local hooks no longer run for a buffer after its last window leaves.
+(add-hook 'window-state-change-hook #'appkit-media--inline-schedule-release-hidden)
+
 (defun appkit-media--inline-start-visible (&rest _ignored)
   "Start eligible visible media after committed buffer changes."
   (appkit-media--inline-prune)
+  ;; Free old pipelines before opening newly visible animations.
+  (appkit-media--inline-release-hidden)
   ;; Inspect visible overlays, not every image retained in chat history.
   (let (hosts)
     (when (image-type-available-p 'canvas)

@@ -708,5 +708,67 @@
               (should (= played (if inline-autoplay 1 0)))
               (appkit-media--inline-release-all))))))))
 
+(ert-deftest appkit-media-inline-hidden-images-release-playback-and-can-reopen ()
+  (let ((appkit-media--inline-image-hosts nil)
+        (visible t)
+        players)
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'appkit-media--inline-schedule-start) #'ignore)
+                ((symbol-function 'appkit-media--inline-visible-p)
+                 (lambda (_) visible))
+                ((symbol-function 'video-native-close) #'ignore)
+                ((symbol-function 'appkit-media-video-session-create)
+                 (lambda (resource _label &rest options)
+                   (let* ((kind (plist-get options :kind))
+                          (player (video--make-player
+                                   :source "/poster.png" :kind kind
+                                   :handle (make-symbol "native-player")))
+                          (session (video--make-session
+                                    :player player :auto-close t)))
+                     (setf (video-player-session player) session)
+                     (push player players)
+                     (appkit-media--video-session-create
+                      :resource resource :source "/poster.png" :kind kind
+                      :video-session session)))))
+        (let* ((host (appkit-media-inline-test--insert
+                      (appkit-media-inline-test--thumbnail t)))
+               (first (appkit-media--inline-ensure host))
+               (player (car players)))
+          (should (memq host appkit-media--inline-image-hosts))
+          (appkit-media--inline-release-hidden)
+          (should (video-player-live-p player))
+          ;; Parking is a transient render transaction, not a hidden viewport.
+          (setq visible nil)
+          (setf (appkit-media-inline-host-parked host) t)
+          (appkit-media--inline-release-hidden)
+          (should (video-player-live-p player))
+          (setf (appkit-media-inline-host-parked host) nil)
+          ;; Window changes must also release a buffer no longer selected.
+          (with-temp-buffer (appkit-media--inline-release-hidden))
+          (should (video-player-closed player))
+          (should (appkit-media-video-inline-closed-p first))
+          (should (appkit-media-inline-host-live-p host))
+          (should-not (appkit-media-inline-host-inline host))
+          (should-not appkit-media--inline-image-hosts)
+          (setq visible t)
+          (should-not (eq first (appkit-media--inline-ensure host)))
+          (should (= 2 (length players)))
+          (should (video-player-live-p (car players)))
+          (appkit-media--inline-close host)
+          (should (video-player-closed (car players)))
+          (should-not appkit-media--inline-image-hosts))
+        ;; Explicit video playback keeps its paused session and position.
+        (let ((host (appkit-media-inline-test--insert
+                     (appkit-media-inline-test--thumbnail t))))
+          (setf (appkit-media-playback-kind
+                 (appkit-media-inline-host-plan host)) 'video)
+          (let ((inline (appkit-media--inline-ensure host)))
+            (setq visible nil)
+            (appkit-media--inline-release-hidden)
+            (should (video-player-live-p (car players)))
+            (should (eq inline (appkit-media-inline-host-inline host)))
+            (appkit-media--inline-close host)
+            (should (video-player-closed (car players)))))))))
+
 (provide 'appkit-media-inline-test)
 ;;; appkit-media-inline-test.el ends here
