@@ -17,9 +17,6 @@
 
 ;;; Code:
 
-
-
-
 (require 'cl-lib)
 (require 'appkit-directory)
 (require 'appkit-chatbuf)
@@ -30,7 +27,6 @@
 (declare-function evil-normalize-keymaps "evil-core" (&optional state))
 (declare-function evil-snipe-refresh "evil-snipe" (&optional buffer))
 (declare-function evil-set-initial-state "evil-core" (mode state))
-(declare-function evil-insert-state "evil-states" ())
 (declare-function evil-quit "evil-commands" (&optional force))
 (defvar evil-local-mode)
 
@@ -250,8 +246,6 @@ Safe to call multiple times."
     (appkit-bindings-enable-evil 'appkit-chat-compose-timeline-mode-map)))
 
 (appkit-evil-setup)
-
-
 
 (provide 'appkit-evil)
 

@@ -31,7 +31,6 @@
 (autoload 'appkit-media-inline-mount "appkit-media-inline")
 
 (declare-function appkit-evil-normalize-keymaps "appkit-evil" ())
-(declare-function visual-fill-column-mode "visual-fill-column" (&optional arg))
 
 (defcustom appkit-chatbuf-input-ring-size 50
   "Default size for shared chat buffer input history rings."

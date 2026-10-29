@@ -20,6 +20,14 @@
 (require 'subr-x)
 (require 'appkit-chatbuf)
 
+(defvar vertico--input)
+(defvar vertico--lock-candidate)
+(declare-function vertico--exhibit "ext:vertico")
+(defvar icomplete-mode)
+(defvar icomplete--scrolled-completions)
+(defvar icomplete--scrolled-past)
+(declare-function icomplete-exhibit "icomplete")
+
 (defcustom appkit-chat-completion-ignore-case t
   "When non-nil, chat composer completion ignores letter case."
   :type 'boolean
@@ -462,14 +470,6 @@ frontends may strip candidate properties without discarding it."
         (puthash title t titles)
         (push (cons title candidate) choices)))
     (nreverse choices)))
-
-(defvar vertico--input)
-(defvar vertico--lock-candidate)
-(declare-function vertico--exhibit "ext:vertico")
-(defvar icomplete-mode)
-(defvar icomplete--scrolled-completions)
-(defvar icomplete--scrolled-past)
-(declare-function icomplete-exhibit "icomplete")
 
 (defun appkit-chat-completion--visual-refresh ()
   "Refresh native completion in the selected reader minibuffer.

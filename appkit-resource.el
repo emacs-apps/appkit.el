@@ -17,7 +17,6 @@
 (require 'appkit-loop)
 
 (declare-function appkit-app-identity "appkit-app")
-(declare-function appkit-app-live-p "appkit-app")
 (declare-function appkit-app-loop "appkit-app")
 (declare-function appkit-app-resource-coordinator "appkit-app")
 (declare-function appkit-surface-app "appkit-surface")
@@ -833,9 +832,6 @@ The first completion wakes the App; later completions share that wake."
       (remhash coordinator appkit-resource--pending-by-coordinator)
       (appkit-resource--release-entries entries)
       t)))
-
-
-
 
 (provide 'appkit-resource)
 

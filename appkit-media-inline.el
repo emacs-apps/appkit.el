@@ -18,7 +18,6 @@
 (declare-function appkit-media--track-descriptor-plan "appkit-media-track" (descriptor))
 (declare-function appkit-media-track-poster "appkit-media-track" (track))
 (declare-function appkit-media-track-index "appkit-media-track" (track))
-(declare-function appkit-media-track-inline-index "appkit-media-track" (track))
 (declare-function appkit-media--track-layout "appkit-media-track" (track))
 (declare-function appkit-media--track-scene "appkit-media-track" (track))
 (autoload 'appkit-media-track-activate "appkit-media-track")
