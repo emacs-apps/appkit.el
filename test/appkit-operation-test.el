@@ -181,6 +181,5 @@
 
 
 
-
 (provide 'appkit-operation-test)
 ;;; appkit-operation-test.el ends here
