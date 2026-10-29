@@ -6,11 +6,10 @@
 ;; shared: requests join one pending fetch and reuse ready data.  A write owns
 ;; its key as a lane: another write is refused, or coalesced into one queued
 ;; follow-up.  A request may run as several steps.  Each fetch is a keyed
-;; Effect, so a replacement revokes the old result without tokens.
+;; Effect, so a replacement revokes stale results.
 ;;
 ;; Results commit in the App's update.  The App publishes every changed key on
-;; a topic and replies to presenters, which run in their requesting Surface's
-;; update and return its transition.
+;; a topic and sends completion data back to each requesting Surface's update.
 ;;
 ;; An entry is a plist: :pending, :ready, :value, :error, :date, :request,
 ;; :observation, :completed, :total, :remaining, :waiters and :queued.
@@ -83,21 +82,22 @@ Inside OWNER's own operation update, read the entries being built instead, so
                    (cdr appkit-operation--building)
                  entries)))
 
-(defun appkit-operation-submit (registry entries target request &optional refresh present)
-  "Send REQUEST to the App at TARGET, an App or, with PRESENT, a Surface.
+(defun appkit-operation-submit (registry entries target request &optional refresh reply-token)
+  "Send REQUEST to TARGET, an App or, with REPLY-TOKEN, a Surface.
 
-ENTRIES are the App's committed entries, used to refuse a busy write lane at
-once.  REFRESH t replaces a read; `join' refreshes unless one is pending; nil
-reuses ready data.  PRESENT is called in the Surface's update as (PRESENT
-CONTEXT MODEL REQUEST VALUE REASON) and returns its transition."
+ENTRIES are committed entries used to refuse a busy write lane immediately.
+REFRESH t replaces a read; `join' refreshes unless pending; nil reuses ready data.
+A non-nil REPLY-TOKEN is data returned to the Surface's update in
+(appkit-operation-completed REPLY-TOKEN REQUEST VALUE REASON)."
   (let* ((spec (appkit-operation--spec registry request))
          (entry (gethash (appkit-operation-key registry request) entries)))
     (when (and (plist-get spec :write) (not (plist-get spec :coalesce))
                (plist-get entry :pending))
       (user-error "Operation already in progress")))
   (let ((ticket
-         (if present
-             (appkit-surface-send target (list 'appkit-operation-send request refresh present))
+         (if reply-token
+             (appkit-surface-send target
+                                  (list 'appkit-operation-send request refresh reply-token))
            (appkit-app-send target (list 'appkit-operation request refresh nil)))))
     ;; A send from inside a pass is dropped; say so instead of losing it.
     (when (eq ticket 'reentrant-send)
@@ -105,18 +105,16 @@ CONTEXT MODEL REQUEST VALUE REASON) and returns its transition."
     ticket))
 
 (defun appkit-operation-surface-update (context model message)
-  "Return the Surface transition for operation MESSAGE, or nil."
+  "Forward an operation request to the App, or return nil for other messages."
   (pcase message
-    (`(appkit-operation-send ,request ,refresh ,present)
+    (`(appkit-operation-send ,request ,refresh ,reply-token)
      (appkit-next
       :model model :render appkit-render-none
       :commands (list (appkit-command-post-message
                        :target (appkit-transition-context-parent-address context)
-                       :message (list 'appkit-operation request refresh present)
+                       :message (list 'appkit-operation request refresh reply-token)
                        :reply-correlation (make-symbol "appkit-operation")
-                       :delivery 'report))))
-    (`(appkit-operation-present ,presenter ,request ,value ,reason)
-     (funcall presenter context model request value reason))))
+                       :delivery 'report))))))
 
 (defun appkit-operation--effect (registry call request key refresh step)
   "Return the keyed Effect fetching STEP of REQUEST under KEY."
@@ -138,11 +136,11 @@ CONTEXT MODEL REQUEST VALUE REASON) and returns its transition."
      :failure (lambda (input _body reason) (list 'appkit-operation-result input nil reason)))))
 
 (defun appkit-operation--replies (waiters value reason)
-  "Return commands presenting VALUE or REASON for each WAITER's own request."
+  "Return completion commands for each WAITER's request and reply token."
   (mapcar (lambda (waiter)
             (appkit-command-post-message
              :target (car waiter)
-             :message (list 'appkit-operation-present (cadr waiter) (nth 2 waiter) value reason)
+             :message (list 'appkit-operation-completed (cadr waiter) (nth 2 waiter) value reason)
              :delivery 'report))
           (delq nil waiters)))
 
@@ -182,12 +180,13 @@ account's context.  Changed keys are published on TOPIC."
       (pcase message
         (`(appkit-operation-forget ,prefix)
          (setq commands (appkit-operation--forget entries prefix topic)))
-        (`(appkit-operation ,request ,refresh ,present)
+        (`(appkit-operation ,request ,refresh ,reply-token)
          (let* ((spec (appkit-operation--spec registry request))
                 (key (apply (plist-get spec :key) (cdr request)))
                 (entry (gethash key entries))
-                (waiter (and present (list (appkit-transition-context-reply-route context)
-                                           present request)))
+                (waiter (and reply-token
+                             (list (appkit-transition-context-reply-route context)
+                                   reply-token request)))
                 (write (plist-get spec :write)))
            (cond
             ((and (plist-get entry :pending) (or write (not (eq refresh t))))

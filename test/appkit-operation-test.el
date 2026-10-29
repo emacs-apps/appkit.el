@@ -5,6 +5,7 @@
 (require 'ert)
 (require 'appkit-app)
 (require 'appkit-operation)
+(require 'appkit-surface)
 
 (defvar appkit-operation-test--registry (make-hash-table :test #'eq))
 (defvar appkit-operation-test--fetches nil
@@ -49,15 +50,40 @@
      (unwind-protect (progn ,@body)
        (appkit-app-close app))))
 
+(defmacro appkit-operation-test-with-surface (binding &rest body)
+  "Run BODY with a Surface named by BINDING attached to `app'."
+  (declare (indent 1) (debug ((symbolp) body)))
+  `(let ((,(car binding)
+          (appkit-open-generated-surface
+           (appkit-surface-type-create
+            :name 'appkit-operation-test
+            :mode #'fundamental-mode
+            :init (lambda (_context _input)
+                    (appkit-next :model nil :render appkit-render-none))
+            :update
+            (lambda (context model message)
+              (or (appkit-operation-surface-update context model message)
+                  (appkit-next :model (cons message model) :render appkit-render-none)))
+            :renderer-factory
+            (lambda (_surface)
+              (appkit-generated-renderer-create :mount #'ignore :unmount #'ignore)))
+           :app app :identity (make-symbol "operation-test"))))
+     (unwind-protect (progn ,@body)
+       (kill-buffer (appkit-surface-buffer ,(car binding))))))
+
 (defun appkit-operation-test--submit (app request &optional refresh)
   "Submit REQUEST to APP and settle its passes."
   (appkit-operation-submit appkit-operation-test--registry (appkit-app-model app)
                            app request refresh)
   (appkit-operation-test--drain app))
 
-(defun appkit-operation-test--drain (app)
-  (while (> (appkit-loop-pending-count (appkit-app-loop app)) 0)
-    (appkit-loop-run-pass (appkit-app-loop app))))
+(defun appkit-operation-test--drain (app &rest surfaces)
+  "Drain APP and SURFACES until all routed messages have settled."
+  (let ((loops (cons (appkit-app-loop app) (mapcar #'appkit-surface-loop surfaces))))
+    (while (cl-some (lambda (loop) (> (appkit-loop-pending-count loop) 0)) loops)
+      (dolist (loop loops)
+        (when (> (appkit-loop-pending-count loop) 0)
+          (appkit-loop-run-pass loop))))))
 
 (defun appkit-operation-test--settle (app fetch &optional reason)
   "Resolve FETCH with its own step value, or reject it with REASON."
@@ -69,27 +95,53 @@
 
 (ert-deftest appkit-operation-reads-join-and-reuse-ready-data ()
   (appkit-operation-test-with-app
-    (appkit-operation-test--submit app '(probe "x"))
-    (appkit-operation-test--submit app '(probe "x"))
-    (should (= 1 (length appkit-operation-test--fetches)))
-    (appkit-operation-test--settle app (car appkit-operation-test--fetches))
-    (should (equal (plist-get (appkit-operation-test--entry app '(probe "x")) :value)
-                   '("x" "x")))
-    (appkit-operation-test--submit app '(probe "x"))
-    (should (= 1 (length appkit-operation-test--fetches)))))
+    (appkit-operation-test-with-surface (surface)
+      (appkit-operation-test-with-surface (peer)
+        (dolist (recipient (list (cons surface '(view 1)) (cons peer '(view 2))))
+          (appkit-operation-submit appkit-operation-test--registry (appkit-app-model app)
+                                   (car recipient) '(probe "x") nil (cdr recipient)))
+        (appkit-operation-test--drain app surface peer)
+        (should (= 1 (length appkit-operation-test--fetches)))
+        (appkit-operation-test--settle app (car appkit-operation-test--fetches))
+        (appkit-operation-test--drain app surface peer)
+        (should (equal (appkit-surface-model surface)
+                       '((appkit-operation-completed (view 1) (probe "x") ("x" "x") nil))))
+        (should (equal (appkit-surface-model peer)
+                       '((appkit-operation-completed (view 2) (probe "x") ("x" "x") nil))))
+        ;; A ready value still returns through the requesting Surface's update.
+        (appkit-operation-submit appkit-operation-test--registry (appkit-app-model app)
+                                 peer '(probe "x") nil '(cached 3))
+        (appkit-operation-test--drain app surface peer)
+        (should (= 1 (length appkit-operation-test--fetches)))
+        (should (equal (car (appkit-surface-model peer))
+                       '(appkit-operation-completed (cached 3) (probe "x") ("x" "x") nil)))
+        (should (= 1 (length (appkit-surface-model surface))))))))
 
 (ert-deftest appkit-operation-refresh-revokes-the-replaced-fetch ()
   (appkit-operation-test-with-app
-    (appkit-operation-test--submit app '(probe "x"))
-    (let ((old (car appkit-operation-test--fetches)))
-      (appkit-operation-test--submit app '(probe "x") t)
-      (should (= 2 (length appkit-operation-test--fetches)))
-      ;; The replaced Effect is revoked, so its late result never commits.
-      (funcall (nth 1 old) "stale")
-      (appkit-operation-test--drain app)
-      (should (plist-get (appkit-operation-test--entry app '(probe "x")) :pending))
-      (appkit-operation-test--settle app (car appkit-operation-test--fetches))
-      (should-not (plist-get (appkit-operation-test--entry app '(probe "x")) :pending)))))
+    (appkit-operation-test-with-surface (surface)
+      (appkit-operation-test-with-surface (peer)
+        (appkit-operation-submit appkit-operation-test--registry (appkit-app-model app)
+                                 surface '(probe "x") nil 'old)
+        (appkit-operation-test--drain app surface peer)
+        (let ((old (car appkit-operation-test--fetches)))
+          (appkit-operation-submit appkit-operation-test--registry (appkit-app-model app)
+                                   peer '(probe "x") t 'replacement)
+          (appkit-operation-test--drain app surface peer)
+          (should (= 2 (length appkit-operation-test--fetches)))
+          (should (equal (appkit-surface-model surface)
+                         '((appkit-operation-completed old (probe "x") nil
+                                                       "Request superseded"))))
+          ;; A replaced fetch cannot commit or reply after its Effect is revoked.
+          (funcall (nth 1 old) "stale")
+          (appkit-operation-test--drain app surface peer)
+          (should (plist-get (appkit-operation-test--entry app '(probe "x")) :pending))
+          (should-not (appkit-surface-model peer))
+          (appkit-operation-test--settle app (car appkit-operation-test--fetches) "down")
+          (appkit-operation-test--drain app surface peer)
+          (should (equal (appkit-surface-model peer)
+                         '((appkit-operation-completed replacement (probe "x") nil "down"))))
+          (should (= 1 (length (appkit-surface-model surface)))))))))
 
 (ert-deftest appkit-operation-write-lane-refuses-or-coalesces ()
   (appkit-operation-test-with-app
@@ -126,6 +178,9 @@
       (should-not (plist-get entry :pending)))
     (should (= 1 (length appkit-operation-test--fetches)))))
 
-(provide 'appkit-operation-test)
 
+
+
+
+(provide 'appkit-operation-test)
 ;;; appkit-operation-test.el ends here
