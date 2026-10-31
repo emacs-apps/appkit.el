@@ -45,6 +45,15 @@
 (defvar-local appkit-chat-timeline--state nil
   "Projected timeline state owned by the current Surface host.")
 
+(defvar-local appkit-chat-timeline--ime-message-function nil
+  "Function of a row payload returning (SELF-P . TEXT), or nil to skip the row.")
+
+(defvar wime-context-prefix-function)
+
+(defconst appkit-chat-timeline-ime-messages 4
+  "Latest messages given to an input method.
+On wime's dialogue evaluation four labelled messages beat one and matched all.")
+
 (defun appkit-chat-timeline--surface ()
   "Return the live Generated Surface owning the current timeline."
   (let ((surface (appkit-current-surface)))
@@ -128,8 +137,11 @@ Do not use nearby-row fallback or include the composer."
       (error "Appkit chat timeline has not been initialized")))
 
 (cl-defun appkit-chat-timeline-ensure
-    (&key printer anchor-property header footer after-mutation-function)
-  "Ensure the current Surface host owns one projected timeline."
+    (&key printer anchor-property header footer after-mutation-function
+          ime-message-function)
+  "Ensure the current Surface host owns one projected timeline.
+IME-MESSAGE-FUNCTION, when given, turns rows into input-method context; see
+`appkit-chat-timeline-ime-context'."
   (appkit-chat-timeline--surface)
   (let ((current (appkit-chat-timeline--current-state)))
     (if current
@@ -160,7 +172,38 @@ Do not use nearby-row fallback or include the composer."
           :mutation-depth 0
           :deferred-keys nil
           :surface (appkit-chat-timeline--surface)))))
+    (when ime-message-function
+      (setq-local appkit-chat-timeline--ime-message-function ime-message-function
+                  wime-context-prefix-function #'appkit-chat-timeline-ime-context))
     (appkit-chat-timeline-ewoc)))
+
+(defun appkit-chat-timeline-ime-context ()
+  "Latest messages as input-method context, or nil without any.
+Each message is one line labelled 我： or 对方：; the reply target, when the
+composer's aux state names its row with :context-key or :message-id, comes
+last.  The result ends with 我： so the draft continues the user's own line."
+  (when-let* ((state (appkit-chat-timeline--current-state)))
+    (let* ((projection (appkit-chat-timeline--projection state))
+           (aux (appkit-chatbuf-aux-state))
+           (target (and (eq (plist-get aux :aux-type) 'reply)
+                        (or (plist-get aux :context-key) (plist-get aux :message-id))))
+           (line (lambda (key)
+                   (when-let* ((row (appkit-projection--row projection key))
+                               (message (funcall appkit-chat-timeline--ime-message-function
+                                                 (appkit-projection-row-payload row)))
+                               ((stringp (cdr message)))
+                               (text (string-trim (replace-regexp-in-string
+                                                   "[\n\r]+" " " (cdr message))))
+                               ((not (string-empty-p text))))
+                     (concat (if (car message) "我：" "对方：") text))))
+           lines)
+      (cl-loop for key in (reverse (appkit-projection--keys projection))
+               while (< (length lines) appkit-chat-timeline-ime-messages)
+               unless (equal key target)
+               do (when-let* ((text (funcall line key))) (push text lines)))
+      (when-let* ((text (and target (funcall line target))))
+        (setq lines (append lines (list text))))
+      (and lines (concat (string-join lines "\n") "\n我：")))))
 
 (defun appkit-chat-timeline-scroll-observer ()
   "Return the current timeline's scroll observer, or nil."
