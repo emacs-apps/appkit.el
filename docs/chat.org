@@ -89,11 +89,12 @@ footer and composer as separate regions.
 - A timeline cache belongs to one Surface incarnation, even when a replacement
   Surface reuses the same buffer.
 - Pass ~:ime-message-function~ to ~appkit-chat-timeline-ensure~ to give input
-  methods the conversation: it maps a row payload to ~(SELF-P . TEXT)~, nil
-  for rows without prose.  ~appkit-chat-timeline-ime-context~ then labels the
-  latest four messages 我：/对方：, adds a reply target named by the aux
-  state's ~:context-key~ or ~:message-id~, and installs itself as wime's
-  ~wime-context-prefix-function~.
+  methods the conversation: it maps a row payload to ~(SPEAKER . TEXT)~, with
+  SPEAKER ~t~ for the user, or nil for rows without prose.
+  ~appkit-chat-timeline-ime-context~ then writes the latest four messages as
+  lines, a blank line at each change of speaker and none of their names, adds
+  a reply target named by the aux state's ~:context-key~ or ~:message-id~, and
+  installs itself as wime's ~wime-context-prefix-function~.
 
 * History windows
 

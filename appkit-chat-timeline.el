@@ -46,13 +46,14 @@
   "Projected timeline state owned by the current Surface host.")
 
 (defvar-local appkit-chat-timeline--ime-message-function nil
-  "Function of a row payload returning (SELF-P . TEXT), or nil to skip the row.")
+  "Function of a row payload returning (SPEAKER . TEXT), or nil to skip the row.
+SPEAKER is t for the user and any other `equal'-comparable identity otherwise.")
 
 (defvar wime-context-prefix-function)
 
 (defconst appkit-chat-timeline-ime-messages 4
   "Latest messages given to an input method.
-On wime's dialogue evaluation four labelled messages beat one and matched all.")
+On wime's dialogue evaluation four messages beat one and matched all.")
 
 (defun appkit-chat-timeline--surface ()
   "Return the live Generated Surface owning the current timeline."
@@ -179,31 +180,37 @@ IME-MESSAGE-FUNCTION, when given, turns rows into input-method context; see
 
 (defun appkit-chat-timeline-ime-context ()
   "Latest messages as input-method context, or nil without any.
-Each message is one line labelled 我： or 对方：; the reply target, when the
-composer's aux state names its row with :context-key or :message-id, comes
-last.  The result ends with 我： so the draft continues the user's own line."
+Messages are lines; a blank line marks each change of speaker, including the
+one before the user's draft.  No speaker is named: on wime's dialogue
+evaluation the blank line did as well as 我：/对方： labels.  The reply target,
+when the composer's aux state names its row with :context-key or
+:message-id, comes last."
   (when-let* ((state (appkit-chat-timeline--current-state)))
     (let* ((projection (appkit-chat-timeline--projection state))
            (aux (appkit-chatbuf-aux-state))
            (target (and (eq (plist-get aux :aux-type) 'reply)
                         (or (plist-get aux :context-key) (plist-get aux :message-id))))
-           (line (lambda (key)
-                   (when-let* ((row (appkit-projection--row projection key))
-                               (message (funcall appkit-chat-timeline--ime-message-function
-                                                 (appkit-projection-row-payload row)))
-                               ((stringp (cdr message)))
-                               (text (string-trim (replace-regexp-in-string
-                                                   "[\n\r]+" " " (cdr message))))
-                               ((not (string-empty-p text))))
-                     (concat (if (car message) "我：" "对方：") text))))
-           lines)
+           (message (lambda (key)
+                      (when-let* ((row (appkit-projection--row projection key))
+                                  (message (funcall appkit-chat-timeline--ime-message-function
+                                                    (appkit-projection-row-payload row)))
+                                  ((stringp (cdr message)))
+                                  (text (string-trim (replace-regexp-in-string
+                                                      "[\n\r]+" " " (cdr message))))
+                                  ((not (string-empty-p text))))
+                        (cons (car message) text))))
+           messages)
       (cl-loop for key in (reverse (appkit-projection--keys projection))
-               while (< (length lines) appkit-chat-timeline-ime-messages)
+               while (< (length messages) appkit-chat-timeline-ime-messages)
                unless (equal key target)
-               do (when-let* ((text (funcall line key))) (push text lines)))
-      (when-let* ((text (and target (funcall line target))))
-        (setq lines (append lines (list text))))
-      (and lines (concat (string-join lines "\n") "\n我：")))))
+               do (when-let* ((found (funcall message key))) (push found messages)))
+      (when-let* ((found (and target (funcall message target))))
+        (setq messages (append messages (list found))))
+      (when messages
+        (let ((speaker (caar messages)) (text (cdar messages)))
+          (dolist (next (append (cdr messages) (list (cons t ""))) text)
+            (setq text (concat text (if (equal (car next) speaker) "\n" "\n\n") (cdr next))
+                  speaker (car next))))))))
 
 (defun appkit-chat-timeline-scroll-observer ()
   "Return the current timeline's scroll observer, or nil."

@@ -65,7 +65,7 @@
        (should (= 2 (gethash 'b prints)))
        (should (equal '(a b) (appkit-chat-timeline-keys)))))))
 
-(ert-deftest appkit-chat-timeline-ime-context-labels-latest-messages ()
+(ert-deftest appkit-chat-timeline-ime-context-marks-speaker-switches ()
   (appkit-test-with-surface
    (appkit-chat-timeline-ensure
     :printer (appkit-chat-timeline-test--printer (make-hash-table :test #'equal))
@@ -73,14 +73,18 @@
     :ime-message-function (lambda (payload) (and (cdr payload) payload)))
    (should (eq wime-context-prefix-function #'appkit-chat-timeline-ime-context))
    (appkit-chat-timeline-sync
-    (cl-loop for (key self text) in '((a nil "最早") (b t "第二") (c nil nil) (d nil "第三\n行")
-                                       (e t "第四") (f nil "最新"))
-             collect (appkit-chat-timeline-test--row key (cons self text))))
+    (cl-loop for (key speaker text) in '((a alice "最早") (b t "第二") (c alice nil) (d alice "第三\n行")
+                                          (e bob "第四") (f bob "最新"))
+             collect (appkit-chat-timeline-test--row key (cons speaker text))))
+   ;; Bob's two messages share a block; every switch, and the draft, follows a blank line.
    (should (equal (appkit-chat-timeline-ime-context)
-                  "我：第二\n对方：第三 行\n我：第四\n对方：最新\n我："))
+                  "第二\n\n第三 行\n\n第四\n最新\n\n"))
    (appkit-chatbuf-aux-set '(:aux-type reply :message-id a))
    (should (equal (appkit-chat-timeline-ime-context)
-                  "我：第二\n对方：第三 行\n我：第四\n对方：最新\n对方：最早\n我："))))
+                  "第二\n\n第三 行\n\n第四\n最新\n\n最早\n\n"))
+   (appkit-chatbuf-aux-set '(:aux-type reply :message-id b))
+   (should (equal (appkit-chat-timeline-ime-context)
+                  "最早\n第三 行\n\n第四\n最新\n\n第二\n"))))
 
 (ert-deftest appkit-chat-timeline-sync-handles-arbitrary-reordering ()
   (appkit-test-with-surface
