@@ -180,18 +180,18 @@ IME-MESSAGE-FUNCTION, when given, turns rows into input-method context; see
 
 (defun appkit-chat-timeline-ime-context ()
   "Latest messages as input-method context, or nil without any.
-Messages are lines; a blank line marks each change of speaker, including the
-one before the user's draft.  No speaker is named: on wime's dialogue
-evaluation the blank line did as well as 我：/对方： labels.  The reply target,
-when the composer's aux state names its row with :context-key or
-:message-id, comes last."
+Messages are lines in timeline order; a blank line marks each change of
+speaker, including the one before the user's draft.  No speaker is named: on
+wime's dialogue evaluation the blank line did as well as 我：/对方： labels.
+A reply target, which the composer's aux state names by :context-key or
+:message-id, is then quoted once more as a \"> \" line before the draft."
   (when-let* ((state (appkit-chat-timeline--current-state)))
     (let* ((projection (appkit-chat-timeline--projection state))
            (aux (appkit-chatbuf-aux-state))
            (target (and (eq (plist-get aux :aux-type) 'reply)
                         (or (plist-get aux :context-key) (plist-get aux :message-id))))
            (message (lambda (key)
-                      (when-let* ((row (appkit-projection--row projection key))
+                      (when-let* ((row (and key (appkit-projection--row projection key)))
                                   (message (funcall appkit-chat-timeline--ime-message-function
                                                     (appkit-projection-row-payload row)))
                                   ((stringp (cdr message)))
@@ -199,18 +199,22 @@ when the composer's aux state names its row with :context-key or
                                                       "[\n\r]+" " " (cdr message))))
                                   ((not (string-empty-p text))))
                         (cons (car message) text))))
+           (quoted (cdr (funcall message target)))
            messages)
       (cl-loop for key in (reverse (appkit-projection--keys projection))
                while (< (length messages) appkit-chat-timeline-ime-messages)
-               unless (equal key target)
                do (when-let* ((found (funcall message key))) (push found messages)))
-      (when-let* ((found (and target (funcall message target))))
-        (setq messages (append messages (list found))))
-      (when messages
-        (let ((speaker (caar messages)) (text (cdar messages)))
-          (dolist (next (append (cdr messages) (list (cons t ""))) text)
-            (setq text (concat text (if (equal (car next) speaker) "\n" "\n\n") (cdr next))
-                  speaker (car next))))))))
+      (when (or messages quoted)
+        (let ((speaker t) (text ""))
+          (dolist (next messages)
+            (setq text (concat text (cond ((string-empty-p text) "")
+                                          ((equal (car next) speaker) "\n")
+                                          (t "\n\n"))
+                               (cdr next))
+                  speaker (car next)))
+          (cond (quoted (concat text (if messages "\n\n" "") "> " quoted "\n\n"))
+                ((eq speaker t) (concat text "\n"))
+                (t (concat text "\n\n"))))))))
 
 (defun appkit-chat-timeline-scroll-observer ()
   "Return the current timeline's scroll observer, or nil."
