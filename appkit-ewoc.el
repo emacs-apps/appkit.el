@@ -72,7 +72,7 @@ printers must run again."
           (setq node existing
                 next-node (ewoc-next ewoc next-node))
           (when (or (gethash key forced)
-                    (not (equal (ewoc-data node) entry)))
+                    (not (equal-including-properties (ewoc-data node) entry)))
             (ewoc-set-data node entry)
             (ewoc-invalidate ewoc node)))
          (existing

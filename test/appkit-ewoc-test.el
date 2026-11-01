@@ -107,3 +107,13 @@
 (provide 'appkit-ewoc-test)
 
 ;;; appkit-ewoc-test.el ends here
+
+(ert-deftest appkit-ewoc-refreshes-property-only-changes ()
+  (with-temp-buffer
+    (let ((ewoc (ewoc-create (lambda (row) (insert (cdr row))) nil nil t)))
+      (appkit-ewoc-reconcile ewoc (list (cons 'row (propertize "same" 'help-echo "old"))) #'car)
+      (let ((node (ewoc-nth ewoc 0)))
+        (appkit-ewoc-reconcile ewoc (list (cons 'row (propertize "same" 'help-echo "new"))) #'car)
+        (should (eq node (ewoc-nth ewoc 0)))
+        (should (equal (buffer-substring-no-properties (point-min) (point-max)) "same"))
+        (should (equal (get-text-property (point-min) 'help-echo) "new"))))))
