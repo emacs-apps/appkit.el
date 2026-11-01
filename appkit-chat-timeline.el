@@ -183,13 +183,17 @@ IME-MESSAGE-FUNCTION, when given, turns rows into input-method context; see
 Messages are lines in timeline order; a blank line marks each change of
 speaker, including the one before the user's draft.  No speaker is named: on
 wime's dialogue evaluation the blank line did as well as 我：/对方： labels.
-A reply target, which the composer's aux state names by :context-key or
-:message-id, is then quoted once more as a \"> \" line before the draft."
+The composer's aux state names its reply or edit target by :context-key or
+:message-id.  A reply target is then quoted once more as a \"> \" line before
+the draft.  An edit ends the context just before the edited message, as when it
+was first written: its old text would invite the very characters being fixed."
   (when-let* ((state (appkit-chat-timeline--current-state)))
     (let* ((projection (appkit-chat-timeline--projection state))
            (aux (appkit-chatbuf-aux-state))
-           (target (and (eq (plist-get aux :aux-type) 'reply)
+           (type (plist-get aux :aux-type))
+           (target (and (memq type '(reply edit))
                         (or (plist-get aux :context-key) (plist-get aux :message-id))))
+           (keys (reverse (appkit-projection--keys projection)))
            (message (lambda (key)
                       (when-let* ((row (and key (appkit-projection--row projection key)))
                                   (message (funcall appkit-chat-timeline--ime-message-function
@@ -199,9 +203,11 @@ A reply target, which the composer's aux state names by :context-key or
                                                       "[\n\r]+" " " (cdr message))))
                                   ((not (string-empty-p text))))
                         (cons (car message) text))))
-           (quoted (cdr (funcall message target)))
+           (quoted (and (eq type 'reply) (cdr (funcall message target))))
            messages)
-      (cl-loop for key in (reverse (appkit-projection--keys projection))
+      (when (eq type 'edit)
+        (setq keys (cdr (member target keys))))
+      (cl-loop for key in keys
                while (< (length messages) appkit-chat-timeline-ime-messages)
                do (when-let* ((found (funcall message key))) (push found messages)))
       (when (or messages quoted)

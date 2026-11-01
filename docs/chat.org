@@ -93,9 +93,10 @@ footer and composer as separate regions.
   SPEAKER ~t~ for the user, or nil for rows without prose.
   ~appkit-chat-timeline-ime-context~ then writes the latest four messages in
   order as lines, a blank line at each change of speaker and none of their
-  names, quotes the reply target (named by the aux state's ~:context-key~ or
-  ~:message-id~) once more as a ~> ~ line before the draft, and installs itself
-  as wime's ~wime-context-prefix-function~.
+  names, and installs itself as wime's ~wime-context-prefix-function~.  The aux
+  state's ~:context-key~ or ~:message-id~ names a target: a reply target is
+  quoted once more as a ~> ~ line before the draft; an edit takes the four
+  messages before the edited one, leaving out its old text.
 
 * History windows
 

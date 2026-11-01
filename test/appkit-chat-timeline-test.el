@@ -85,6 +85,11 @@
    (appkit-chatbuf-aux-set '(:aux-type reply :message-id b))
    (should (equal (appkit-chat-timeline-ime-context)
                   "第二\n\n第三 行\n\n第四\n最新\n\n> 第二\n\n"))
+   ;; An edit sees only what came before the edited message, and not its old text.
+   (appkit-chatbuf-aux-set '(:aux-type edit :message-id b))
+   (should (equal (appkit-chat-timeline-ime-context) "最早\n\n"))
+   (appkit-chatbuf-aux-set '(:aux-type edit :message-id e))
+   (should (equal (appkit-chat-timeline-ime-context) "最早\n\n第二\n\n第三 行\n\n"))
    ;; The user's own last message continues on the next line.
    (appkit-chatbuf-aux-reset)
    (appkit-chat-timeline-sync
