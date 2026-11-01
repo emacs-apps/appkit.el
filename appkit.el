@@ -22,6 +22,7 @@
 (require 'appkit-cleanup)
 (require 'appkit-url)
 (require 'appkit-core)
+(require 'appkit-data)
 (require 'appkit-loop)
 (require 'appkit-routing)
 (require 'appkit-context)
