@@ -290,15 +290,12 @@ PREFIX controls the display prefix.  FACE and PROPERTIES style the line.
 ACTION makes its content interactive, with HELP-ECHO as the description."
   (let ((start (point)))
     (insert (or text "") "\n")
-    (when (and (functionp action)
+    (when (and (appkit-ui-action-p action)
                (> (point) start))
       (appkit-media-add-action-properties
        start
        (max start (1- (point)))
-       (lambda (&optional _event)
-         (interactive)
-         (funcall action))
-       help-echo))
+       action help-echo))
     (appkit-ui-apply-line-prefix start (point) (or prefix "    "))
     (when properties
       (add-text-properties start (point) properties))
@@ -499,7 +496,7 @@ paused transfer uses a pause tip.  Clients own what the ratio means."
 
 DIRECTION, STATE, PROGRESS, BYTES-DONE, BYTES-TOTAL, and BAR-WIDTH are
 as in `appkit-chat-ins-transfer-text'.  ACTION is an optional
-zero-argument callback shown as ACTION-LABEL, defaulting to Cancel when
+Appkit UI action shown as ACTION-LABEL, defaulting to Cancel when
 STATE is `active' and Download otherwise.  PREFIX, FACE, PROPERTIES, and
 HELP-ECHO decorate the line.  Return the inserted span, or nil when the
 control is empty."
@@ -511,7 +508,7 @@ control is empty."
                 :bytes-total bytes-total
                 :bar-width bar-width))
          (label
-          (and (functionp action)
+          (and (appkit-ui-action-p action)
                (or action-label
                    (if (eq state 'active) "Cancel" "Download"))))
          (start (point)))

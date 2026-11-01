@@ -550,6 +550,10 @@ confirmation, Effects, conflict handling, and reconciliation."
     ('item
      (unless (appkit-directory-entry-item-p entry)
        (error "Appkit directory item primary action requires a navigable item")))
+    ((pred appkit-ui-action-p)
+     (unless (or (appkit-directory-entry-item-p entry)
+                 (appkit-directory-entry-foldable-p entry))
+       (error "Appkit directory action requires an activatable entry")))
     (_
      (error "Appkit directory entry has invalid primary action %S"
             (appkit-directory-entry-primary-action entry))))
@@ -685,7 +689,7 @@ confirmation, Effects, conflict handling, and reconciliation."
                (or (appkit-directory-entry-foldable-p entry)
                    (appkit-directory-entry-item-p entry)))
       (appkit-ui-make-action-row
-       start (point) entry #'appkit-directory--activate-rendered-entry
+       start (point) (list #'appkit-directory--activate-rendered-entry entry)
        :help-echo (appkit-directory-entry-help-echo entry)
        :mouse-face (appkit-directory-entry-mouse-face entry)))))
 
@@ -825,7 +829,8 @@ the destination position, or nil when no matching entry exists."
   "Run the primary action for one current SURFACE ENTRY.
 
 Foldable items may declare `item' as their `primary-action', allowing primary
-activation to remain independent from `appkit-directory-toggle-entry-fold'."
+activation to remain independent from `appkit-directory-toggle-entry-fold'.
+An entry may instead supply an Appkit UI action value as its primary action."
   (pcase (appkit-directory--entry-primary-action entry)
     ('fold
      (appkit-directory-toggle-entry-fold surface entry))
@@ -834,6 +839,7 @@ activation to remain independent from `appkit-directory-toggle-entry-fold'."
                 (appkit-directory-surface-activate-function surface)))
          (funcall function surface entry)
        (user-error "Appkit directory has no item activation adapter")))
+    ((and action (pred appkit-ui-action-p)) (appkit-ui-call-action action))
     (_
      (user-error "No directory action at point"))))
 

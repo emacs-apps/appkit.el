@@ -691,7 +691,7 @@
        (appkit-chatbuf-aux-render
         :title "Reply to Alice"
         :preview (appkit-ui-one-line-preview-create :text "  (sticker)\n preview  ")
-        :cancel-action (lambda () (setq cancelled t))
+        :cancel-action (list (lambda () (setq cancelled t)))
         :cancel-help "Cancel reply"
         :width 40))
       (should
@@ -808,3 +808,27 @@
 (provide 'appkit-chatbuf-test)
 
 ;;; appkit-chatbuf-test.el ends here
+
+(ert-deftest appkit-chatbuf-return-keeps-exact-controls-ahead-of-timeline-fallback ()
+  (with-temp-buffer
+    (let (calls in-input)
+      (insert "span button gap")
+      (appkit-ui-add-action 1 5 (lambda () (push 'span calls) nil))
+      (make-text-button 6 12 'action (lambda (_) (push 'button calls) nil))
+      (cl-letf (((symbol-function 'appkit-chatbuf-point-in-input-p) (lambda (&optional _) in-input)))
+        (let ((input (lambda () (interactive) (push 'input calls)))
+              (timeline (lambda () (interactive) (push 'timeline calls))))
+          (goto-char 1)
+          (appkit-chatbuf-dispatch-return input timeline)
+          (should (equal calls '(span)))
+          (goto-char 5)
+          (appkit-chatbuf-dispatch-return input timeline)
+          (should (equal calls '(timeline span)))
+          (goto-char 6)
+          (appkit-chatbuf-dispatch-return input timeline)
+          (should (equal calls '(button timeline span)))
+          (setq in-input t)
+          (goto-char 1)
+          (appkit-chatbuf-dispatch-return input timeline)
+          (should (equal calls '(input button timeline span))))))))
+

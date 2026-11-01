@@ -129,7 +129,7 @@
                 ('row
                  (insert "Cancel")
                  (appkit-ui-make-action-row
-                  (point-min) (point) nil (lambda (_) (funcall cancel))))))
+                  (point-min) (point) cancel))))
             (insert "\nNot an action")
             (evil-local-mode 1)
             (evil-change-state state)

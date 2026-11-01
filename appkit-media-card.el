@@ -84,7 +84,7 @@ text-property context and therefore proceeds directly to the fallback."
           (funcall appkit-media-card-fallback-context-function)))))
 
 (defun appkit-media-card-action-function (action &optional context)
-  "Return ACTION's callback from media card CONTEXT.
+  "Return ACTION's UI action value from media card CONTEXT.
 
 When CONTEXT is nil, use `appkit-media-card-context-at-point'."
   (let ((context (or context (appkit-media-card-context-at-point))))
@@ -99,7 +99,7 @@ When CONTEXT is nil, use the media card context at point."
   (let ((context (or context (appkit-media-card-context-at-point))))
     (cond
      ((null context) "No media at point")
-     ((not (functionp
+     ((not (appkit-ui-action-p
             (appkit-media-card-action-function action context)))
       (format "%s unavailable" (capitalize (symbol-name action))))
      (t nil))))
@@ -112,9 +112,9 @@ When CONTEXT is nil, use the media card context at point."
                (appkit-media-card-action-function action context))))
     (unless context
       (user-error "No media at point"))
-    (unless (functionp callback)
+    (unless (appkit-ui-action-p callback)
       (user-error "Media action `%s' is unavailable" action))
-    (funcall callback)))
+    (appkit-ui-call-action callback)))
 
 (defun appkit-media-card-open (&optional context)
   "Open or play CONTEXT's media card, defaulting to the card at point."

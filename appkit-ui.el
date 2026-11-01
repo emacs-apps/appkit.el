@@ -167,8 +167,23 @@ Omitting the boundary cleans the entire copied region."
 
 ;;; ── Buttons & styled lines ──────────────────────────────────────────
 
+(defun appkit-ui-action-p (action)
+  "Whether ACTION is a zero-argument function or a (FUNCTION ARG...) call.
+Store a stable function symbol and plain arguments in compared row values;
+callbacks and bound runtime objects can remain local to the renderer."
+  (or (functionp action)
+      (and (consp action) (proper-list-p action) (functionp (car action)))))
+
+(defun appkit-ui-call-action (action)
+  "Call UI ACTION with its stored argument values unchanged."
+  (unless (appkit-ui-action-p action)
+    (signal 'wrong-type-argument (list 'appkit-ui-action-p action)))
+  (if (functionp action)
+      (funcall action)
+    (apply (car action) (cdr action))))
+
 (defconst appkit-ui-action-property 'appkit-ui-action
-  "Text property holding the zero-argument function for an action span.")
+  "Text property holding the Appkit UI action value for a span.")
 
 (defun appkit-ui-ignore-mouse ()
   "Ignore a mouse press without taking over touchscreen gestures.
@@ -219,13 +234,22 @@ POSITION may sit on the action or immediately after it."
           (and (> pos (point-min))
                (get-text-property (1- pos) appkit-ui-action-property))))))
 
-(defun appkit-ui-activate-at (&optional position)
-  "Run the Appkit action at POSITION or point.
-
-Return non-nil when an action ran."
-  (when-let* ((action (appkit-ui-action-at position)))
-    (funcall action)
-    t))
+(defun appkit-ui-activate-at (&optional position exact)
+  "Activate the Appkit action or native button at POSITION or point.
+An exact Appkit span wins over a native button, including a whole-row button.
+Unless EXACT is non-nil, also accept an Appkit span immediately before POSITION.
+Return non-nil when a control ran, even when its action returned nil."
+  (let ((pos (or position (point))))
+    (when (and (integer-or-marker-p pos)
+               (<= (point-min) pos) (<= pos (point-max)))
+      (let ((action (and (< pos (point-max))
+                         (get-text-property pos appkit-ui-action-property)))
+            (button (button-at pos)))
+        (cond
+         (action (appkit-ui-call-action action) t)
+         (button (button-activate button) t)
+         ((and (not exact) (setq action (appkit-ui-action-at pos)))
+          (appkit-ui-call-action action) t))))))
 
 (defun appkit-ui-activate (&optional event)
   "Activate the Appkit action at point or EVENT.
@@ -245,13 +269,14 @@ sees the same entry the user clicked."
     (start end action &key help-echo properties face (mouse-face 'highlight))
   "Make START..END an Appkit action span that calls ACTION.
 
-ACTION is a zero-argument function.  HELP-ECHO describes that action.
+ACTION is a zero-argument function or (FUNCTION ARG...) call value.
+HELP-ECHO describes that action.
 PROPERTIES are extra text properties stored on the valid action span.
 FACE is appended when non-nil.  MOUSE-FACE defaults to `highlight'; an
 explicit nil disables hover highlighting.  A terminating newline keeps its
 action and face but is excluded from hover, separating adjacent blocks.
 Do nothing when ACTION is not callable or the region is empty."
-  (when (and (functionp action)
+  (when (and (appkit-ui-action-p action)
              (integer-or-marker-p start)
              (integer-or-marker-p end)
              (< start end))
@@ -277,7 +302,7 @@ Do nothing when ACTION is not callable or the region is empty."
 Existing Appkit actions, native buttons and custom keymaps retain precedence,
 including their help, hover and keyboard/mouse/touch bindings.  Other arguments
 have the same meaning as in `appkit-ui-add-action'."
-  (when (and (functionp action)
+  (when (and (appkit-ui-action-p action)
              (integer-or-marker-p start)
              (integer-or-marker-p end)
              (< start end))
@@ -306,14 +331,15 @@ have the same meaning as in `appkit-ui-add-action'."
                                                 &key face help-echo properties)
   "Insert clickable button LABEL calling ACTION.
 
-ACTION is a no-arg function.  FACE, HELP-ECHO and PROPERTIES customize button
+ACTION is a zero-argument function or (FUNCTION ARG...) call value.
+FACE, HELP-ECHO and PROPERTIES customize button
 text properties passed to `insert-text-button'."
   (let ((button-props
          (append
           (list 'follow-link t
                 'keymap appkit-ui-button-map
-                'action (lambda (_button)
-                          (funcall action)))
+                'action #'appkit-ui--activate-button
+                'appkit-ui-button-action action)
           (when help-echo
             (list 'help-echo help-echo))
           (when face
@@ -336,11 +362,9 @@ text properties passed to `insert-text-button'."
     map)
   "Keymap used by whole-row Appkit action buttons.")
 
-(defun appkit-ui--activate-action-row (button)
-  "Activate action-row BUTTON using its exact stored object and action."
-  (let ((object (button-get button 'appkit-ui-action-row-object))
-        (action (button-get button 'appkit-ui-action-row-action)))
-    (funcall action object)))
+(defun appkit-ui--activate-button (button)
+  "Run the exact Appkit action value stored on BUTTON."
+  (appkit-ui-call-action (button-get button 'appkit-ui-button-action)))
 
 (define-button-type 'appkit-ui-action-row-button
   'face nil
@@ -348,13 +372,14 @@ text properties passed to `insert-text-button'."
   'help-echo nil
   'follow-link nil
   'keymap appkit-ui-action-row-map
-  'action #'appkit-ui--activate-action-row)
+  'action #'appkit-ui--activate-button)
 
 (cl-defun appkit-ui-make-action-row
-    (start end object action &key help-echo mouse-face)
-  "Make START..END an action row invoking ACTION with OBJECT.
+    (start end action &key help-echo mouse-face)
+  "Make START..END an action row invoking ACTION.
 
-ACTION must be callable.  HELP-ECHO supplies hover help, while MOUSE-FACE
+ACTION is a zero-argument function or (FUNCTION ARG...) call value.
+HELP-ECHO supplies hover help, while MOUSE-FACE
 controls hover highlighting explicitly and defaults to nil.  When END follows
 a terminating newline, that newline is excluded from the button.  Action rows
 must otherwise be single-line.  Return the text button, or nil when ACTION is
@@ -363,7 +388,7 @@ invalid, the resulting span is empty, or it contains an internal newline."
                         (if (markerp start) (marker-position start) start)))
         (row-end (and (integer-or-marker-p end)
                       (if (markerp end) (marker-position end) end))))
-    (when (and (functionp action)
+    (when (and (appkit-ui-action-p action)
                (integerp row-start)
                (integerp row-end)
                (<= (point-min) row-start)
@@ -383,9 +408,8 @@ invalid, the resulting span is empty, or it contains an internal newline."
          'help-echo help-echo
          'follow-link nil
          'keymap appkit-ui-action-row-map
-         'action #'appkit-ui--activate-action-row
-         'appkit-ui-action-row-object object
-         'appkit-ui-action-row-action action)))))
+         'action #'appkit-ui--activate-button
+         'appkit-ui-button-action action)))))
 
 ;;; ── Prefix state machinery ─────────────────────────────────────────
 

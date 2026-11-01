@@ -205,7 +205,7 @@
               :state 'active
               :bytes-done 4096
               :bytes-total 8192
-              :action (lambda () (setq canceled t))
+              :action (list (lambda () (setq canceled t)))
               :action-label "Cancel"
               :prefix "│ ")))
         (should (string-match-p "\\[====>     \\] 4096/8192"

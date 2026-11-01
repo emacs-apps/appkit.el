@@ -333,13 +333,13 @@ or duplicate callbacks are inert."
         (action (plist-get field :action))
         (face (plist-get field :face))
         (help-echo (plist-get field :help-echo)))
-    (when (and action (not (functionp action)))
+    (when (and action (not (appkit-ui-action-p action)))
       (error "Appkit compose status field action is not callable: %S" field))
     (let ((map (and action (make-sparse-keymap))))
       (when action
         (define-key map [header-line down-mouse-1] #'ignore)
         (define-key map [header-line mouse-1]
-                    (lambda () (interactive) (funcall action))))
+                    (lambda () (interactive) (appkit-ui-call-action action))))
       (apply #'propertize text
              (append (and face (list 'face face))
                      (and help-echo (list 'help-echo help-echo))

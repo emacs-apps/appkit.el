@@ -487,9 +487,7 @@ and prefix arguments."
   (cond
    ((appkit-chatbuf-point-in-input-p)
     (call-interactively (or (command-remapping input-command) input-command)))
-   ((get-text-property (point) appkit-ui-action-property)
-    (appkit-ui-activate-at (point)))
-   ((button-at (point)) (push-button (point)))
+   ((appkit-ui-activate-at nil t))
    (timeline-command
     (call-interactively (or (command-remapping timeline-command) timeline-command)))))
 
@@ -1162,8 +1160,8 @@ negative N delegates to `appkit-chatbuf-input-backward-delete'."
 
 TITLE is client-owned presentation text.  PREVIEW must be an
 `appkit-ui-one-line-preview'.  Both rows are bounded to WIDTH, which defaults
-to the current `fill-column'.  CANCEL-ACTION is an optional zero-argument
-function attached to the visible ×.  Client-specific faces may be supplied
+to the current `fill-column'.  CANCEL-ACTION is an optional Appkit UI action
+attached to the visible ×.  Client-specific faces may be supplied
 with TITLE-FACE, PREVIEW-FACE, and ACCENT-FACE; shared theme-friendly faces
 are used otherwise.  The returned string ends in one newline, or is empty
 when TITLE is empty."
@@ -1184,7 +1182,7 @@ when TITLE is empty."
               (propertize "▏" 'face
                           (or accent-face 'appkit-chatbuf-aux-accent)))
              (close
-              (if (functionp cancel-action)
+              (if (appkit-ui-action-p cancel-action)
                   (propertize
                    "×"
                    'face 'appkit-chatbuf-aux-close

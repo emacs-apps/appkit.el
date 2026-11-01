@@ -157,7 +157,7 @@ When nil, Appkit generates a solid periodic bar from
                           (appkit-discussion-entry-body-inserter entry))
                          ('avatar-action
                           (appkit-discussion-entry-avatar-action entry)))))
-      (unless (functionp value)
+      (unless (if (eq slot 'avatar-action) (appkit-ui-action-p value) (functionp value))
         (error "Appkit discussion %s is not callable" slot))))
   entry)
 
@@ -208,7 +208,7 @@ When nil, Appkit generates a solid periodic bar from
           (command
            (lambda (&optional _event)
              (interactive)
-             (funcall action))))
+             (appkit-ui-call-action action))))
       (define-key map (kbd "RET") command)
       (define-key map [return] command)
       (define-key map [mouse-1] command)

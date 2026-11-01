@@ -21,7 +21,12 @@ changed or forced entries.
 
 * Actions
 
-An action span is a region carrying one zero-argument client action.
+An Appkit UI action is a zero-argument function or a ~(FUNCTION ARG...)~ call
+value.  Spans, buttons, rows, and directory entries use the same value and
+invoke it through ~appkit-ui-call-action~.  Projected rows should carry stable
+function symbols and plain arguments so ~equal~ can compare them; closures
+binding live objects belong in the renderer.  UI actions are not runtime
+messages and do not require a separate application action registry.
 
 - ~appkit-ui-add-action~ makes a span activatable by ~RET~, graphical
   ~<return>~ and primary click.  ~:help-echo~ describes the action; Appkit does
@@ -96,6 +101,9 @@ from ~appkit-directory-mode~.
 - ~appkit-directory-configure~ supplies inserters for custom rows, plus
   activation, fold and operation callbacks.  Indentation is a display prefix
   applied to the completed row.
+- An activatable entry's ~:primary-action~ can directly hold a UI action.
+  The built-in ~fold~ and ~item~ actions toggle folding or call the configured
+  activation adapter; an omitted action retains those role-based defaults.
 - Folds are keyed and survive redraws.  Keep a fold-state table across Surfaces
   by passing it to ~appkit-directory-initialize~.
 - Marks are opt-in: set ~:markable-p~ on entries and enable

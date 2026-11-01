@@ -12,7 +12,7 @@
             (appkit-media-card-context-create
              :payload 'exact
              :kind 'image
-             :open-action (lambda () (setq opened 'exact))))
+             :open-action (list (lambda () (setq opened 'exact)))))
            (fallback
             (appkit-media-card-context-create
              :payload 'fallback

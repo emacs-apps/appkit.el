@@ -68,7 +68,7 @@ snapshot function must return owned data.
   sent, saved or cancelled; that is the client's to record.
 
 Status presentation is generic.  A /status field/ is a plist with ~:label~,
-optional ~:value~ and an optional zero-argument ~:action~, rendered by
+optional ~:value~ and an optional Appkit UI ~:action~, rendered by
 ~appkit-compose-status-fields-string~.  ~appkit-compose-status-text~ combines the
 operation label with a percentage, and ~appkit-compose-progress-bar~ draws a bar.
 

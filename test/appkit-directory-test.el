@@ -192,7 +192,7 @@
       (should button)
       (should (equal '(item . "one")
                      (appkit-directory-entry-key
-                      (button-get button 'appkit-ui-action-row-object))))
+                      (cadr (button-get button 'appkit-ui-button-action)))))
       (should (eq (char-after end) ?\n))
       (should-not (button-at end)))))
 
@@ -366,6 +366,28 @@
              :key "item"
              :role 'item
              :item-p t))))))
+
+(ert-deftest appkit-directory-primary-action-call-needs-no-application-dispatcher ()
+  (appkit-directory-test--with-surface
+    (let* ((result (list nil))
+           (entry (appkit-directory-entry-create
+                   :key 'retry :role 'item :section-key 'requests :item-p t
+                   :label "Retry" :primary-action (list #'setcar result 'retried))))
+      (appkit-directory-configure
+       surface :action-rows-p t
+       :activate-function (lambda (&rest _) (ert-fail "Unexpected item adapter")))
+      (appkit-directory-reconcile surface (list entry))
+      (should-not (car result))
+      (goto-char (point-min))
+      (appkit-directory-activate)
+      (should (eq (car result) 'retried))
+      (setcar result nil)
+      (should (appkit-ui-activate-at))
+      (should (eq (car result) 'retried)))
+    (should-error
+     (appkit-directory-reconcile
+      surface (list (appkit-directory-entry-create
+                     :key 'note :role 'note :primary-action '(ignore)))))))
 
 (ert-deftest appkit-directory-rejects-invalid-primary-actions ()
   (appkit-directory-test--with-surface

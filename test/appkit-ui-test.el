@@ -54,7 +54,7 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
                (appkit-ui-add-action start (point) action))
               ('row
                (insert (format "Row %d" index))
-               (appkit-ui-make-action-row start (point) index action)))
+               (appkit-ui-make-action-row start (point) (list action index))))
             (insert "\n")))
         (save-window-excursion
           (switch-to-buffer (current-buffer))
@@ -100,6 +100,53 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
       (should (= called 1))
       (goto-char (point-min))
       (should-not (appkit-ui-activate-at)))))
+
+(ert-deftest appkit-ui-call-values-stay-data-until-activation ()
+  (let* ((payload '(error "This is data, not an expression"))
+         (action (list #'identity payload)))
+    (should (appkit-ui-action-p action))
+    (should (eq (appkit-ui-call-action action) payload))
+    (should (appkit-ui-action-p #'ignore))
+    (should-not (appkit-ui-action-p '(undefined-appkit-action 1)))
+    (should-not (appkit-ui-action-p '(ignore . invalid-arguments))))
+  (dolist (kind '(span fallback button row))
+    (with-temp-buffer
+      (let* ((result (list nil))
+             (action (list #'setcar result kind)))
+        (if (eq kind 'button)
+            (appkit-ui-insert-action-button "Run" action)
+          (insert "Run")
+          (pcase kind
+            ('span (appkit-ui-add-action (point-min) (point-max) action))
+            ('fallback (appkit-ui-add-fallback-action (point-min) (point-max) action))
+            ('row (appkit-ui-make-action-row (point-min) (point-max) action))))
+        (should-not (car result))
+        (goto-char (point-min))
+        (should (appkit-ui-activate-at))
+        (should (eq (car result) kind))))))
+
+(ert-deftest appkit-ui-activation-prefers-exact-controls-and-consumes-nil-results ()
+  (with-temp-buffer
+    (let (calls)
+      (insert "inner outer")
+      (appkit-ui-make-action-row
+       (point-min) (point-max) (lambda () (push 'row calls) nil))
+      (appkit-ui-add-action 1 6 (lambda () (push 'inner calls) nil))
+      ;; An inner span wins even inside a native whole-row button.
+      (should (appkit-ui-activate-at 1))
+      (should (equal calls '(inner)))
+      ;; The exact row button wins over the span ending just before point.
+      (should (appkit-ui-activate-at 6))
+      (should (equal calls '(row inner)))))
+  (with-temp-buffer
+    (let (called)
+      (insert "span gap")
+      (appkit-ui-add-action 1 5 (lambda () (setq called t) nil))
+      (should-not (appkit-ui-activate-at 5 t))
+      (should-not called)
+      (should (appkit-ui-activate-at 5))
+      (should called)
+      (should-not (appkit-ui-activate-at (1+ (point-max)))))))
 
 (ert-deftest appkit-ui-action-properties-require-valid-action-and-span ()
   (with-temp-buffer
@@ -178,12 +225,12 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
         (insert "first\n")
         (setq first-button
               (appkit-ui-make-action-row
-               start (point) first-object first-action)))
+               start (point) (list first-action first-object))))
       (let ((start (point)))
         (insert "second\n")
         (setq second-button
               (appkit-ui-make-action-row
-               start (point) second-object second-action)))
+               start (point) (list second-action second-object))))
       (should first-button)
       (should second-button)
       (should (eq #'push-button
@@ -192,13 +239,13 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
                   (lookup-key appkit-ui-action-row-map [mouse-1])))
       (should-not (keymap-parent appkit-ui-action-row-map))
       (should (eq first-object
-                  (button-get first-button 'appkit-ui-action-row-object)))
+                  (cadr (button-get first-button 'appkit-ui-button-action))))
       (should (eq first-action
-                  (button-get first-button 'appkit-ui-action-row-action)))
+                  (car (button-get first-button 'appkit-ui-button-action))))
       (should (eq second-object
-                  (button-get second-button 'appkit-ui-action-row-object)))
+                  (cadr (button-get second-button 'appkit-ui-button-action))))
       (should (eq second-action
-                  (button-get second-button 'appkit-ui-action-row-action)))
+                  (car (button-get second-button 'appkit-ui-button-action))))
       (save-window-excursion
         (switch-to-buffer buffer)
         (goto-char first-button)
@@ -224,7 +271,7 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
         (setq newline-position (1- (point)))
         (setq button
               (appkit-ui-make-action-row
-               start (point) 'body (lambda (_object) (setq called (1+ called))))))
+               start (point) (list (lambda (_object) (setq called (1+ called))) 'body))))
       (should button)
       (should-not (button-at newline-position))
       (push-button newline-position)
@@ -233,8 +280,7 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
         (insert "\n")
         (should-not
          (appkit-ui-make-action-row
-          empty-start (point) 'empty
-          (lambda (_object) (setq called (1+ called)))))
+          empty-start (point) (list (lambda (_object) (setq called (1+ called))) 'empty)))
         (should-not (button-at empty-start)))
       (should (= called 0)))))
 
@@ -245,13 +291,13 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
         (insert "plain\n")
         (setq plain-button
               (appkit-ui-make-action-row
-               start (point) 'plain #'ignore
+               start (point) (list #'ignore 'plain)
                :help-echo "Open plain")))
       (let ((start (point)))
         (insert (propertize "highlighted" 'face 'bold) "\n")
         (setq highlighted-button
               (appkit-ui-make-action-row
-               start (point) 'highlighted #'ignore
+               start (point) (list #'ignore 'highlighted)
                :help-echo "Open highlighted"
                :mouse-face 'highlight)))
       (should (equal "Open plain" (button-get plain-button 'help-echo)))
@@ -268,11 +314,11 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
   (with-temp-buffer
     (insert "invalid\n")
     (should-not
-     (appkit-ui-make-action-row (point-min) (point) 'object 'not-a-function))
+     (appkit-ui-make-action-row (point-min) (point) (list 'not-a-function 'object)))
     (should-not (button-at (point-min)))
     (goto-char (point-max))
     (should-not
-     (appkit-ui-make-action-row (point) (point) 'object #'ignore))
+     (appkit-ui-make-action-row (point) (point) (list #'ignore 'object)))
     (should-not (button-at (point)))))
 
 (ert-deftest appkit-ui-action-row-rejects-multiline-span ()
@@ -282,7 +328,7 @@ Move by DY unless nil.  CANCELED marks a window-system-canceled release."
       (insert "first\nsecond\n")
       (should-not
        (appkit-ui-make-action-row
-        start (point) 'object (lambda (_object) (setq called t))))
+        start (point) (list (lambda (_object) (setq called t)) 'object)))
       (should-not (button-at start))
       (should-not (button-at (line-beginning-position 0)))
       (should-not called))))

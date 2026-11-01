@@ -321,7 +321,7 @@
       (appkit-discussion-entry-create :key "orphan" :depth 1))
      :type 'error)))
 
-(ert-deftest appkit-discussion-avatar-adapts-a-plain-callback-to-a-command ()
+(ert-deftest appkit-discussion-avatar-adapts-an-action-call-to-a-command ()
   (with-temp-buffer
     (let (called)
       (cl-letf (((symbol-function 'appkit-chat-avatar-prefixes)
@@ -331,7 +331,7 @@
          (appkit-discussion-entry-create
           :key "action"
           :heading "Action"
-          :avatar-action (lambda () (setq called t))))
+          :avatar-action (list (lambda () (setq called t)))))
         (let* ((prefix (get-text-property (point-min) 'line-prefix))
                (map (get-text-property 0 'keymap prefix))
                (command (lookup-key map (kbd "RET"))))

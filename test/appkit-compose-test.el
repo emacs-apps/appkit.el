@@ -72,3 +72,13 @@
 (provide 'appkit-compose-test)
 
 ;;; appkit-compose-test.el ends here
+
+(ert-deftest appkit-compose-status-action-call-runs-only-when-activated ()
+  (let* ((result (list nil))
+         (text (appkit-compose-status-field-string
+                (list :label "Context" :action (list #'setcar result 'opened))))
+         (map (get-text-property 0 'local-map text)))
+    (should-not (car result))
+    (call-interactively (lookup-key map [header-line mouse-1]))
+    (should (eq (car result) 'opened))))
+
