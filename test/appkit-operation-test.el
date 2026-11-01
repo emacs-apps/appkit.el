@@ -37,7 +37,7 @@
                (appkit-app-type-create
                 :name 'appkit-operation-test
                 :init (lambda (_context _input)
-                        (appkit-next :model (make-hash-table :test #'equal)
+                        (appkit-next :model appkit-data-map-empty
                                      :render appkit-render-none))
                 :update
                 (lambda (context model message)
@@ -91,7 +91,7 @@
   (appkit-operation-test--drain app))
 
 (defun appkit-operation-test--entry (app key)
-  (gethash key (appkit-app-model app)))
+  (appkit-data-map-get (appkit-app-model app) key))
 
 (ert-deftest appkit-operation-reads-join-and-reuse-ready-data ()
   (appkit-operation-test-with-app
@@ -180,6 +180,42 @@
 
 
 
+
+
+(ert-deftest appkit-operation-named-input-and-entry-snapshots-survive-settlement ()
+  (appkit-operation-test-with-app
+    (let* ((command (list 'probe "original"))
+           (empty (appkit-app-model app)))
+      (appkit-operation-test--submit app command)
+      (let* ((pending (appkit-app-model app))
+             (entry (appkit-data-map-get pending '(probe "original")))
+             (request (plist-get entry :request))
+             (other (appkit-data-with request ((:input) :id "other"))))
+        (setcar (cdr command) "changed-command")
+        (should (appkit-operation-request-p request))
+        (should (equal "original" (appkit-operation-input request :id)))
+        (should (equal '(probe "other") (appkit-operation-key appkit-operation-test--registry other)))
+        (should (= 0 (appkit-data-map-count empty)))
+        (appkit-operation-test--settle app (car appkit-operation-test--fetches))
+        (let ((ready (appkit-app-model app)))
+          (should (plist-get entry :pending))
+          (should-not (plist-get entry :ready))
+          (should (equal '("original" "original")
+                         (plist-get (appkit-data-map-get ready '(probe "original")) :value)))
+          (appkit-app-send app '(appkit-operation-forget (probe)))
+          (appkit-operation-test--drain app)
+          (should (= 0 (appkit-data-map-count (appkit-app-model app))))
+          (should (= 1 (appkit-data-map-count ready))))))))
+
+(ert-deftest appkit-operation-declared-input-rejects-missing-unknown-and-duplicate-fields ()
+  (let* ((registry appkit-operation-test--registry)
+         (request (appkit-operation-request-create registry 'probe :id "named")))
+    (should (equal '(probe "named") (appkit-operation-key registry request)))
+    (should-error (appkit-operation-request-create registry 'probe))
+    (should-error (appkit-operation-request-create registry 'probe :other "named"))
+    (should-error (appkit-operation-request-create registry 'probe :id "one" :id "two"))
+    (should-error (appkit-operation-key registry (appkit-data-with request ((:input) :unknown t))))
+    (should-error (appkit-operation-key registry '(probe "one" "extra")))))
 
 (provide 'appkit-operation-test)
 ;;; appkit-operation-test.el ends here
