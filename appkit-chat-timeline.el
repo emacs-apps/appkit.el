@@ -138,9 +138,10 @@ Do not use nearby-row fallback or include the composer."
       (error "Appkit chat timeline has not been initialized")))
 
 (cl-defun appkit-chat-timeline-ensure
-    (&key printer anchor-property header footer after-mutation-function
+    (&key printer anchor-property footer after-mutation-function
           ime-message-function)
   "Ensure the current Surface host owns one projected timeline.
+The first buffer position belongs to a message; status uses header-line-format.
 IME-MESSAGE-FUNCTION, when given, turns rows into input-method context; see
 `appkit-chat-timeline-ime-context'."
   (appkit-chat-timeline--surface)
@@ -162,7 +163,6 @@ IME-MESSAGE-FUNCTION, when given, turns rows into input-method context; see
           (setq projection
                 (appkit-projection-create
                  printer anchor-property
-                 :header header
                  :footer footer
                  :no-separator-p t)))
         (setq-local
@@ -392,17 +392,7 @@ old semantic row keys to new keys."
                        (appkit-chat-timeline--state-after-mutation-function state)))
             (funcall after-mutation)))))))
 
-(defun appkit-chat-timeline--set-header (ewoc header)
-  "Set EWOC HEADER without touching its footer or trailing composer."
-  ;; `ewoc-set-hf' refreshes both sentinels.  A chat buffer keeps its prompt
-  ;; and editable input after the footer, so refreshing the sentinels
-  ;; separately is the only operation with the right ownership boundary.
-  (ewoc--set-buffer-bind-dll-let* ewoc
-                                  ((node (ewoc--header ewoc))
-                                   (printer (ewoc--hf-pp ewoc)))
-                                  (unless (equal (ewoc--node-data node) header)
-                                    (setf (ewoc--node-data node) header)
-                                    (ewoc--refresh-node printer node dll))))
+
 
 (defun appkit-chat-timeline--set-footer (ewoc footer)
   "Set EWOC FOOTER without touching its trailing composer."
@@ -428,15 +418,14 @@ old semantic row keys to new keys."
       (when prompt-live-p
         (set-marker-insertion-type prompt-marker old-insertion-type)))))
 
-(cl-defun appkit-chat-timeline-set-frame
-    (header footer &key bind-input-function
+(cl-defun appkit-chat-timeline-set-footer
+    (footer &key bind-input-function
             (composer-visible-p nil composer-visible-p-supplied-p))
-  "Set timeline HEADER and FOOTER without rebuilding live input.
+  "Set timeline FOOTER without rebuilding live input.
 
-The EWOC frame and the trailing composer are separate regions.  Header and
-footer changes are applied to their sentinel nodes in place, like telega's
-chat buffer, so message or metadata redisplay can never delete and recreate
-the user's input.
+Status belongs in the window header line; the timeline starts with a message.
+The footer and trailing composer are separate regions, so redisplay never
+deletes and recreates the user's input.
 
 When BIND-INPUT-FUNCTION is non-nil, call it only when the composer needs to
 be created, removed, or when COMPOSER-VISIBLE-P was not supplied.  Supplying
@@ -461,7 +450,6 @@ COMPOSER-VISIBLE-P gives stable input visibility semantics."
       (error "Appkit composer boundary is outside the timeline footer"))
     (appkit-chat-timeline-run-preserving-position
      (lambda ()
-       (appkit-chat-timeline--set-header ewoc header)
        (appkit-chat-timeline--set-footer ewoc footer)
        (when bind-composer-p
          (funcall bind-input-function))))))

@@ -94,8 +94,7 @@
            (appkit-chat-timeline-row-create
             :key 'b :payload 'message :context '(:unread t))
            (appkit-chat-timeline-row-create :key 'pending :payload 'local)))
-    (appkit-chat-timeline-set-frame
-     "" "End of loaded history\n"
+    (appkit-chat-timeline-set-footer "End of loaded history\n"
      :bind-input-function
      (lambda ()
        (appkit-chatbuf-bind-input-region

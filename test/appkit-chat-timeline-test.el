@@ -182,12 +182,10 @@
      (appkit-chat-timeline-ensure
       :printer (appkit-chat-timeline-test--printer prints)
       :anchor-property 'test-message-key
-      :header "old header\n"
       :footer "old footer\n")
      (appkit-chat-timeline-sync
       (list (appkit-chat-timeline-test--row 'a "A")))
-     (appkit-chat-timeline-set-frame
-      "old header\n" "old footer\n"
+     (appkit-chat-timeline-set-footer "old footer\n"
       :bind-input-function
       (lambda ()
         (appkit-chatbuf-bind-input-region
@@ -198,8 +196,7 @@
      (setq buffer-undo-list nil)
      (let ((input-marker appkit-chatbuf--input-marker)
            (prompt-marker appkit-chatbuf--prompt-marker))
-       (appkit-chat-timeline-set-frame
-        "new header\n" "new footer\n"
+       (appkit-chat-timeline-set-footer "new footer\n"
         :bind-input-function
         (lambda ()
           (appkit-chatbuf-bind-input-region
@@ -220,7 +217,6 @@
      (appkit-chat-timeline-ensure
       :printer (appkit-chat-timeline-test--printer prints)
       :anchor-property 'test-message-key
-      :header "old header\n"
       :footer "old footer\n")
      (appkit-chat-timeline-sync
       (list (appkit-chat-timeline-test--row 'a "A")))
@@ -231,15 +227,13 @@
                :visible-p t
                :prompt ">>> "
                :input-text "draft"))))
-       (appkit-chat-timeline-set-frame
-        "old header\n" "old footer\n"
+       (appkit-chat-timeline-set-footer "old footer\n"
         :bind-input-function binder
         :composer-visible-p t)
        (let ((prompt-marker appkit-chatbuf--prompt-marker)
              (input-marker appkit-chatbuf--input-marker))
          (appkit-chatbuf-input-set-text "live edit")
-         (appkit-chat-timeline-set-frame
-          "new header\n" "a substantially longer new footer\n"
+         (appkit-chat-timeline-set-footer "a substantially longer new footer\n"
           :bind-input-function binder
           :composer-visible-p t)
          (should (= 1 bind-count))
@@ -250,7 +244,6 @@
           (text-property-not-all
            (point-min) (appkit-chatbuf-prompt-start-position)
            'read-only t))
-         (should (string-match-p "new header" (buffer-string)))
          (should (string-match-p "substantially longer new footer"
                                  (buffer-string)))
          (should (string-match-p "a:A:plain" (buffer-string))))))))
@@ -265,8 +258,7 @@
       :footer "footer\n")
      ;; This is the client render order: establish the frame/composer first,
      ;; then reconcile projected message rows.
-     (appkit-chat-timeline-set-frame
-      "" "footer\n"
+     (appkit-chat-timeline-set-footer "footer\n"
       :bind-input-function
       (lambda ()
         (appkit-chatbuf-bind-input-region
@@ -309,8 +301,7 @@
      (appkit-chat-timeline-ensure
       :printer (appkit-chat-timeline-test--printer prints)
       :anchor-property 'test-message-key)
-     (appkit-chat-timeline-set-frame
-      "" ""
+     (appkit-chat-timeline-set-footer ""
       :bind-input-function
       (lambda ()
         (appkit-chatbuf-bind-input-region
@@ -345,13 +336,11 @@
                 :visible-p visible-p
                 :prompt ">>> "
                 :input-text "draft"))))
-       (appkit-chat-timeline-set-frame
-        "" ""
+       (appkit-chat-timeline-set-footer ""
         :bind-input-function binder
         :composer-visible-p t)
        (setq visible-p nil)
-       (appkit-chat-timeline-set-frame
-        "" ""
+       (appkit-chat-timeline-set-footer ""
         :bind-input-function binder
         :composer-visible-p nil)
        (should-not (appkit-chatbuf-prompt-start-position))
@@ -377,8 +366,7 @@
      (set-marker appkit-chatbuf--prompt-marker (point-min))
      (let ((before (buffer-string)))
        (should-error
-        (appkit-chat-timeline-set-frame
-         "new header\n" "new footer\n"
+        (appkit-chat-timeline-set-footer "new footer\n"
          :bind-input-function #'ignore
          :composer-visible-p t))
        (should (equal before (buffer-string)))))))
@@ -522,8 +510,7 @@
             :anchor-property 'test-message-key
             :footer footer)
            (appkit-chat-timeline-sync rows)
-           (appkit-chat-timeline-set-frame
-            "" footer :composer-visible-p t
+           (appkit-chat-timeline-set-footer footer :composer-visible-p t
             :bind-input-function
             (lambda ()
               (appkit-chatbuf-bind-input-region
@@ -560,6 +547,22 @@
                           (appkit-chatbuf-prompt-start-position))))
              (should (appkit-surface-live-p (appkit-current-surface)))))
        (when (frame-live-p frame) (delete-frame frame t))))))
+
+(ert-deftest appkit-chat-timeline-prepending-at-first-row-keeps-reading-anchor ()
+  (appkit-test-with-surface
+   (let ((prints (make-hash-table :test #'equal)))
+     (appkit-chat-timeline-ensure
+      :printer (appkit-chat-timeline-test--printer prints)
+      :anchor-property 'test-message-key)
+     (appkit-chat-timeline-sync
+      (list (appkit-chat-timeline-test--row 'b "oldest visible")))
+     (goto-char (point-min))
+     (should (eq 'b (appkit-chat-timeline-key-at-point)))
+     (appkit-chat-timeline-sync
+      (list (appkit-chat-timeline-test--row 'a "earlier page")
+            (appkit-chat-timeline-test--row 'b "oldest visible")))
+     (should (eq 'b (appkit-chat-timeline-key-at-point)))
+     (should (> (point) (point-min))))))
 
 (provide 'appkit-chat-timeline-test)
 

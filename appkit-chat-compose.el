@@ -342,13 +342,20 @@ Bind `inhibit-read-only' for authorized updates to a frozen draft."
     (nreverse entries)))
 
 (defun appkit-chat-compose--header-line ()
-  "Return the current compose header-line string."
+  "Return compose context and status outside the draft timeline."
   (let* ((fields (appkit-chat-compose--callback-value
                   appkit-chat-compose-status-fields-function))
-         (text (appkit-compose-status-fields-string fields)))
+         (context (appkit-chat-compose--callback-value
+                   appkit-chat-compose-context-function))
+         (status (appkit-compose-status-fields-string fields)))
     (when (and fields (not (listp fields)))
       (error "Appkit chat compose status fields must be a list: %S" fields))
-    (or text "")))
+    (string-join
+     (delq nil (mapcar (lambda (text)
+                        (when (and text (not (string-blank-p text)))
+                          (replace-regexp-in-string "[\n\r]+" " " (string-trim text))))
+                      (list context status)))
+     " · ")))
 
 (defun appkit-chat-compose--current-attachments ()
   "Return the attachment section for the current composer item, or nil."
@@ -359,17 +366,7 @@ Bind `inhibit-read-only' for authorized updates to a frozen draft."
         (appkit-chat-compose--callback-value
          appkit-chat-compose-attachments-function))))
 
-(defun appkit-chat-compose--frame-header ()
-  "Return generated header text placed above committed draft rows.
 
-A non-empty header ends with a blank line so it does not run into
-the first draft row, attachment footer, or prompt."
-  (let ((text (appkit-chat-compose--ensure-newline
-               (appkit-chat-compose--callback-value
-                appkit-chat-compose-context-function))))
-    (if (string-empty-p text)
-        ""
-      (concat text "\n"))))
 
 (defun appkit-chat-compose--frame-footer ()
   "Return generated footer text placed above the composer.
@@ -458,8 +455,7 @@ automatic separators between header, footer, and prompt."
      (appkit-chat-timeline-project
       (appkit-chat-compose--timeline-entries)
       (lambda (entry) (plist-get entry :id))))
-    (appkit-chat-timeline-set-frame
-     (appkit-chat-compose--frame-header)
+    (appkit-chat-timeline-set-footer
      (appkit-chat-compose--frame-footer)
      :bind-input-function #'appkit-chat-compose--bind-composer
      :composer-visible-p t)

@@ -25,7 +25,8 @@
                (list (list :label "photo.png"
                            :object 'photo))))
        :footer-function (lambda () "Send / Cancel"))
-      (should (string-match-p "Context" (appkit-chat-compose-display-string)))
+      (should (string-match-p "Context" (appkit-chat-compose--header-line)))
+      (should-not (string-match-p "Context" (buffer-string)))
       (should (string-match-p "Audience: Everyone"
                               (appkit-chat-compose-display-string)))
       (should (string-match-p "Send / Cancel"
@@ -70,7 +71,8 @@
              :items (list (list :label "photo.png"))))
      :footer-function (lambda () "Send / Cancel"))
     (let ((display (appkit-chat-compose-display-string)))
-      (should (string-match-p "Context\n\n" display))
+      (should (equal "Context" (appkit-chat-compose--header-line)))
+      (should-not (string-match-p "Context" (buffer-string)))
       (should (string-match-p "Media\n" display))
       (should (string-match-p "Send / Cancel\n\n>>> " display))
       (should-not (string-match-p "ContextMedia" display))
