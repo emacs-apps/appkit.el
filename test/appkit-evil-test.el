@@ -24,6 +24,25 @@
       (should (eq (key-binding (kbd "g g"))
                   #'evil-goto-first-line)))))
 
+(defvar appkit-evil-test-prefix-mode-map (make-sparse-keymap))
+(define-minor-mode appkit-evil-test-prefix-mode
+  "Test-only global prefixes, as evil-collection's unimpaired binds [ and ]."
+  :keymap appkit-evil-test-prefix-mode-map)
+
+(ert-deftest appkit-evil-view-keys-outrank-minor-mode-prefixes ()
+  (evil-define-minor-mode-key 'normal 'appkit-evil-test-prefix-mode (kbd "] b") #'ignore)
+  (let ((view (make-sparse-keymap)))
+    (defvar appkit-evil-test-view-map view)
+    (setq appkit-evil-test-view-map view)
+    (appkit-evil-define-keys 'normal 'appkit-evil-test-view-map "]" #'forward-line)
+    (with-temp-buffer
+      (use-local-map appkit-evil-test-view-map)
+      (appkit-evil-test-prefix-mode)
+      (evil-normal-state)
+      (evil-normalize-keymaps)
+      (should (eq (key-binding (kbd "]")) #'forward-line))
+      (should (eq (key-binding (kbd "j")) #'evil-next-line)))))
+
 (defvar appkit-evil-test-dynamic-mode-map (make-sparse-keymap))
 
 (define-minor-mode appkit-evil-test-dynamic-mode

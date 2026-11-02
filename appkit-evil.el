@@ -27,6 +27,7 @@
 (declare-function evil-normalize-keymaps "evil-core" (&optional state))
 (declare-function evil-snipe-refresh "evil-snipe" (&optional buffer))
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function evil-make-intercept-map "evil-core" (keymap &optional state aux))
 (declare-function evil-quit "evil-commands" (&optional force))
 (defvar evil-local-mode)
 
@@ -69,6 +70,11 @@ When nil, leave Evil's initial-state selection untouched."
                 ((fboundp 'evil-define-key*))
                 (keymap (appkit-evil--keymap-value keymap-symbol)))
       (apply #'evil-define-key* states keymap bindings)
+      ;; View keys outrank global minor modes such as evil-collection's
+      ;; unimpaired, whose [ and ] prefixes would otherwise shadow them.
+      ;; Only the declared Evil bindings intercept; motions stay Evil's.
+      (dolist (state (ensure-list states))
+        (evil-make-intercept-map keymap state t))
       t)))
 
 (defun appkit-evil--after-load (&rest _args)
