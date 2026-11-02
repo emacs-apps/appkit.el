@@ -221,19 +221,17 @@ the table metadata and exact label lookup."
        (group-function
         . ,(appkit-chat-completion--group-function candidate-map))))
     ('t
-     (let ((labels
-            (mapcar
-             #'appkit-chat-completion--candidate-label
-             (seq-filter
-              (lambda (candidate)
-                (and (appkit-chat-completion--candidate-matches-p
-                      candidate string)
-                     (or (null pred)
-                         (funcall pred
-                                  (appkit-chat-completion--candidate-label
-                                   candidate)))))
-              candidates))))
-       labels))
+     (mapcar
+      #'appkit-chat-completion--candidate-label
+      (seq-filter
+       (lambda (candidate)
+         (and (appkit-chat-completion--candidate-matches-p
+               candidate string)
+              (or (null pred)
+                  (funcall pred
+                           (appkit-chat-completion--candidate-label
+                            candidate)))))
+       candidates)))
     ('nil
      (let* ((completion-ignore-case appkit-chat-completion-ignore-case)
             (labels (mapcar #'appkit-chat-completion--candidate-label candidates))

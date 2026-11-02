@@ -508,17 +508,16 @@
         (puthash key instance (appkit-source-runtime-instances runtime))
         (unwind-protect
             (condition-case err
-                (progn
-                  (setq capability
-                        (funcall
-                         (appkit-source-spec-start spec)
-                         (list 'appkit-source-context token)
-                         (appkit-source-spec-input spec)
-                         (lambda (&rest payload)
-                           (appkit-source--stage-event instance payload))
-                         (lambda (&rest reason)
-                           (appkit-source--close instance reason)))
-                        completed-p t))
+                (setq capability
+                      (funcall
+                       (appkit-source-spec-start spec)
+                       (list 'appkit-source-context token)
+                       (appkit-source-spec-input spec)
+                       (lambda (&rest payload)
+                         (appkit-source--stage-event instance payload))
+                       (lambda (&rest reason)
+                         (appkit-source--close instance reason)))
+                      completed-p t)
               ((error quit)
                (setq condition err completed-p t)))
           (unless completed-p
@@ -740,17 +739,16 @@
               (1+ (appkit-source--instance-intent-count instance)))
         (unwind-protect
             (condition-case err
-                (progn
-                  (setq returned
-                        (funcall
-                         (appkit-source-spec-outbound spec)
-                         (list 'appkit-source-outbound-context token)
-                         (appkit-source-spec-input spec)
-                         payload
-                         (lambda (outcome)
-                           (appkit-source--stage-intent-outcome
-                            instance intent outcome)))
-                        completed-p t))
+                (setq returned
+                      (funcall
+                       (appkit-source-spec-outbound spec)
+                       (list 'appkit-source-outbound-context token)
+                       (appkit-source-spec-input spec)
+                       payload
+                       (lambda (outcome)
+                         (appkit-source--stage-intent-outcome
+                          instance intent outcome)))
+                      completed-p t)
               ((error quit)
                (setq condition err completed-p t)))
           (unless completed-p

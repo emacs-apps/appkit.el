@@ -105,14 +105,12 @@
     (appkit-chat-history-window-set "a" "b")
     (appkit-chat-history-older-loaded-set t)
     (appkit-chat-history-newer-stalled-set)
-    (progn
-      (appkit-chat-history-loading-set 'around)
-      (appkit-chat-history-window-clear)
-      (should-not (appkit-chat-history-window-known-p))
-      (should-not (appkit-chat-history-older-loaded-p))
-      (should-not (appkit-chat-history-newer-stalled-p))
-      (should (eq 'around (appkit-chat-history-loading))))
-    ))
+    (appkit-chat-history-loading-set 'around)
+    (appkit-chat-history-window-clear)
+    (should-not (appkit-chat-history-window-known-p))
+    (should-not (appkit-chat-history-older-loaded-p))
+    (should-not (appkit-chat-history-newer-stalled-p))
+    (should (eq 'around (appkit-chat-history-loading)))))
 
 (ert-deftest appkit-chat-history-autoload-gates-window-state-and-position ()
   (with-temp-buffer
@@ -129,10 +127,9 @@
     (appkit-chat-history-newer-stalled-set)
     (should-not (appkit-chat-history-autoload-newer-p 95 100 20))
     (appkit-chat-history-newer-stalled-clear)
-    (progn
-      (appkit-chat-history-loading-set 'newer)
-      (should-not (appkit-chat-history-autoload-newer-p 95 100 20))
-      (appkit-chat-history-loading-set nil))
+    (appkit-chat-history-loading-set 'newer)
+    (should-not (appkit-chat-history-autoload-newer-p 95 100 20))
+    (appkit-chat-history-loading-set nil)
 
     (appkit-chat-history-window-set "a" nil)
     (should-not (appkit-chat-history-autoload-newer-p 95 100 20))))
@@ -148,16 +145,14 @@
     (appkit-chat-history-window-set "a" "b")
     (should (equal "········"
                    (appkit-chat-history-delimiter-string 8 :face nil)))
-    (progn
-      (appkit-chat-history-loading-set 'newer)
-      (let
-          ((delimiter
-            (appkit-chat-history-delimiter-string 14 :loading-text
-                                                  "loading" :face nil)))
-        (should (= 14 (string-width delimiter)))
-        (should (string-match-p " loading " delimiter)))
-      (appkit-chat-history-loading-set nil))
-    ))
+    (appkit-chat-history-loading-set 'newer)
+    (let
+        ((delimiter
+          (appkit-chat-history-delimiter-string 14 :loading-text
+                                                "loading" :face nil)))
+      (should (= 14 (string-width delimiter)))
+      (should (string-match-p " loading " delimiter)))
+    (appkit-chat-history-loading-set nil)))
 
 (provide 'appkit-chat-history-test)
 

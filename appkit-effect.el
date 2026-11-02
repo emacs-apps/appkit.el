@@ -520,19 +520,18 @@ an output gate."
       (puthash key instance instances)
       (unwind-protect
           (condition-case err
-              (progn
-                (setq capability
-                      (funcall
-                       (appkit-effect-spec-start spec)
-                       context
-                       (appkit-effect-spec-input spec)
-                       (lambda (&rest payload)
-                         (appkit-effect--observe instance payload))
-                       (lambda (&rest payload)
-                         (appkit-effect--settle instance 'success payload))
-                       (lambda (&rest payload)
-                         (appkit-effect--settle instance 'failure payload)))
-                      completed-p t))
+              (setq capability
+                    (funcall
+                     (appkit-effect-spec-start spec)
+                     context
+                     (appkit-effect-spec-input spec)
+                     (lambda (&rest payload)
+                       (appkit-effect--observe instance payload))
+                     (lambda (&rest payload)
+                       (appkit-effect--settle instance 'success payload))
+                     (lambda (&rest payload)
+                       (appkit-effect--settle instance 'failure payload)))
+                    completed-p t)
             ((error quit)
              (setq condition err
                    completed-p t)))

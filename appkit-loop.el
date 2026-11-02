@@ -430,13 +430,12 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
     (let (completed-p condition result)
       (unwind-protect
           (condition-case err
-              (progn
-                (let ((appkit-loop--current-envelope envelope))
-                  (setq result
-                        (funcall (appkit-loop--update loop)
-                                 (appkit-loop--model loop)
-                                 (appkit-loop-envelope-payload envelope))
-                        completed-p t)))
+              (let ((appkit-loop--current-envelope envelope))
+                (setq result
+                      (funcall (appkit-loop--update loop)
+                               (appkit-loop--model loop)
+                               (appkit-loop-envelope-payload envelope))
+                      completed-p t))
             ((error quit)
              (setq condition err
                    completed-p t)))

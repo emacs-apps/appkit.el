@@ -356,19 +356,18 @@ The first completion wakes the App; later completions share that wake."
           (1+ (appkit-resource--broker-active-count broker)))
     (unwind-protect
         (condition-case err
-            (progn
-              (setq capability
-                    (funcall
-                     (appkit-resource--acquisition-loader acquisition)
-                     (list 'appkit-resource-context token)
-                     (appkit-resource--acquisition-input acquisition)
-                     (lambda (value)
-                       (appkit-resource--broker-settle
-                        acquisition token 'ready value))
-                     (lambda (reason)
-                       (appkit-resource--broker-settle
-                        acquisition token 'failed reason)))
-                    completed-p t))
+            (setq capability
+                  (funcall
+                   (appkit-resource--acquisition-loader acquisition)
+                   (list 'appkit-resource-context token)
+                   (appkit-resource--acquisition-input acquisition)
+                   (lambda (value)
+                     (appkit-resource--broker-settle
+                      acquisition token 'ready value))
+                   (lambda (reason)
+                     (appkit-resource--broker-settle
+                      acquisition token 'failed reason)))
+                  completed-p t)
           ((error quit)
            (setq condition err completed-p t)))
       (unless completed-p
