@@ -141,7 +141,7 @@ Do not use nearby-row fallback or include the composer."
     (&key printer anchor-property footer after-mutation-function
           ime-message-function)
   "Ensure the current Surface host owns one projected timeline.
-The first buffer position belongs to a message; status uses header-line-format.
+The first buffer position belongs to a message; reading status uses header-line-format.
 IME-MESSAGE-FUNCTION, when given, turns rows into input-method context; see
 `appkit-chat-timeline-ime-context'."
   (appkit-chat-timeline--surface)
@@ -423,7 +423,7 @@ old semantic row keys to new keys."
             (composer-visible-p nil composer-visible-p-supplied-p))
   "Set timeline FOOTER without rebuilding live input.
 
-Status belongs in the window header line; the timeline starts with a message.
+Reading status belongs in the window header line; the timeline starts with a message.
 The footer and trailing composer are separate regions, so redisplay never
 deletes and recreates the user's input.
 

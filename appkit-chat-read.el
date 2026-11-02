@@ -97,12 +97,15 @@ Use for explicit unread navigation, not for ordinary read receipts."
           (appkit-chat-read--state-boundary-key state)
           (appkit-chat-read--state-current-key state))))
 
-(defun appkit-chat-read-count-text (count)
-  "Return header text for reliable positive unread message COUNT.
-Unknown, invalid and zero counts have no header component.  The adapter must
-supply a current conversation/narrow count, not an account total or badge."
-  (when (and (integerp count) (> count 0))
-    (propertize (format "Unread: %d" count) 'face 'bold)))
+(defun appkit-chat-read-status-text (count &optional unread-p)
+  "Return header text for this conversation's unread state.
+COUNT is a reliable message count, never a mention or notification badge.
+When COUNT is unknown (nil), UNREAD-P can indicate unread messages without
+inventing a count.  A known zero count has no header component."
+  (when-let* ((text (cond
+                    ((and (integerp count) (> count 0)) (format "Unread: %d" count))
+                    ((and (null count) unread-p) "Unread"))))
+    (propertize text 'face 'bold)))
 
 (defun appkit-chat-read-target (&optional position eligible-p)
   "Return the exact projected message row represented by POSITION or point.

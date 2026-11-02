@@ -143,8 +143,9 @@ the boundary itself is unknown.  Never derive a key from a count.
   ~appkit-chat-read-rebase~ moves to a newly confirmed explicit unread target.
 - ~appkit-chat-read-target~ selects the row at point, or from the composer the
   newest eligible loaded row.  Dividers have no read target.
-- Headers use ~appkit-chat-read-count-text~ for reliable positive counts in the
-  current conversation.
+- Header lines use ~appkit-chat-read-status-text~ for reliable conversation
+  counts, or an unread indicator when the count is unknown.  Keep identity in
+  the mode line and detailed permissions in the conversation description.
 
 State belongs to the Surface: a replacement Surface starts fresh, and none of
 these helpers sends a receipt.
