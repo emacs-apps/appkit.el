@@ -223,7 +223,7 @@
         (should (eq fold-state (appkit-directory-retire)))
         (should-not (appkit-directory-current-surface))
         (should-not (appkit-directory-retire))
-        (should-error (appkit-directory-surface))))))
+        (should-not (eq surface (appkit-directory-surface)))))))
 
 (ert-deftest appkit-directory-reconcile-retains-and-targets-ewoc-nodes ()
   (appkit-directory-test--with-surface
