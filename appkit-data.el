@@ -19,6 +19,19 @@
   (unless (symbolp key) (error "Record field is not a symbol: %S" key))
   (if (keywordp key) (intern (substring (symbol-name key) 1)) key))
 
+(defmacro appkit-data-step (state expression)
+  "Thread reducer EXPRESSION through local STATE and return its value.
+Arguments run before STATE is read, so nested reducers compose in order."
+  (declare (indent 1))
+  (unless (eq state (cadr expression))
+    (error "Reducer must receive the state being threaded"))
+  (let ((arguments (mapcar (lambda (value) (list (make-symbol "arg") value))
+                           (cddr expression)))
+        (next (make-symbol "next")))
+    `(let* (,@arguments
+            (,next (,(car expression) ,state ,@(mapcar #'car arguments))))
+       (setq ,state (car ,next) ,next (cdr ,next)))))
+
 (defun appkit-data-get (value key &optional default)
   "Read KEY from a record, keyword plist or persistent map VALUE.
 DEFAULT applies to missing map/plist keys.  Unknown record fields signal."

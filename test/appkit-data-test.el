@@ -111,6 +111,14 @@
     (should (equal '(:other t)
                    (appkit-data-with '(:gone nil :other t) (() :gone appkit-data-delete))))))
 
+(ert-deftest appkit-data-step-reads-state-after-nested-arguments ()
+  (let ((state 0))
+    (cl-labels ((increment (snapshot amount) (cons (+ snapshot amount) amount)))
+      (should (= 2 (appkit-data-step state
+                     (increment state
+                                (appkit-data-step state (increment state 2))))))
+      (should (= 4 state)))))
+
 (provide 'appkit-data-test)
 
 ;;; appkit-data-test.el ends here
