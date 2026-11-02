@@ -168,10 +168,12 @@ Completion returns (appkit-operation-completed TOKEN REQUEST VALUE REASON)."
        (when (equal prefix (seq-take key (length prefix)))
          (setq commands
                (append commands
-                       (appkit-operation--replies (plist-get entry :waiters) nil "Data invalidated")
+                       (appkit-operation--replies
+                        (cons (cadr (plist-get entry :queued)) (plist-get entry :waiters))
+                        nil "Data invalidated")
                        (list (appkit-command-cancel-effect (cons 'appkit-operation key))
                              (appkit-command-publish topic key))))
-         (push (cons key (if keep (appkit-data-with entry (() :pending nil :waiters nil))
+         (push (cons key (if keep (appkit-data-with entry (() :pending nil :waiters nil :queued nil :remaining nil))
                            appkit-data-delete))
                changes)))
      (appkit-data-get model :operations))
