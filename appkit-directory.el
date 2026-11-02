@@ -915,6 +915,124 @@ An entry may instead supply an Appkit UI action value as its primary action."
   (mouse-set-point event)
   (appkit-directory-activate))
 
+(defun appkit-directory--navigable-p (entry)
+  "Return whether ENTRY is an item or a foldable heading."
+  (or (appkit-directory-entry-item-p entry)
+      (appkit-directory-entry-foldable-p entry)))
+
+(defun appkit-directory-forward (&optional count)
+  "Move COUNT visible entries, including headings and skipping passive rows."
+  (interactive "p")
+  (let ((count (or count 1)))
+    (dotimes (_ (abs count))
+      (appkit-directory-move (appkit-directory-surface)
+                             #'appkit-directory--navigable-p
+                             (if (< count 0) -1 1)))))
+
+(defun appkit-directory-backward (&optional count)
+  "Move backward COUNT visible entries."
+  (interactive "p")
+  (appkit-directory-forward (- (or count 1))))
+
+(defun appkit-directory-forward-sibling (&optional count)
+  "Move COUNT siblings without crossing the enclosing heading.
+Entry indentation defines the visible outline, including nested groups."
+  (interactive "p")
+  (let ((count (or count 1))
+        (surface (appkit-directory-surface)))
+    (dotimes (_ (abs count))
+      (let* ((entry (appkit-directory-entry-at-point))
+             (entries (appkit-directory-surface-entries surface))
+             (before (seq-take-while (lambda (it) (not (eq it entry))) entries))
+             (candidates (if (< count 0) (reverse before)
+                           (cdr (memq entry entries))))
+             (indent (or (and entry (appkit-directory-entry-indent entry)) 0))
+             (siblings
+              (seq-take-while
+               (lambda (it)
+                 (or (not (appkit-directory--navigable-p it))
+                     (>= (or (appkit-directory-entry-indent it) 0) indent)))
+               candidates))
+             (target (seq-find
+                      (lambda (it)
+                        (and (appkit-directory--navigable-p it)
+                             (= (or (appkit-directory-entry-indent it) 0) indent)))
+                      siblings)))
+        (when target
+          (goto-char (ewoc-location
+                      (gethash (appkit-directory-entry-key target)
+                               (appkit-directory-surface-node-table surface)))))))))
+
+(defun appkit-directory-backward-sibling (&optional count)
+  "Move backward COUNT siblings."
+  (interactive "p")
+  (appkit-directory-forward-sibling (- (or count 1))))
+
+(defun appkit-directory--fold-target ()
+  "Return the foldable row at point or its nearest enclosing heading."
+  (let* ((entry (appkit-directory-entry-at-point))
+         (indent (or (and entry (appkit-directory-entry-indent entry)) 0)))
+    (if (and entry (appkit-directory-entry-foldable-p entry))
+        entry
+      (seq-find
+       (lambda (it)
+         (and (appkit-directory-entry-foldable-p it)
+              (< (or (appkit-directory-entry-indent it) 0) indent)))
+       (reverse
+        (seq-take-while
+         (lambda (it) (not (eq it entry)))
+         (appkit-directory-surface-entries (appkit-directory-surface))))))))
+
+(defun appkit-directory--fold (action)
+  "Apply ACTION (show, hide or toggle) to the enclosing fold."
+  (let* ((surface (appkit-directory-surface))
+         (entry (or (appkit-directory--fold-target)
+                    (user-error "No foldable heading at point")))
+         (expanded (appkit-directory-fold-expanded-p
+                    surface (appkit-directory-entry-fold-key entry)
+                    (appkit-directory-entry-fold-default-expanded-p entry))))
+    (when (or (eq action 'toggle) (eq expanded (eq action 'hide)))
+      (goto-char (ewoc-location
+                  (gethash (appkit-directory-entry-key entry)
+                           (appkit-directory-surface-node-table surface))))
+      (appkit-directory-toggle-entry-fold surface entry))))
+
+(defun appkit-directory-toggle ()
+  "Toggle the row at point or its enclosing heading."
+  (interactive)
+  (appkit-directory--fold 'toggle))
+
+(defun appkit-directory-show ()
+  "Expand the row at point or its enclosing heading."
+  (interactive)
+  (appkit-directory--fold 'show))
+
+(defun appkit-directory-hide ()
+  "Collapse the row at point or its enclosing heading."
+  (interactive)
+  (appkit-directory--fold 'hide))
+
+(defun appkit-directory-toggle-all ()
+  "Toggle the outermost foldable headings without fetching hidden descendants."
+  (interactive)
+  (let* ((surface (appkit-directory-surface))
+         (folds (seq-filter #'appkit-directory-entry-foldable-p
+                            (appkit-directory-surface-entries surface))))
+    (when folds
+      (let* ((depth (apply #'min (mapcar (lambda (it)
+                                          (or (appkit-directory-entry-indent it) 0))
+                                        folds)))
+             (roots (seq-filter
+                     (lambda (it) (= depth (or (appkit-directory-entry-indent it) 0)))
+                     folds))
+             (collapse (seq-some #'appkit-directory-entry-expanded-p roots)))
+        (dolist (entry roots)
+          (when (eq (appkit-directory-fold-expanded-p
+                     surface (appkit-directory-entry-fold-key entry)
+                     (appkit-directory-entry-fold-default-expanded-p entry))
+                    (and collapse t))
+            (appkit-directory-toggle-entry-fold surface entry)))))))
+
 (defvar appkit-directory-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
@@ -926,9 +1044,16 @@ An entry may instead supply an Appkit UI action value as its primary action."
 (appkit-bindings-define 'appkit-directory-mode-map 'read-only
   'activate #'appkit-directory-activate
   'next-button #'appkit-directory-tab-dwim
-  'previous-button #'appkit-directory-previous-item
-  'next-item #'appkit-directory-next-item
-  'previous-item #'appkit-directory-previous-item
+  'section-toggle-all #'appkit-directory-toggle-all
+  'next-item #'appkit-directory-forward-sibling
+  'previous-item #'appkit-directory-backward-sibling
+  'next-section #'appkit-directory-forward
+  'previous-section #'appkit-directory-backward
+  'next-sibling #'appkit-directory-forward-sibling
+  'previous-sibling #'appkit-directory-backward-sibling
+  'section-toggle #'appkit-directory-toggle
+  'section-show #'appkit-directory-show
+  'section-hide #'appkit-directory-hide
   'quit #'quit-window
   'help #'describe-mode)
 

@@ -529,6 +529,40 @@
           (should (equal (make-string 8 ?\s)
                          (get-text-property (point) 'line-prefix))))))))
 
+(ert-deftest appkit-directory-outline-navigation-includes-headings ()
+  (appkit-directory-test--with-surface
+    (appkit-directory-reconcile surface (appkit-directory-test--entries t))
+    (goto-char (point-min))
+    (appkit-directory-forward)
+    (should (equal '(group . "g") (appkit-directory-key-at-point)))
+    (appkit-directory-forward)
+    (should (equal '(item . "one") (appkit-directory-key-at-point)))
+    (appkit-directory-forward-sibling)
+    (should (equal '(item . "two") (appkit-directory-key-at-point)))
+    (appkit-directory-backward-sibling 2)
+    (should (equal '(item . "one") (appkit-directory-key-at-point)))
+    (appkit-directory-backward)
+    (should (equal '(group . "g") (appkit-directory-key-at-point)))))
+
+(ert-deftest appkit-directory-fold-commands-are-idempotent-and-find-parent ()
+  (appkit-directory-test--with-surface
+    (let ((changes 0))
+      (appkit-directory-configure
+       surface :fold-function
+       (lambda (_surface _entry _expanded) (cl-incf changes)))
+      (appkit-directory-reconcile surface (appkit-directory-test--entries t))
+      (goto-char (point-min))
+      (appkit-directory-forward 2)
+      (appkit-directory-hide)
+      (should (equal '(group . "g") (appkit-directory-key-at-point)))
+      (should-not (appkit-directory-fold-expanded-p surface '(group . "g") t))
+      (appkit-directory-hide)
+      (should (= changes 1))
+      (appkit-directory-show)
+      (should (appkit-directory-fold-expanded-p surface '(group . "g") nil))
+      (appkit-directory-show)
+      (should (= changes 2)))))
+
 (provide 'appkit-directory-test)
 
 ;;; appkit-directory-test.el ends here

@@ -143,6 +143,22 @@
               (execute-kbd-macro (kbd key)))
             (should (equal calls '(second first)))))))))
 
+(ert-deftest appkit-evil-directory-uses-section-navigation ()
+  (appkit-evil-setup)
+  (with-temp-buffer
+    (appkit-directory-mode)
+    (evil-local-mode 1)
+    (evil-normal-state)
+    (dolist (binding '(("g j" . appkit-directory-forward-sibling)
+                       ("g k" . appkit-directory-backward-sibling)
+                       ("C-j" . appkit-directory-forward)
+                       ("C-k" . appkit-directory-backward)
+                       ("] ]" . appkit-directory-forward-sibling)
+                       ("z c" . appkit-directory-hide)
+                       ("z o" . appkit-directory-show)
+                       ("<backtab>" . appkit-directory-toggle-all)))
+      (should (eq (key-binding (kbd (car binding))) (cdr binding))))))
+
 (provide 'appkit-evil-test)
 
 ;;; appkit-evil-test.el ends here
