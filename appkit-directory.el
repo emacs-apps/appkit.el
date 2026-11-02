@@ -122,7 +122,7 @@
 (defun appkit-directory-surface ()
   "Return the current buffer's initialized directory surface."
   (or (appkit-directory-current-surface)
-      (error "Appkit directory surface is not initialized")))
+      (appkit-directory-initialize)))
 
 (defun appkit-directory-retire ()
   "Retire the current buffer's directory surface and return its fold state.
@@ -1085,8 +1085,7 @@ rows and operation semantics."
   (setq buffer-read-only t
         truncate-lines t)
   (buffer-disable-undo)
-  (setq-local buffer-undo-list t)
-  (appkit-directory-initialize))
+  (setq-local buffer-undo-list t))
 
 (provide 'appkit-directory)
 

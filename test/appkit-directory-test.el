@@ -563,6 +563,13 @@
       (appkit-directory-show)
       (should (= changes 2)))))
 
+(ert-deftest appkit-directory-mode-does-not-erase-host-content ()
+  (with-temp-buffer
+    (insert "Existing host")
+    (appkit-directory-mode)
+    (should (equal "Existing host" (buffer-string)))
+    (should-not (appkit-directory-current-surface))))
+
 (provide 'appkit-directory-test)
 
 ;;; appkit-directory-test.el ends here
