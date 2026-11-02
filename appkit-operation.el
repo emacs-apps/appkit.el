@@ -106,14 +106,14 @@ Children are borrowed immutable values, as in other Appkit data records."
 
 
 
-(defun appkit-operation-submit (registry entries target request &optional refresh reply-token)
+(defun appkit-operation-submit (registry model target request &optional refresh reply-token)
   "Send REQUEST to TARGET, an App or, with REPLY-TOKEN, a Surface.
 REQUEST is a named input value created by `appkit-operation-request-create'.
 REFRESH t replaces a read; join refreshes unless pending; nil reuses ready data.
 Completion returns (appkit-operation-completed TOKEN REQUEST VALUE REASON)."
   (appkit-operation--check-request registry request)
   (let* ((spec (appkit-operation--spec registry (appkit-operation-request-name request)))
-         (entry (appkit-data-map-get entries (funcall (plist-get spec :key) request))))
+         (entry (appkit-data-map-get (appkit-data-get model :operations) (funcall (plist-get spec :key) request))))
     (when (and (plist-get spec :write) (not (plist-get spec :coalesce))
                (plist-get entry :pending))
       (user-error "Operation already in progress")))
@@ -252,6 +252,7 @@ MODEL contains an :operations map.  Prepare and commit functions return
           (`(appkit-operation-result (,request ,key ,step) ,raw ,reason)
            (let ((old (entry key)) (definition (spec request)) value)
              (unless reason
+               (let ((before model) (pending-commands commands))
                (condition-case condition
                    (let ((committed
                           (funcall (plist-get definition :commit)
@@ -261,7 +262,8 @@ MODEL contains an :operations map.  Prepare and commit functions return
                        (forget prefix t))
                      (dolist (prefix (funcall (plist-get definition :invalidate) model value request))
                        (forget prefix)))
-                 (error (setq reason (error-message-string condition)))))
+                 (error (setq model before commands pending-commands value nil
+                              reason (error-message-string condition))))))
              (let ((remaining (and (not reason) (plist-get old :remaining))))
                (put key (appkit-data-with (entry key)
                           (() :pending (and remaining t)
