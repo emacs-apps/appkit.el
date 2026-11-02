@@ -118,6 +118,9 @@
 (defvar appkit-loop--pass-context nil
   "Facade-owned snapshot shared by callbacks in the active pass.")
 
+(defvar appkit-loop--active-loops nil
+  "Loops with unfinished passes, innermost first.")
+
 (defvar appkit-loop--send-context nil
   "Cons of the loop and ticket owned by the current synchronous send.")
 
@@ -523,11 +526,13 @@ waits for a later pass, and MESSAGE-LIMIT bounds the two lanes together.
 Return the total number of envelopes removed."
   (appkit-loop--assert-main-thread)
   (appkit-loop--check loop)
-  (when appkit-loop--active-loop
+  (when (or appkit-loop--current-envelope
+            (memq loop appkit-loop--active-loops))
     (error "Appkit loop pass is not reentrant"))
   (let ((processed 0))
     (unwind-protect
         (let ((appkit-loop--active-loop loop)
+              (appkit-loop--active-loops (cons loop appkit-loop--active-loops))
               (appkit-loop--current-envelope nil)
               (appkit-loop--pass-context nil)
               (appkit-loop--pass-tickets nil))
@@ -594,13 +599,16 @@ Return the total number of envelopes removed."
 
 A send uses reserved capacity and drives as many bounded passes as necessary
 without crossing messages queued after its ticket.  Return `reentrant-send'
-when called from a pass or another send, `busy' when all send reserve is
+during an update or a recursive send to an unfinished loop.  Post-commit
+callbacks may send to independent loops.  Return `busy' when all send reserve is
 occupied, and `stopped' or `faulted' when LOOP cannot admit work.  An admitted
 send that encounters a runtime fault re-signals the stored condition."
   (appkit-loop--assert-main-thread)
   (appkit-loop--check loop)
   (cond
-   ((or appkit-loop--active-loop appkit-loop--send-context)
+   ((or appkit-loop--current-envelope
+        (memq loop appkit-loop--active-loops)
+        (eq loop (car-safe appkit-loop--send-context)))
     'reentrant-send)
    ((appkit-loop--admission-status loop))
    ((not

@@ -527,8 +527,6 @@
            (should (eq (appkit-routing--post
                         (appkit-routing--address target) 'later)
                        'enqueued))
-           (should (eq (appkit-loop-send target 'nested) 'reentrant-send))
-           (should-error (appkit-loop-run-pass target))
            ;; Simulate a scheduled callback selected by nested host dispatch.
            (cancel-timer (appkit-loop--scheduled-handle target))
            (appkit-loop--scheduled-pass target)
@@ -760,6 +758,36 @@
           (should (eq (appkit-loop-ticket-state ticket) 'accepted))
           (should (eq (appkit-loop-ticket-outcome ticket) 'answer)))
         (should (= (appkit-loop-model loop) 1))))))
+
+(ert-deftest appkit-loop-after-commit-can-send-to-an-independent-loop ()
+  (let (source target cycle)
+    (setq target
+          (appkit-loop-create
+           :model nil
+           :update (lambda (_model message) (appkit-loop-accept message))
+           :after-pass
+           (lambda (_loop _pass)
+             (should (eq (appkit-loop-model source) 'committed))
+             (setq cycle (appkit-loop-send source 'cycle)))))
+    (setq source
+          (appkit-loop-create
+           :model nil
+           :update (lambda (_model message) (appkit-loop-accept message))
+           :after-pass
+           (lambda (_loop _pass)
+             (let ((ticket (appkit-loop-send target 'nested)))
+               (should (eq (appkit-loop-ticket-state ticket) 'accepted))
+               (should (eq (appkit-loop-model target) 'nested))))))
+    (unwind-protect
+        (progn
+          (should (eq (appkit-loop-ticket-state
+                       (appkit-loop-send source 'committed)) 'accepted))
+          (should (eq cycle 'reentrant-send))
+          (should (= (appkit-loop-revision source) 1))
+          (should (= (appkit-loop-revision target) 1))
+          (should-not appkit-loop--active-loops))
+      (appkit-loop-stop source)
+      (appkit-loop-stop target))))
 
 (provide 'appkit-loop-test)
 
