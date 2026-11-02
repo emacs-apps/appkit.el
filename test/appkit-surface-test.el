@@ -847,7 +847,7 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
         (when (buffer-live-p caller)
           (kill-buffer caller))))))
 
-(ert-deftest appkit-surface-renderer-cannot-post-from-ready-pass ()
+(ert-deftest appkit-surface-renderer-post-waits-for-next-pass ()
   (let (surface messages (recover-count 0))
     (unwind-protect
         (progn
@@ -872,22 +872,25 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                      :merge (lambda (_left right) right)
                      :render
                      (lambda (&rest _arguments)
-                       (appkit-surface-post surface 'hidden))
+                       (appkit-surface-post surface 'rendered)
+                       nil)
                      :recover
                      (lambda (&rest _arguments)
                        (setq recover-count (1+ recover-count)))
                      :unmount (lambda (&rest _arguments)))))))
-          (should-error (appkit-surface-send surface 'render)
-                        :type 'appkit-runtime-contract-error)
-          (should (eq (appkit-surface-status surface) 'faulted))
+          (should (eq (appkit-loop-ticket-state
+                       (appkit-surface-send surface 'render))
+                      'accepted))
+          (should (eq (appkit-surface-status surface) 'running))
           (should (equal messages '(render)))
           (should (zerop recover-count))
-          (should (zerop
-                   (appkit-loop-pending-count
-                    (appkit-surface-loop surface)))))
+          (should (= (appkit-loop-pending-count
+                      (appkit-surface-loop surface)) 1))
+          (should (= (appkit-loop-run-pass (appkit-surface-loop surface)) 1))
+          (should (equal messages '(rendered render))))
       (appkit-surface-test--cleanup surface))))
 
-(ert-deftest appkit-surface-effect-starter-cannot-post-from-ready-pass ()
+(ert-deftest appkit-surface-effect-post-waits-for-next-pass ()
   (let (surface messages)
     (unwind-protect
         (progn
@@ -908,23 +911,26 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                           (list
                            (appkit-command-start-effect
                             (appkit-effect-create
-                             :key 'hidden
+                             :key 'callback
                              :input nil
                              :start
                              (lambda (&rest _arguments)
-                               (appkit-surface-post surface 'hidden))
+                               (appkit-surface-post surface 'callback)
+                               (appkit-cancellation-create :kind 'logical))
                              :success (lambda (&rest _) 'done)
                              :failure (lambda (&rest _) 'failed)))))))
                   :renderer-factory
                   (lambda (_surface)
                     (appkit-surface-test--renderer #'ignore)))))
-          (should-error (appkit-surface-send surface 'start)
-                        :type 'appkit-runtime-contract-error)
-          (should (eq (appkit-surface-status surface) 'faulted))
+          (should (eq (appkit-loop-ticket-state
+                       (appkit-surface-send surface 'start))
+                      'accepted))
+          (should (eq (appkit-surface-status surface) 'running))
           (should (equal messages '(start)))
-          (should (zerop
-                   (appkit-loop-pending-count
-                    (appkit-surface-loop surface)))))
+          (should (= (appkit-loop-pending-count
+                      (appkit-surface-loop surface)) 1))
+          (should (= (appkit-loop-run-pass (appkit-surface-loop surface)) 1))
+          (should (equal messages '(callback start))))
       (appkit-surface-test--cleanup surface))))
 
 (provide 'appkit-surface-test)

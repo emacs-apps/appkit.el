@@ -89,10 +89,11 @@
   "Try to enqueue MESSAGE at exact internal TARGET.
 
 Return `enqueued', `full', `stale', `stopped', or `faulted'.  Failed admission
-does not allocate a target sequence number.  Client transitions must instead
+does not allocate a target sequence number.  Update functions must instead
 return a closed post command for execution after commit."
-  (when appkit-loop--active-loop
-    (error "Directed posts must use the runtime post-commit phase"))
+  (when appkit-loop--current-envelope
+    (signal 'appkit-runtime-contract-error
+            (list "Loop updates must return post commands")))
   (appkit-routing--admit target message))
 
 (defun appkit-routing--post-command

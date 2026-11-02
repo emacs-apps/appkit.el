@@ -257,11 +257,15 @@ MESSAGE-LIMIT is the hard maximum processed across both lanes by one pass."
       (cancel-timer timer))))
 
 (defun appkit-loop--scheduled-pass (loop)
-  "Run one scheduled pass for LOOP."
+  "Run one scheduled pass for LOOP once the current pass has returned."
   (when (appkit-loop-p loop)
     (setf (appkit-loop--scheduled-handle loop) nil)
     (when (eq (appkit-loop--status loop) 'running)
-      (appkit-loop-run-pass loop))))
+      (if appkit-loop--active-loop
+          ;; Host event processing can dispatch timers from inside a callback.
+          (setf (appkit-loop--scheduled-handle loop)
+                (run-at-time 0.01 nil #'appkit-loop--scheduled-pass loop))
+        (appkit-loop-run-pass loop)))))
 
 (defun appkit-loop--schedule (loop)
   "Ensure LOOP has one scheduled pass when either lane has pending work."
@@ -362,12 +366,18 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
          origin source-address source-revision))))
 
 (defun appkit-loop-post (loop message)
-  "Try to enqueue MESSAGE in LOOP's data lane and return its outcome.\n\nThis is an external ingress for host events and callback adapters.  Client\nphases must return a closed post command; posting from any active pass signals\na contract error.  The result is one of `enqueued', `full', `stopped', or\n`faulted'.  A failed admission does not allocate a sequence number."
-  (when appkit-loop--active-loop
+  "Try to enqueue MESSAGE in LOOP's data lane and return its outcome.
+
+Host callbacks, renderers and effects may enqueue work after commit; that
+work runs in a later pass.  Update functions must return a closed post command
+so rejected transitions cannot leak messages.
+Return `enqueued', `full', `stopped', or `faulted'.  A failed admission
+does not allocate a sequence number."
+  (when appkit-loop--current-envelope
     (signal 'appkit-runtime-contract-error
-            (list "Loop posts are not allowed from an active pass")))
+            (list "Loop updates must return post commands")))
   (appkit-loop--post-addressed loop message
-                               (appkit-loop-incarnation loop)))
+                              (appkit-loop-incarnation loop)))
 
 (defun appkit-loop--complete-ticket (ticket state outcome &optional revision)
   "Complete pending TICKET once with STATE, OUTCOME, and REVISION."

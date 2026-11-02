@@ -381,7 +381,7 @@
     (should (equal (appkit-loop-model loop) '(scheduled)))
     (should (= (appkit-loop-pending-count loop) 0))))
 
-(ert-deftest appkit-loop-active-pass-rejects-cross-loop-post ()
+(ert-deftest appkit-loop-update-rejects-cross-loop-post ()
   (let (source target)
     (setq target
           (appkit-loop-create
@@ -484,26 +484,62 @@
   (let (loop after-runs)
     (setq loop
           (appkit-loop-create
-           :model nil
+           :model nil :mailbox-capacity 1
            :update
            (lambda (model message)
              (appkit-loop-accept (append model (list message))))
            :after-pass
-           (lambda (_current _pass)
+           (lambda (current _pass)
              (setq after-runs (1+ (or after-runs 0)))
              (when (= after-runs 1)
-               (appkit-loop--post-addressed
-                loop 'later (appkit-loop-incarnation loop))))))
+               (should (equal (appkit-loop-model current) '(first)))
+               (should (eq (appkit-loop-post loop 'later) 'enqueued))
+               (let ((sequence (appkit-loop--next-sequence loop)))
+                 (should (eq (appkit-loop-post loop 'overflow) 'full))
+                 (should (= sequence (appkit-loop--next-sequence loop))))
+               (should (eq (appkit-loop-send loop 'nested) 'reentrant-send))
+               (should-error (appkit-loop-run-pass loop))))))
     (unwind-protect
         (progn
-          (appkit-loop-post loop 'first)
-          (should (= (appkit-loop-run-pass loop) 1))
+          (should (eq (appkit-loop-ticket-state
+                       (appkit-loop-send loop 'first))
+                      'accepted))
           (should (equal (appkit-loop-model loop) '(first)))
           (should (= (appkit-loop-pending-count loop) 1))
           (should (= (appkit-loop-run-pass loop) 1))
           (should (equal (appkit-loop-model loop) '(first later)))
           (should (= after-runs 2)))
       (appkit-loop-stop loop))))
+
+(ert-deftest appkit-loop-scheduled-cross-loop-post-waits-out-active-pass ()
+  (appkit-loop-test--with-loop
+      (target
+       :model nil
+       :update (lambda (model message)
+                 (appkit-loop-accept (cons message model))))
+    (appkit-loop-test--with-loop
+        (source
+         :model nil
+         :update (lambda (_model message) (appkit-loop-accept message))
+         :after-pass
+         (lambda (current _pass)
+           (should (eq (appkit-loop-model current) 'committed))
+           (should (eq (appkit-routing--post
+                        (appkit-routing--address target) 'later)
+                       'enqueued))
+           (should (eq (appkit-loop-send target 'nested) 'reentrant-send))
+           (should-error (appkit-loop-run-pass target))
+           ;; Simulate a scheduled callback selected by nested host dispatch.
+           (cancel-timer (appkit-loop--scheduled-handle target))
+           (appkit-loop--scheduled-pass target)
+           (should-not (appkit-loop-model target))
+           (should (timerp (appkit-loop--scheduled-handle target)))))
+      (should (eq (appkit-loop-ticket-state
+                   (appkit-loop-send source 'committed))
+                  'accepted))
+      (should (= (appkit-loop-pending-count target) 1))
+      (should (= (appkit-loop-run-pass target) 1))
+      (should (equal (appkit-loop-model target) '(later))))))
 
 (ert-deftest appkit-loop-after-pass-failure-faults-accepted-send ()
   (appkit-loop-test--with-loop
