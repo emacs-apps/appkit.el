@@ -49,13 +49,13 @@ whether a new request replaces its queued successor."
                       :write ,(plist-get options :write)
                       :coalesce ,(plist-get options :coalesce)
                       :key ,(fn nil (or (plist-get options :key) `(list ',name ,@arguments)))
-                      :steps ,(fn nil (or (plist-get options :steps) `(list ,request)))
-                      :fetch ,(fn '(refresh resolve reject) (plist-get options :fetch))
-                      :prepare ,(fn nil (plist-get options :prepare))
-                      :commit ,(fn '(result observation) (or (plist-get options :commit) 'result))
-                      :invalidate ,(fn '(value) (plist-get options :invalidate))
-                      :cancel ,(fn '(value) (plist-get options :cancel))
-                      :next ,(fn '(value reason) (plist-get options :next)))
+                      :steps ,(fn '(model) (or (plist-get options :steps) `(list ,request)))
+                      :fetch ,(fn '(model refresh resolve reject) (plist-get options :fetch))
+                      :prepare ,(fn '(model) (or (plist-get options :prepare) '(cons model nil)))
+                      :commit ,(fn '(model result observation) (or (plist-get options :commit) '(cons model result)))
+                      :invalidate ,(fn '(model value) (plist-get options :invalidate))
+                      :cancel ,(fn '(model value) (plist-get options :cancel))
+                      :next ,(fn '(model value reason) (plist-get options :next)))
                 ,registry))))
 
 (defun appkit-operation--spec (registry name)
@@ -102,15 +102,9 @@ Children are borrowed immutable values, as in other Appkit data records."
                       registry (appkit-operation-request-name request)) :key)
            request))
 
-(defvar appkit-operation--building nil
-  "(OWNER . GETTER) while an update builds OWNER's next persistent entries.")
 
-(defun appkit-operation-lookup (owner entries key)
-  "Return KEY's entry for OWNER from ENTRIES, including its current update."
-  (appkit-data-map-get
-   (if (and owner (equal owner (car appkit-operation--building)))
-       (funcall (cdr appkit-operation--building)) entries)
-   key))
+
+
 
 (defun appkit-operation-submit (registry entries target request &optional refresh reply-token)
   "Send REQUEST to TARGET, an App or, with REPLY-TOKEN, a Surface.
@@ -141,17 +135,17 @@ Completion returns (appkit-operation-completed TOKEN REQUEST VALUE REASON)."
                        :message (list 'appkit-operation request refresh reply-token)
                        :reply-correlation (make-symbol "appkit-operation") :delivery 'report))))))
 
-(defun appkit-operation--effect (registry call request key refresh step)
-  "Return the keyed Effect fetching STEP of REQUEST under KEY."
+(defun appkit-operation--effect (registry model request key refresh step)
+  "Fetch STEP of REQUEST from the immutable MODEL captured at admission."
   (let ((spec (appkit-operation--spec registry (appkit-operation-request-name request))))
     (appkit-effect-create
      :key (cons 'appkit-operation key) :input (list request key step)
      :start
      (lambda (_context _input _observe resolve reject)
-       (let ((cancel (condition-case condition
-                         (funcall call (lambda ()
-                                         (funcall (plist-get spec :fetch) refresh resolve reject step)))
-                       ((error quit) (funcall reject nil (error-message-string condition)) nil))))
+       (let ((cancel
+              (condition-case condition
+                  (funcall (plist-get spec :fetch) model refresh resolve reject step)
+                ((error quit) (funcall reject nil (error-message-string condition)) nil))))
          (appkit-cancellation-create
           :kind 'logical :cancel (lambda () (when (functionp cancel) (funcall cancel))))))
      :success (lambda (input raw) (list 'appkit-operation-result input raw nil))
@@ -166,123 +160,133 @@ Completion returns (appkit-operation-completed TOKEN REQUEST VALUE REASON)."
              :delivery 'report))
           (delq nil waiters)))
 
-(defun appkit-operation--forget (entries prefix topic &optional keep)
-  "Return (ENTRIES . COMMANDS) revoking keys under PREFIX, optionally KEEP values."
-  (let (commands changes)
+(defun appkit-operation--forget (model prefix topic &optional keep)
+  "Return (MODEL . COMMANDS) revoking PREFIX, optionally retaining ready values."
+  (let (changes commands)
     (appkit-data-map-each
      (lambda (key entry)
        (when (equal prefix (seq-take key (length prefix)))
          (setq commands
-               (append (appkit-operation--replies (plist-get entry :waiters) nil "Data invalidated")
+               (append commands
+                       (appkit-operation--replies (plist-get entry :waiters) nil "Data invalidated")
                        (list (appkit-command-cancel-effect (cons 'appkit-operation key))
-                             (appkit-command-publish topic key)) commands))
+                             (appkit-command-publish topic key))))
          (push (cons key (if keep (appkit-data-with entry (() :pending nil :waiters nil))
-                           appkit-data-delete)) changes)))
-     entries)
-    (cons (appkit-data-map-edit entries changes) commands)))
+                           appkit-data-delete))
+               changes)))
+     (appkit-data-get model :operations))
+    (cons (appkit-data-with model
+            (() :operations (appkit-data-map-edit (appkit-data-get model :operations) changes)))
+          commands)))
 
 (cl-defun appkit-operation-update
-    (registry entries context message &key owner (call #'funcall) (topic 'appkit-operation))
-  "Return (NEW-ENTRIES . COMMANDS) for operation MESSAGE, or nil for others.
-ENTRIES remain untouched.  CALL runs spec bodies in their account context."
-  (when (memq (car-safe message) '(appkit-operation appkit-operation-result appkit-operation-forget))
-    (let* ((entries entries)
-           (appkit-operation--building (cons owner (lambda () entries)))
-           (self (appkit-transition-context-owner-address context))
-           commands)
+    (registry model context message &key (topic 'appkit-operation))
+  "Reduce operation MESSAGE against MODEL and return an App transition.
+MODEL contains an :operations map.  Prepare and commit functions return
+(NEW-MODEL . VALUE); no callbacks mutate a published model."
+  (when (memq (car-safe message)
+              '(appkit-operation appkit-operation-result appkit-operation-forget))
+    (let ((model model) commands)
       (cl-labels
-          ((forget (prefix &optional keep)
-             (let ((result (appkit-operation--forget entries prefix topic keep)))
-               (setq entries (car result) commands (append commands (cdr result))))))
+          ((spec (request)
+             (appkit-operation--spec registry (appkit-operation-request-name request)))
+           (entry (key)
+             (appkit-data-map-get (appkit-data-get model :operations) key))
+           (put (key value)
+             (setq model (appkit-data-with model ((:operations) key value))))
+           (reply (waiters value reason)
+             (setq commands (append commands (appkit-operation--replies waiters value reason))))
+           (publish (key)
+             (setq commands (append commands (list (appkit-command-publish topic key)))))
+           (fetch (request key refresh step)
+             (setq commands
+                   (append commands
+                           (list (appkit-command-start-effect
+                                  (appkit-operation--effect registry model request key refresh step))))))
+           (forget (prefix &optional keep)
+             (let ((next (appkit-operation--forget model prefix topic keep)))
+               (setq model (car next) commands (append commands (cdr next)))))
+           (start (request refresh waiter)
+             (let* ((definition (spec request))
+                    (key (appkit-operation-key registry request))
+                    (old (entry key))
+                    (prepared (funcall (plist-get definition :prepare) model request))
+                    (steps (mapcar (lambda (step) (appkit-operation--check-request registry step))
+                                   (funcall (plist-get definition :steps) (car prepared) request))))
+               (unless steps (error "Operation %S has no steps" request))
+               (setq model (car prepared))
+               (reply (plist-get old :waiters) nil "Request superseded")
+               (put key (appkit-data-with old
+                          (() :pending t :request request :error nil :queued nil
+                              :completed 0 :total (length steps) :remaining (cdr steps)
+                              :waiters (and waiter (list waiter)) :observation (cdr prepared))))
+               (fetch request key refresh (car steps))
+               (publish key))))
         (pcase message
           (`(appkit-operation-forget ,prefix) (forget prefix))
-          (`(appkit-operation ,submitted ,refresh ,reply-token)
-           (let* ((request (appkit-operation--check-request registry submitted))
-                  (spec (appkit-operation--spec registry (appkit-operation-request-name request)))
-                  (key (funcall (plist-get spec :key) request))
-                  (entry (appkit-data-map-get entries key))
-                  (waiter (and reply-token (list (appkit-transition-context-reply-route context)
-                                                reply-token submitted)))
-                  (write (plist-get spec :write)))
+          (`(appkit-operation ,request ,refresh ,reply-token)
+           (appkit-operation--check-request registry request)
+           (let* ((definition (spec request))
+                  (key (appkit-operation-key registry request))
+                  (old (entry key))
+                  (write (plist-get definition :write))
+                  (waiter (and reply-token
+                               (list (appkit-transition-context-reply-route context)
+                                     reply-token request))))
              (cond
-              ((and (plist-get entry :pending) (or write (not (eq refresh t))))
+              ((and (plist-get old :pending) (or write (not (eq refresh t))))
                (cond
                 ((not write)
                  (when waiter
-                   (setq entries (appkit-data-map-set
-                                  entries key (appkit-data-with entry
-                                                (() :waiters (cons waiter (plist-get entry :waiters))))))))
-                ((and (plist-get spec :coalesce)
-                      (funcall call (lambda ()
-                                      (funcall (plist-get spec :coalesce) request
-                                               (or (car (plist-get entry :queued))
-                                                   (plist-get entry :request))))))
-                 (setq entries (appkit-data-map-set entries key
-                                 (appkit-data-with entry (() :queued (list request waiter))))))
-                (t (setq commands (appkit-operation--replies
-                                   (list waiter) nil "Operation already in progress")))))
-              ((and (not write) (not refresh) (plist-get entry :ready))
-               (setq commands (appkit-operation--replies (list waiter) (plist-get entry :value) nil)))
-              (t
-               (let ((steps (mapcar (lambda (step) (appkit-operation--check-request registry step))
-                                   (funcall (plist-get spec :steps) request))))
-                 (unless steps (error "Operation %S has no steps" request))
-                 (setq commands (appkit-operation--replies
-                                 (plist-get entry :waiters) nil "Request superseded")
-                       entries (appkit-data-map-set
-                                entries key
-                                (appkit-data-with entry
-                                  (() :pending t :request request :error nil :queued nil
-                                      :completed 0 :total (length steps) :remaining (cdr steps)
-                                      :waiters (and waiter (list waiter))
-                                      :observation (funcall call (lambda ()
-                                                                  (funcall (plist-get spec :prepare) request)))))))
-                 (setq commands
-                       (append commands
-                               (list (appkit-command-start-effect
-                                      (appkit-operation--effect registry call request key refresh (car steps)))
-                                     (appkit-command-publish topic key)))))))))
+                   (put key (appkit-data-with old
+                              (() :waiters (cons waiter (plist-get old :waiters)))))))
+                ((and (plist-get definition :coalesce)
+                      (funcall (plist-get definition :coalesce) request
+                               (or (car (plist-get old :queued)) (plist-get old :request))))
+                 (reply (list (cadr (plist-get old :queued))) nil "Request superseded")
+                 (put key (appkit-data-with old (() :queued (list request waiter)))))
+                (t (reply (list waiter) nil "Operation already in progress"))))
+              ((and (not write) (not refresh) (plist-get old :ready))
+               (reply (list waiter) (plist-get old :value) nil))
+              (t (start request refresh waiter)))))
           (`(appkit-operation-result (,request ,key ,step) ,raw ,reason)
-           (let ((entry (appkit-data-map-get entries key))
-                 (spec (appkit-operation--spec registry (appkit-operation-request-name request))) value)
+           (let ((old (entry key)) (definition (spec request)) value)
              (unless reason
                (condition-case condition
-                   (funcall call
-                            (lambda ()
-                              (setq value (funcall (plist-get spec :commit)
-                                                   raw (plist-get entry :observation) step))
-                              (dolist (prefix (funcall (plist-get spec :cancel) value request)) (forget prefix t))
-                              (dolist (prefix (funcall (plist-get spec :invalidate) value request)) (forget prefix))))
+                   (let ((committed
+                          (funcall (plist-get definition :commit)
+                                   model raw (plist-get old :observation) step)))
+                     (setq model (car committed) value (cdr committed))
+                     (dolist (prefix (funcall (plist-get definition :cancel) model value request))
+                       (forget prefix t))
+                     (dolist (prefix (funcall (plist-get definition :invalidate) model value request))
+                       (forget prefix)))
                  (error (setq reason (error-message-string condition)))))
-             (let ((remaining (and (not reason) (plist-get entry :remaining))))
-               (setq entries
-                     (appkit-data-map-set
-                      entries key
-                      (appkit-data-with entry
-                        (() :pending (and remaining t) :ready (or (not reason) (plist-get entry :ready))
-                            :completed (+ (or (plist-get entry :completed) 0) (if reason 0 1))
-                            :queued (and remaining (plist-get entry :queued)) :remaining (cdr remaining)
-                            :waiters (and remaining (plist-get entry :waiters)) :error reason
-                            :value (if reason (plist-get entry :value) value)
-                            :date (if reason (plist-get entry :date) (format-time-string "%Y-%m-%d"))))))
-               (when (and reason (plist-get spec :write)) (message "%s" reason))
-               (setq commands
-                     (append commands (list (appkit-command-publish topic key))
-                             (if remaining
-                                 (list (appkit-command-start-effect
-                                        (appkit-operation--effect registry call request key nil (car remaining))))
-                               (append
-                                (appkit-operation--replies (plist-get entry :waiters) value reason)
-                                (when-let* ((queued (plist-get entry :queued)))
-                                  (list (appkit-command-post-message
-                                         :target self :delivery 'report
-                                         :message (list 'appkit-operation (car queued) t nil))))
-                                (mapcar (lambda (next) (appkit-command-post-message
-                                                       :target self :delivery 'report
-                                                       :message (list 'appkit-operation next 'join nil)))
-                                        (funcall call (lambda ()
-                                                        (funcall (plist-get spec :next) value reason request))))))))))))
-        (cons entries commands)))))
+             (let ((remaining (and (not reason) (plist-get old :remaining))))
+               (put key (appkit-data-with (entry key)
+                          (() :pending (and remaining t)
+                              :ready (or (not reason) (plist-get old :ready))
+                              :completed (+ (or (plist-get old :completed) 0) (if reason 0 1))
+                              :queued (and remaining (plist-get old :queued))
+                              :remaining (cdr remaining)
+                              :waiters (and remaining (plist-get old :waiters))
+                              :error reason :value (if reason (plist-get old :value) value)
+                              :date (if reason (plist-get old :date) (format-time-string "%Y-%m-%d")))))
+               (when (and reason (plist-get definition :write)) (message "%s" reason))
+               (publish key)
+               (if remaining
+                   (fetch request key nil (car remaining))
+                 (reply (plist-get old :waiters) value reason)
+                 (when-let* ((queued (plist-get old :queued)))
+                   (start (car queued) t (cadr queued)))
+                 (dolist (next (funcall (plist-get definition :next) model value reason request))
+                   (setq commands
+                         (append commands
+                                 (list (appkit-command-post-message
+                                        :target (appkit-transition-context-owner-address context)
+                                        :delivery 'report
+                                        :message (list 'appkit-operation next 'join nil)))))))))))
+        (appkit-next :model model :render appkit-render-none :commands commands)))))
 
 (provide 'appkit-operation)
 ;;; appkit-operation.el ends here

@@ -278,5 +278,11 @@ are skipped by identity.  The result's order is unspecified."
                        (lambda (key before after) (push (list key before after) changes)))
     (nreverse changes)))
 
+(defun appkit-data-map-values (map)
+  "Return MAP's borrowed values in unspecified order."
+  (let (values)
+    (appkit-data-map-each (lambda (_key value) (push value values)) map)
+    (nreverse values)))
+
 (provide 'appkit-data-map)
 ;;; appkit-data-map.el ends here

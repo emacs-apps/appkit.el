@@ -22,10 +22,10 @@
                                        "Invalid Appkit runtime operation")
 
 (cl-defstruct (appkit-loop-accepted
-               (:constructor appkit-loop-accept (model))
+               (:constructor appkit-loop-accept (model &optional value))
                (:copier nil))
-  "A successful transition carrying its next MODEL."
-  model)
+  "A successful transition carrying its next MODEL and reply VALUE."
+  model value)
 
 (cl-defstruct (appkit-loop-rejected
                (:constructor appkit-loop-reject (reason))
@@ -387,13 +387,14 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
       (setq data (cdr data)))))
 
 (defun appkit-loop--complete-pass-tickets (state outcome)
-  "Complete current pass tickets with STATE and OUTCOME."
+  "Complete pass tickets after commit; expose values only on success."
   (let ((entries (nreverse appkit-loop--pass-tickets)))
     (setq appkit-loop--pass-tickets nil)
     (dolist (entry entries)
       (appkit-loop--complete-ticket
-       (car entry) state outcome
-       (and (eq state 'accepted) (cdr entry))))))
+       (car entry) state
+       (if (eq state 'accepted) (nth 2 entry) outcome)
+       (and (eq state 'accepted) (cadr entry))))))
 
 (defun appkit-loop--enter-fault (loop condition envelope)
   "Fault LOOP for CONDITION while processing ENVELOPE."
@@ -467,7 +468,8 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
                 (appkit-loop-accepted-model result)
                 (appkit-loop--revision loop) revision)
           (when ticket
-            (push (cons ticket revision) appkit-loop--pass-tickets))
+            (push (list ticket revision (appkit-loop-accepted-value result))
+                  appkit-loop--pass-tickets))
           'accepted))
        ((appkit-loop-rejected-p result)
         (appkit-loop--complete-ticket

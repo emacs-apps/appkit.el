@@ -135,7 +135,8 @@ the caller then opens a fresh Surface on the detached buffer."
         (appkit-loop-reject (appkit-next-rejected-reason result))
       (appkit-loop-accept
        (appkit-app--stage-next app
-                               (appkit-app--validate-next app result))))))
+                               (appkit-app--validate-next app result))
+       (appkit-next-value result)))))
 
 (defun appkit-app--update (app model message)
   "Dispatch MESSAGE and run APP's client update against MODEL."

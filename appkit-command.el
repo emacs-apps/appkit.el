@@ -37,9 +37,10 @@
   "One accepted transition's model, render disposition, and commands."
   model
   render
-  commands)
+  commands
+  value)
 
-(cl-defun appkit-next (&key model (render nil render-supplied-p) commands)
+(cl-defun appkit-next (&key model (render nil render-supplied-p) commands value)
   "Create an accepted transition result.
 
 MODEL is the next domain model.  RENDER must be supplied explicitly, even when
@@ -50,7 +51,7 @@ set; its owner runtime validates the applicable capacity."
   (appkit-next--create
    :model model
    :render render
-   :commands commands))
+   :commands commands :value value))
 
 (cl-defstruct
     (appkit-next-rejected (:constructor appkit-next-reject (reason))
