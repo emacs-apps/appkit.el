@@ -5,8 +5,8 @@
 
 ;;; Commentary:
 
-;; Operation arguments become named input values at admission.  Entries are
-;; persistent data; Effects retain execution and cancellation authority.
+;; Operations carry named input values from submission through completion.
+;; Entries are persistent data; Effects own execution and cancellation.
 
 ;;; Code:
 
@@ -45,7 +45,7 @@ whether a new request replaces its queued successor."
                      (ignore ,@arguments)
                      ,form))))
       `(puthash ',name
-                (list :arguments ',arguments
+                (list :fields ',(mapcar (lambda (arg) (intern (concat ":" (symbol-name arg)))) arguments)
                       :write ,(plist-get options :write)
                       :coalesce ,(plist-get options :coalesce)
                       :key ,(fn nil (or (plist-get options :key) `(list ',name ,@arguments)))
@@ -58,17 +58,14 @@ whether a new request replaces its queued successor."
                       :next ,(fn '(value reason) (plist-get options :next)))
                 ,registry))))
 
-(defun appkit-operation--spec (registry request)
-  "Return REQUEST's spec in REGISTRY."
-  (let ((name (if (appkit-operation-request-p request)
-                  (appkit-operation-request-name request) (car-safe request))))
-    (or (gethash name registry) (error "Unknown operation %S" name))))
+(defun appkit-operation--spec (registry name)
+  "Return the spec for operation NAME in REGISTRY."
+  (or (gethash name registry) (error "Unknown operation %S" name)))
 
 (defun appkit-operation--check-input (registry name input)
   "Validate named INPUT against NAME's parameter declaration in REGISTRY."
-  (let* ((spec (appkit-operation--spec registry (list name)))
-         (keys (mapcar (lambda (arg) (intern (concat ":" (symbol-name arg))))
-                       (plist-get spec :arguments)))
+  (let* ((spec (appkit-operation--spec registry name))
+         (keys (plist-get spec :fields))
          (rest input) seen)
     (unless (and (proper-list-p input) (zerop (% (length input) 2)))
       (error "Invalid operation input: %S" input))
@@ -90,23 +87,20 @@ Children are borrowed immutable values, as in other Appkit data records."
   "Read named FIELD from REQUEST."
   (appkit-data-get (appkit-operation-request-input request) field))
 
-(defun appkit-operation--request (registry request)
-  "Normalize a command list or named REQUEST using REGISTRY's declaration."
-  (if (appkit-operation-request-p request)
-      (progn (appkit-operation--check-input registry (appkit-operation-request-name request)
-                                             (appkit-operation-request-input request))
-             request)
-    (let ((arguments (plist-get (appkit-operation--spec registry request) :arguments)))
-      (unless (and (proper-list-p request) (= (length arguments) (length (cdr request))))
-        (error "Wrong operation arguments: %S" request))
-      (apply #'appkit-operation-request-create registry (car request)
-             (cl-mapcan (lambda (arg value) (list (intern (concat ":" (symbol-name arg))) value))
-                        arguments (cdr request))))))
+(defun appkit-operation--check-request (registry request)
+  "Validate the named REQUEST against REGISTRY and return it."
+  (unless (appkit-operation-request-p request)
+    (error "Expected a named operation request: %S" request))
+  (appkit-operation--check-input registry (appkit-operation-request-name request)
+                                (appkit-operation-request-input request))
+  request)
 
 (defun appkit-operation-key (registry request)
-  "Return the entry key REGISTRY assigns to REQUEST."
-  (funcall (plist-get (appkit-operation--spec registry request) :key)
-           (appkit-operation--request registry request)))
+  "Return the entry key REGISTRY assigns to named REQUEST."
+  (appkit-operation--check-request registry request)
+  (funcall (plist-get (appkit-operation--spec
+                      registry (appkit-operation-request-name request)) :key)
+           request))
 
 (defvar appkit-operation--building nil
   "(OWNER . GETTER) while an update builds OWNER's next persistent entries.")
@@ -120,11 +114,12 @@ Children are borrowed immutable values, as in other Appkit data records."
 
 (defun appkit-operation-submit (registry entries target request &optional refresh reply-token)
   "Send REQUEST to TARGET, an App or, with REPLY-TOKEN, a Surface.
-REQUEST is a named request or a command list normalized at App admission.
+REQUEST is a named input value created by `appkit-operation-request-create'.
 REFRESH t replaces a read; join refreshes unless pending; nil reuses ready data.
 Completion returns (appkit-operation-completed TOKEN REQUEST VALUE REASON)."
-  (let* ((spec (appkit-operation--spec registry request))
-         (entry (appkit-data-map-get entries (appkit-operation-key registry request))))
+  (appkit-operation--check-request registry request)
+  (let* ((spec (appkit-operation--spec registry (appkit-operation-request-name request)))
+         (entry (appkit-data-map-get entries (funcall (plist-get spec :key) request))))
     (when (and (plist-get spec :write) (not (plist-get spec :coalesce))
                (plist-get entry :pending))
       (user-error "Operation already in progress")))
@@ -148,7 +143,7 @@ Completion returns (appkit-operation-completed TOKEN REQUEST VALUE REASON)."
 
 (defun appkit-operation--effect (registry call request key refresh step)
   "Return the keyed Effect fetching STEP of REQUEST under KEY."
-  (let ((spec (appkit-operation--spec registry request)))
+  (let ((spec (appkit-operation--spec registry (appkit-operation-request-name request))))
     (appkit-effect-create
      :key (cons 'appkit-operation key) :input (list request key step)
      :start
@@ -202,8 +197,8 @@ ENTRIES remain untouched.  CALL runs spec bodies in their account context."
         (pcase message
           (`(appkit-operation-forget ,prefix) (forget prefix))
           (`(appkit-operation ,submitted ,refresh ,reply-token)
-           (let* ((request (appkit-operation--request registry submitted))
-                  (spec (appkit-operation--spec registry request))
+           (let* ((request (appkit-operation--check-request registry submitted))
+                  (spec (appkit-operation--spec registry (appkit-operation-request-name request)))
                   (key (funcall (plist-get spec :key) request))
                   (entry (appkit-data-map-get entries key))
                   (waiter (and reply-token (list (appkit-transition-context-reply-route context)
@@ -229,7 +224,7 @@ ENTRIES remain untouched.  CALL runs spec bodies in their account context."
               ((and (not write) (not refresh) (plist-get entry :ready))
                (setq commands (appkit-operation--replies (list waiter) (plist-get entry :value) nil)))
               (t
-               (let ((steps (mapcar (lambda (step) (appkit-operation--request registry step))
+               (let ((steps (mapcar (lambda (step) (appkit-operation--check-request registry step))
                                    (funcall (plist-get spec :steps) request))))
                  (unless steps (error "Operation %S has no steps" request))
                  (setq commands (appkit-operation--replies
@@ -249,7 +244,7 @@ ENTRIES remain untouched.  CALL runs spec bodies in their account context."
                                      (appkit-command-publish topic key)))))))))
           (`(appkit-operation-result (,request ,key ,step) ,raw ,reason)
            (let ((entry (appkit-data-map-get entries key))
-                 (spec (appkit-operation--spec registry request)) value)
+                 (spec (appkit-operation--spec registry (appkit-operation-request-name request))) value)
              (unless reason
                (condition-case condition
                    (funcall call
