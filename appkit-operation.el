@@ -28,7 +28,8 @@
 
 (defmacro appkit-define-operation (registry name arguments &rest options)
   "Define NAME's named input fields ARGUMENTS and behavior in REGISTRY.
-Spec bodies see ARGUMENTS as locals read from one captured request value.
+Spec bodies see ARGUMENTS from one captured request; all except :key also
+receive model.  :prepare and :commit return (NEW-MODEL . VALUE).
 :fetch also sees refresh/resolve/reject; :commit sees result/observation;
 :invalidate and :cancel see value; :next sees value/reason.  :steps returns
 requests to run in turn.  :write makes the key a lane and :coalesce decides

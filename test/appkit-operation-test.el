@@ -182,10 +182,6 @@
       (should-not (plist-get entry :pending)))
     (should (= 1 (length appkit-operation-test--fetches)))))
 
-
-
-
-
 (ert-deftest appkit-operation-named-input-and-entry-snapshots-survive-settlement ()
   (appkit-operation-test-with-app
     (let* ((input (list :id "original"))
