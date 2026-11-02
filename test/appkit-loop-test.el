@@ -707,6 +707,24 @@
     (should (eq 'domain (appkit-loop-model loop)))
     (should (= 0 (appkit-loop-revision loop)))))
 
+(ert-deftest appkit-loop-values-settle-only-after-a-successful-pass ()
+  (dolist (fail '(nil t))
+    (appkit-loop-test--with-loop
+        (loop :model 0
+              :update (lambda (model _message) (appkit-loop-accept (1+ model) 'answer))
+              :after-pass (lambda (_loop _pass) (when fail (error "after-pass failed"))))
+      (let ((ticket (appkit-loop--ticket-create :state 'pending)))
+        (appkit-loop--enqueue-data loop 'advance ticket)
+        (if fail
+            (progn
+              (appkit-loop-run-pass loop)
+              (should (eq (appkit-loop-ticket-state ticket) 'faulted))
+              (should (eq (appkit-loop-ticket-outcome ticket) (appkit-loop-fault loop))))
+          (appkit-loop-run-pass loop)
+          (should (eq (appkit-loop-ticket-state ticket) 'accepted))
+          (should (eq (appkit-loop-ticket-outcome ticket) 'answer)))
+        (should (= (appkit-loop-model loop) 1))))))
+
 (provide 'appkit-loop-test)
 
 ;;; appkit-loop-test.el ends here

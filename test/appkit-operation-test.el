@@ -222,5 +222,70 @@
     (should-error (appkit-operation-key registry (appkit-data-with request ((:input) :unknown t))))
     (should-error (appkit-operation-key registry '(probe "one")))))
 
+(appkit-define-operation appkit-operation-test--registry transaction (delta fail)
+  :write t :key '(transaction)
+  :prepare (cons model (or (plist-get model :balance) 0))
+  :fetch (progn (push (list delta resolve reject) appkit-operation-test--fetches) nil)
+  :commit (cons (appkit-data-with model (() :balance (+ observation delta))) result)
+  :cancel '((probe))
+  :invalidate (when fail (error "invalid projection")))
+
+(ert-deftest appkit-operation-commit-and-invalidations-are-atomic ()
+  (appkit-operation-test-with-app
+    (appkit-operation-test--submit app (appkit-operation-test--request 'transaction :delta 3 :fail nil))
+    (appkit-operation-test--settle app (car appkit-operation-test--fetches))
+    (let ((committed (appkit-app-model app)))
+      (should (= (plist-get committed :balance) 3))
+      (appkit-operation-test--submit app (appkit-operation-test--request 'probe :id "retained"))
+      (let ((probe (car appkit-operation-test--fetches)))
+        (appkit-operation-test--submit app (appkit-operation-test--request 'transaction :delta 7 :fail t))
+        (appkit-operation-test--settle app (car appkit-operation-test--fetches))
+        (should (= (plist-get committed :balance) 3))
+        (should (= (plist-get (appkit-app-model app) :balance) 3))
+        (should (= (plist-get (appkit-operation-test--entry app '(transaction)) :value) 3))
+        (should (equal (plist-get (appkit-operation-test--entry app '(transaction)) :error)
+                       "invalid projection"))
+        ;; A cancellation planned before the failing invalidation must roll back too.
+        (appkit-operation-test--settle app probe)
+        (should (equal (plist-get (appkit-operation-test--entry app '(probe "retained")) :value)
+                       '("retained" "retained")))))))
+
+(ert-deftest appkit-operation-coalesced-waiters-settle-once ()
+  (appkit-operation-test-with-app
+    (appkit-operation-test-with-surface (surface)
+      (dolist (value '(1 2 3))
+        (appkit-operation-submit
+         appkit-operation-test--registry (appkit-app-model app) surface
+         (appkit-operation-test--request 'merge :id "a" :value value) nil value)
+        (appkit-operation-test--drain app surface))
+      (should (equal (mapcar #'cadr (appkit-surface-model surface)) '(2)))
+      (should (equal (nth 4 (car (appkit-surface-model surface))) "Request superseded"))
+      (appkit-operation-test--settle app (car appkit-operation-test--fetches))
+      (appkit-operation-test--settle app (car appkit-operation-test--fetches))
+      (appkit-operation-test--drain app surface)
+      (should (equal (mapcar #'cadr (appkit-surface-model surface)) '(3 1 2)))
+      (should (equal (mapcar (lambda (entry) (nth 3 entry)) (appkit-surface-model surface))
+                     '(3 1 nil))))))
+
+(ert-deftest appkit-operation-forget-revokes-running-and-queued-waiters ()
+  (appkit-operation-test-with-app
+    (appkit-operation-test-with-surface (surface)
+      (dolist (value '(1 2))
+        (appkit-operation-submit
+         appkit-operation-test--registry (appkit-app-model app) surface
+         (appkit-operation-test--request 'merge :id "a" :value value) nil value)
+        (appkit-operation-test--drain app surface))
+      (let ((fetch (car appkit-operation-test--fetches)))
+        (appkit-app-send app '(appkit-operation-forget (merge)))
+        (appkit-operation-test--drain app surface)
+        (should (equal (sort (mapcar #'cadr (appkit-surface-model surface)) #'<) '(1 2)))
+        (should (seq-every-p (lambda (entry) (equal (nth 4 entry) "Data invalidated"))
+                             (appkit-surface-model surface)))
+        (appkit-operation-test--settle app fetch)
+        (appkit-operation-test--drain app surface)
+        (should (= (length (appkit-surface-model surface)) 2))
+        (should (= (length appkit-operation-test--fetches) 1))
+        (should-not (appkit-operation-test--entry app '(merge "a")))))))
+
 (provide 'appkit-operation-test)
 ;;; appkit-operation-test.el ends here

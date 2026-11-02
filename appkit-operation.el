@@ -40,7 +40,7 @@ whether a new request replaces its queued successor."
                    (ignore ,request ,@extra)
                    (let ,(mapcar (lambda (arg)
                                    `(,arg (appkit-operation-input ,request
-                                             ,(intern (concat ":" (symbol-name arg))))))
+                                                                  ,(intern (concat ":" (symbol-name arg))))))
                                  arguments)
                      (ignore ,@arguments)
                      ,form))))
@@ -170,24 +170,20 @@ Completion returns (appkit-operation-completed TOKEN REQUEST VALUE REASON)."
                (append commands
                        (appkit-operation--replies
                         (cons (cadr (plist-get entry :queued)) (plist-get entry :waiters))
-                        nil "Data invalidated")
-                       (list (appkit-command-cancel-effect (cons 'appkit-operation key))
-                             (appkit-command-publish topic key))))
+                        nil "Data invalidated") (list (appkit-command-cancel-effect (cons 'appkit-operation key))
+                        (appkit-command-publish topic key))))
          (push (cons key (if keep (appkit-data-with entry (() :pending nil :waiters nil :queued nil :remaining nil))
-                           appkit-data-delete))
-               changes)))
+                           appkit-data-delete)) changes)))
      (appkit-data-get model :operations))
     (cons (appkit-data-with model
-            (() :operations (appkit-data-map-edit (appkit-data-get model :operations) changes)))
-          commands)))
+            (() :operations (appkit-data-map-edit (appkit-data-get model :operations) changes))) commands)))
 
 (cl-defun appkit-operation-update
     (registry model context message &key (topic 'appkit-operation))
   "Reduce operation MESSAGE against MODEL and return an App transition.
 MODEL contains an :operations map.  Prepare and commit functions return
 (NEW-MODEL . VALUE); no callbacks mutate a published model."
-  (when (memq (car-safe message)
-              '(appkit-operation appkit-operation-result appkit-operation-forget))
+  (when (memq (car-safe message) '(appkit-operation appkit-operation-result appkit-operation-forget))
     (let ((model model) commands)
       (cl-labels
           ((spec (request)
@@ -220,8 +216,8 @@ MODEL contains an :operations map.  Prepare and commit functions return
                (reply (plist-get old :waiters) nil "Request superseded")
                (put key (appkit-data-with old
                           (() :pending t :request request :error nil :queued nil
-                              :completed 0 :total (length steps) :remaining (cdr steps)
-                              :waiters (and waiter (list waiter)) :observation (cdr prepared))))
+                           :completed 0 :total (length steps) :remaining (cdr steps)
+                           :waiters (and waiter (list waiter)) :observation (cdr prepared))))
                (fetch request key refresh (car steps))
                (publish key))))
         (pcase message
@@ -255,27 +251,27 @@ MODEL contains an :operations map.  Prepare and commit functions return
            (let ((old (entry key)) (definition (spec request)) value)
              (unless reason
                (let ((before model) (pending-commands commands))
-               (condition-case condition
-                   (let ((committed
-                          (funcall (plist-get definition :commit)
-                                   model raw (plist-get old :observation) step)))
-                     (setq model (car committed) value (cdr committed))
-                     (dolist (prefix (funcall (plist-get definition :cancel) model value request))
-                       (forget prefix t))
-                     (dolist (prefix (funcall (plist-get definition :invalidate) model value request))
-                       (forget prefix)))
-                 (error (setq model before commands pending-commands value nil
-                              reason (error-message-string condition))))))
+                 (condition-case condition
+                     (let ((committed
+                            (funcall (plist-get definition :commit)
+                                     model raw (plist-get old :observation) step)))
+                       (setq model (car committed) value (cdr committed))
+                       (dolist (prefix (funcall (plist-get definition :cancel) model value request))
+                         (forget prefix t))
+                       (dolist (prefix (funcall (plist-get definition :invalidate) model value request))
+                         (forget prefix)))
+                   (error (setq model before commands pending-commands value nil
+                                reason (error-message-string condition))))))
              (let ((remaining (and (not reason) (plist-get old :remaining))))
                (put key (appkit-data-with (entry key)
                           (() :pending (and remaining t)
-                              :ready (or (not reason) (plist-get old :ready))
-                              :completed (+ (or (plist-get old :completed) 0) (if reason 0 1))
-                              :queued (and remaining (plist-get old :queued))
-                              :remaining (cdr remaining)
-                              :waiters (and remaining (plist-get old :waiters))
-                              :error reason :value (if reason (plist-get old :value) value)
-                              :date (if reason (plist-get old :date) (format-time-string "%Y-%m-%d")))))
+                           :ready (or (not reason) (plist-get old :ready))
+                           :completed (+ (or (plist-get old :completed) 0) (if reason 0 1))
+                           :queued (and remaining (plist-get old :queued))
+                           :remaining (cdr remaining)
+                           :waiters (and remaining (plist-get old :waiters))
+                           :error reason :value (if reason (plist-get old :value) value)
+                           :date (if reason (plist-get old :date) (format-time-string "%Y-%m-%d")))))
                (when (and reason (plist-get definition :write)) (message "%s" reason))
                (publish key)
                (if remaining

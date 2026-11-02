@@ -392,8 +392,7 @@ Optional arguments retain routed delivery metadata in the admitted envelope."
     (setq appkit-loop--pass-tickets nil)
     (dolist (entry entries)
       (appkit-loop--complete-ticket
-       (car entry) state
-       (if (eq state 'accepted) (nth 2 entry) outcome)
+       (car entry) state (if (eq state 'accepted) (nth 2 entry) outcome)
        (and (eq state 'accepted) (cadr entry))))))
 
 (defun appkit-loop--enter-fault (loop condition envelope)
