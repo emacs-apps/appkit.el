@@ -1,0 +1,48 @@
+;;; appkit-chat-action-test.el --- Shared activity tests -*- lexical-binding: t; -*-
+(require 'ert)
+(require 'appkit-test-helper)
+(require 'appkit-chat-action)
+
+(ert-deftest appkit-chat-action-expiry-is-pure-and-boundary-exact ()
+  (let* ((old '(:expires-at 10 :updated-at 1 :display-name "Old"))
+         (a '(:expires-at 15 :updated-at 3 :display-name "Alice"))
+         (b '(:expires-at 20 :updated-at 3 :display-name "Bob"))
+         (entries (list b old a)))
+    (should (equal (appkit-chat-action-active-entries entries 10) (list a b)))
+    (should (equal entries (list b old a)))
+    (should-not (appkit-chat-action-live-p old 10))
+    (should (= (appkit-chat-action-next-expiry entries) 10))))
+
+(ert-deftest appkit-chat-action-cancelled-and-retired-owner-timers-cannot-fire ()
+  (appkit-test-with-surface
+    (let* ((calls 0)
+           (handle (appkit-chat-action-watch-expiry
+                    appkit-test-surface (+ (float-time) 600)
+                    (lambda () (cl-incf calls))))
+           (timer (appkit-handle-object handle))
+           (callback (timer--function timer))
+           (args (timer--args timer)))
+      (appkit-cancel-handle handle)
+      (apply callback args)
+      (should (= calls 0))
+      (setq handle (appkit-chat-action-watch-expiry
+                    appkit-test-surface (+ (float-time) 600)
+                    (lambda () (cl-incf calls))))
+      (setq timer (appkit-handle-object handle)
+            callback (timer--function timer) args (timer--args timer))
+      (appkit-app-close appkit-test-app)
+      (apply callback args)
+      (should (= calls 0)))))
+
+(ert-deftest appkit-chat-action-sends-on-edits-with-refresh-and-single-idle ()
+  (let ((sender (appkit-chat-action-sender-create)) sent)
+    (let ((send (lambda (action) (push action sent))))
+      (should (appkit-chat-action-send sender 'typing 5 send 100))
+      (should-not (appkit-chat-action-send sender 'typing 5 send 104))
+      (should (appkit-chat-action-send sender 'typing 5 send 105))
+      (should (appkit-chat-action-send sender nil 5 send 106))
+      (should-not (appkit-chat-action-send sender nil 5 send 120))
+      (should (appkit-chat-action-send sender 'typing 5 send 121))
+      (should (equal (nreverse sent) '(typing typing nil typing))))))
+
+(provide 'appkit-chat-action-test)
