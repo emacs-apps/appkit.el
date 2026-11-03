@@ -166,27 +166,49 @@ paging while its composer is in use."
        (appkit-scroll-near-end-p position end threshold)))
 
 (cl-defun appkit-chat-window-delimiter
-    (window loading width &key loading-text (complete-character ?─)
-            (partial-character ?·) (face 'shadow))
+    (window loading width &key loading-text (activity-text nil activity-supplied-p)
+            (complete-character ?─) (partial-character ?·) (face 'shadow))
   "Return a passive WIDTH-column delimiter for WINDOW.
 COMPLETE-CHARACTER fills a known window attached to the live edge,
-PARTIAL-CHARACTER anything else.  While LOADING, a non-empty LOADING-TEXT is
-centered.  FACE applies to the whole result when non-nil."
+PARTIAL-CHARACTER anything else.  While LOADING, show LOADING-TEXT.
+When ACTIVITY-TEXT is supplied, including nil, use a telega-style prompt line:
+activity occupies the left two thirds, loading the right third.  Otherwise
+center the loading label.  Preserve label properties and append FACE."
   (let* ((fill (if (and (appkit-chat-window-known-p window)
                         (not (appkit-chat-window-partial-p window)))
                    complete-character
                  partial-character))
-         (label (and loading
-                     (not (string-empty-p (or loading-text "")))
-                     (truncate-string-to-width
-                      (concat " " loading-text " ") width nil nil "…")))
-         (remaining (max 0 (- width (if label (string-width label) 0))))
-         (left (/ remaining 2))
-         (result (if label
-                     (concat (make-string left fill) label
-                             (make-string (- remaining left) fill))
-                   (make-string width fill))))
-    (if face (propertize result 'face face) result)))
+         (loading-label (and loading
+                             (not (string-empty-p (or loading-text "")))
+                             loading-text))
+         (result
+          (if activity-supplied-p
+              (cl-labels
+                  ((slot (text columns right-p)
+                     (let* ((label (if (<= columns 0) ""
+                                     (truncate-string-to-width
+                                      (or text "") columns nil nil "…")))
+                            (padding (make-string (max 0 (- columns (string-width label))) fill)))
+                       (if right-p (concat padding label) (concat label padding)))))
+                (if (< width 4)
+                    (slot activity-text width nil)
+                  (let* ((left (/ (* width 2) 3))
+                         (right (- width left))
+                         (bar (char-to-string fill)))
+                    (concat bar (slot activity-text (- left 2) nil) bar
+                            bar (slot (and loading-label (concat "[" loading-label "]"))
+                                      (- right 2) t) bar))))
+            (let* ((label (and loading-label
+                               (truncate-string-to-width
+                                (concat " " loading-label " ") width nil nil "…")))
+                   (remaining (max 0 (- width (if label (string-width label) 0))))
+                   (left (/ remaining 2)))
+              (if label
+                  (concat (make-string left fill) label
+                          (make-string (- remaining left) fill))
+                (make-string width fill))))))
+    (when face (add-face-text-property 0 (length result) face t result))
+    result))
 
 ;;; Buffer-local window
 

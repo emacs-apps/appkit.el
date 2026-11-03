@@ -154,6 +154,27 @@
       (should (string-match-p " loading " delimiter)))
     (appkit-chat-history-loading-set nil)))
 
+
+(ert-deftest appkit-chat-history-delimiter-embeds-activity-without-growing ()
+  (with-temp-buffer
+    (appkit-chat-history-reset-state)
+    (appkit-chat-history-window-set nil nil)
+    (appkit-chat-history-loading-set 'older)
+    (let* ((activity (propertize "(.. Alice 正在输入…)" 'face 'bold 'test-peer "alice"))
+           (line (appkit-chat-history-delimiter-string
+                  60 :activity-text activity :loading-text "loading")))
+      (should (string-prefix-p "─(.. Alice 正在输入…)" line))
+      (should (string-suffix-p "[loading]─" line))
+      (should (= (string-width line) 60))
+      (should (equal (get-text-property 1 'test-peer line) "alice"))
+      (should (memq 'bold (get-text-property 1 'face line)))
+      (should (eq (get-text-property 0 'face activity) 'bold))
+      (dolist (width '(0 1 3 4 8 19 37 60))
+        (let ((clipped (appkit-chat-history-delimiter-string
+                        width :activity-text activity :loading-text "loading")))
+          (should (= (string-width clipped) width))
+          (should-not (string-match-p "\n" clipped)))))))
+
 (provide 'appkit-chat-history-test)
 
 ;;; appkit-chat-history-test.el ends here
