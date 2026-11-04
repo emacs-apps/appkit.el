@@ -832,6 +832,85 @@ The first completion wakes the App; later completions share that wake."
       (appkit-resource--release-entries entries)
       t)))
 
+(cl-defstruct (appkit-resource-presentation
+               (:constructor appkit-resource--presentation-create))
+  "Acquired SOURCE with lazily memoized presentation variants."
+  source variants)
+
+(defun appkit-resource-presentation-create (source release)
+  "Wrap SOURCE in a Resource value with shared presentation variants.
+RELEASE receives each retained variant after the broker's final interest
+detaches.  Network acquisition and consumer ownership remain in the broker."
+  (let ((presentation (appkit-resource--presentation-create
+                       :source source :variants (make-hash-table :test #'equal))))
+    (appkit-resource-value-create
+     :value presentation
+     :release (lambda ()
+                (maphash (lambda (_key value) (funcall release value))
+                         (appkit-resource-presentation-variants presentation))
+                (clrhash (appkit-resource-presentation-variants presentation))))))
+
+(defun appkit-resource-presentation-get (presentation variant constructor)
+  "Return PRESENTATION's VARIANT, constructing it once from its source.
+CONSTRUCTOR receives the acquired source.  Nil results are not retained,
+so an unavailable decoder or display can recover on a later render."
+  (let ((cache (appkit-resource-presentation-variants presentation)))
+    (or (gethash variant cache)
+        (when-let* ((value (funcall constructor
+                                   (appkit-resource-presentation-source presentation))))
+          (puthash variant value cache)))))
+
+(cl-defun appkit-resource-rows-result
+    (rows visible-keys &key (budget 64) result)
+  "Combine visible ROWS' demands with RESULT within one shared BUDGET.
+ROWS is an ordered alist of (ROW-KEY . DEMANDS); earlier demands have
+priority.  RESULT's existing replacement interests retain priority.
+VISIBLE-KEYS may be t to include all rows; nil BUDGET disables truncation.
+Resource keys and interested rows are deduplicated in the returned result."
+  (let ((visible (make-hash-table :test #'equal))
+        (demands (make-hash-table :test #'equal))
+        (interests (make-hash-table :test #'equal))
+        (update (and result (appkit-render-result-resource-interest-update result)))
+        order)
+    (unless (eq visible-keys t)
+      (dolist (key visible-keys) (puthash key t visible)))
+    (cl-labels ((include (key row demand)
+                 (when (or (gethash key interests) (null budget)
+                           (< (hash-table-count interests) budget))
+                   (unless (gethash key interests) (push key order))
+                   (cl-pushnew row (gethash key interests) :test #'equal)
+                   (when demand
+                     (let ((existing (gethash key demands)))
+                       (when (and existing (not (equal existing demand)))
+                         (error "Rows disagree on resource demand %S" key))
+                       (unless existing (puthash key demand demands)))))))
+      (when update
+        (unless (eq (appkit-resource-interest-update-mode update) 'replace)
+          (error "Combining row resources requires replacement interests"))
+        (dolist (entry (appkit-resource-interest-update-entries update))
+          (dolist (row (appkit-resource-interest-row-keys entry))
+            (include (appkit-resource-interest-key entry) row nil))))
+      (when result
+        (dolist (demand (appkit-render-result-resource-demands result))
+          (when (gethash (appkit-resource-demand-key demand) interests)
+            (puthash (appkit-resource-demand-key demand) demand demands))))
+      (dolist (entry rows)
+        (when (or (eq visible-keys t) (gethash (car entry) visible))
+          (dolist (demand (cdr entry))
+            (unless (appkit-resource-demand-p demand)
+              (error "Row contains invalid resource demand: %S" demand))
+            (include (appkit-resource-demand-key demand) (car entry) demand)))))
+    (appkit-render-result-create
+     :resource-demands (delq nil (mapcar (lambda (key) (gethash key demands))
+                                        (nreverse order)))
+     :resource-interest-update
+     (appkit-resource-interest-update-create
+      :mode 'replace
+      :entries (mapcar (lambda (key)
+                         (appkit-resource-interest-create
+                          :key key :row-keys (nreverse (gethash key interests))))
+                       (hash-table-keys interests))))))
+
 (provide 'appkit-resource)
 
 ;;; appkit-resource.el ends here

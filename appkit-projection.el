@@ -370,10 +370,10 @@ and position without inspecting ROWS."
     (appkit-projection-change-create
      :full-p full-p
      :keys
-     (unless full-p
-       (delete-dups
-        (append (copy-sequence (appkit-projection-change-keys left))
-                (copy-sequence (appkit-projection-change-keys right)))))
+     (delete-dups
+ (append (copy-sequence (appkit-projection-change-keys left))
+         (copy-sequence (appkit-projection-change-keys right))))
+
      :resources
      (delete-dups
       (append (copy-sequence (appkit-projection-change-resources left))
@@ -420,43 +420,12 @@ and position without inspecting ROWS."
 
 (defun appkit-projection--resource-result (rows)
   "Return a replacing Resource companion result discovered from ROWS."
-  (let ((demands (make-hash-table :test #'equal))
-        (interests (make-hash-table :test #'equal))
-        demand-order)
-    (dolist (row rows)
-      (dolist (demand (appkit-projection-row-resource-demands row))
-        (unless (appkit-resource-demand-p demand)
-          (error "Projection row contains invalid resource demand: %S" demand))
-        (let* ((key (appkit-resource-demand-key demand))
-               (existing (gethash key demands)))
-          (when (and existing (not (equal existing demand)))
-            (error "Projection rows disagree on resource demand %S" key))
-          (unless existing
-            (puthash key demand demands)
-            (push key demand-order))
-          (puthash key
-                   (cons (appkit-projection-row-key row)
-                         (delete (appkit-projection-row-key row)
-                                 (gethash key interests)))
-                   interests))))
-    (appkit-render-result-create
-     :resource-demands
-     (mapcar (lambda (key) (gethash key demands))
-             (nreverse demand-order))
-     :resource-interest-update
-     (appkit-resource-interest-update-create
-      :mode 'replace
-      :entries
-      (let (entries)
-        (maphash
-         (lambda (key row-keys)
-           (push
-            (appkit-resource-interest-create
-             :key key
-             :row-keys (nreverse row-keys))
-            entries))
-         interests)
-        (nreverse entries))))))
+  (appkit-resource-rows-result
+   (mapcar (lambda (row)
+             (cons (appkit-projection-row-key row)
+                   (appkit-projection-row-resource-demands row)))
+           rows)
+   t :budget nil))
 
 (cl-defun appkit-projection-renderer-create
     (&key project-all project-frame printer anchor-property

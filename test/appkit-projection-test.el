@@ -193,7 +193,7 @@
            :frame-p t
            :position 'preserve))))
     (should (appkit-projection-change-full-p merged))
-    (should-not (appkit-projection-change-keys merged))
+    (should (equal '(a b) (appkit-projection-change-keys merged)))
     (should (equal '(avatar cover)
                    (appkit-projection-change-resources merged)))
     (should (appkit-projection-change-frame-p merged))

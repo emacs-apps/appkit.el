@@ -47,6 +47,7 @@
 (require 'appkit-chat-completion)
 (require 'appkit-chat-emoji)
 (require 'appkit-chat-timeline)
+(require 'appkit-chat-render)
 (require 'appkit-media)
 (require 'appkit-name-color)
 (require 'appkit-ui)

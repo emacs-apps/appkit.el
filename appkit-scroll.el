@@ -299,7 +299,6 @@ windows does not report a loss of visibility.  At least one callback is needed."
               (appkit-scroll-observer-handles observer))))
     observer))
 
-
 (defun appkit-scroll-observer--check-visibility (observer)
   "Notify OBSERVER when its buffer gains or loses its last displayed window."
   (when (and (appkit-scroll-observer-active-p observer)
@@ -319,6 +318,32 @@ windows does not report a loss of visibility.  At least one callback is needed."
                 (funcall (appkit-scroll-observer-visibility-function observer) visible))
             (setf (appkit-scroll-observer-checking-p observer) nil)))))))
 
+(defun appkit-scroll-visible-property-values (property)
+  "Return distinct PROPERTY values intersecting this buffer's visible windows."
+  (let ((seen (make-hash-table :test #'equal)) values)
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (when-let* ((range (appkit-scroll-window-visible-range window)))
+        (let ((position (car range)) (end (cdr range)))
+          (while (< position end)
+            (when-let* ((value (get-text-property position property))
+                        ((not (gethash value seen))))
+              (puthash value t seen)
+              (push value values))
+            (setq position (next-single-property-change position property nil end))))))
+    (nreverse values)))
+
+(defun appkit-scroll-observe-property (surface property function)
+  "Call FUNCTION with SURFACE when its visible PROPERTY values change.
+Use the same Surface-owned observer as history paging.  FUNCTION runs in
+the Surface buffer, including when its last visible window disappears."
+  (let* ((previous (appkit-scroll-visible-property-values property))
+         (check (lambda (&rest _)
+                  (let ((current (appkit-scroll-visible-property-values property)))
+                    (unless (equal current previous)
+                      (setq previous current)
+                      (funcall function surface))))))
+    (appkit-scroll-observer-install
+     surface :start-function check :end-function check :visibility-function check)))
 
 (provide 'appkit-scroll)
 

@@ -290,6 +290,29 @@
          (when (buffer-live-p other) (kill-buffer other)))))))
 
 
+
+(ert-deftest appkit-scroll-visible-property-values-unions-overlapping-windows ()
+  (with-temp-buffer
+    (insert (propertize "aa" 'row 'one)
+            (propertize "bb" 'row 'two)
+            (propertize "cc" 'row 'three))
+    (cl-letf (((symbol-function 'get-buffer-window-list) (lambda (&rest _) '(first second)))
+              ((symbol-function 'appkit-scroll-window-visible-range)
+               (lambda (window) (if (eq window 'first) '(2 . 5) '(3 . 7)))))
+      (should (equal '(one two three) (appkit-scroll-visible-property-values 'row))))))
+
+(ert-deftest appkit-scroll-observe-property-notifies-on-hide-once ()
+  (let ((visible '(one)) check notifications)
+    (cl-letf (((symbol-function 'appkit-scroll-visible-property-values) (lambda (_) visible))
+              ((symbol-function 'appkit-scroll-observer-install)
+               (lambda (_surface &rest options) (setq check (plist-get options :visibility-function)))))
+      (appkit-scroll-observe-property 'owner 'row (lambda (owner) (push owner notifications)))
+      (funcall check t)
+      (should-not notifications)
+      (setq visible nil)
+      (funcall check nil)
+      (funcall check nil)
+      (should (equal '(owner) notifications)))))
 (provide 'appkit-scroll-test)
 
 ;;; appkit-scroll-test.el ends here

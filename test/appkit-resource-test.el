@@ -613,6 +613,100 @@
           (when app (appkit-app-close app)))))))
 
 
+
+(ert-deftest appkit-resource-presentation-follows-the-last-visible-consumer ()
+  "Repeated rows and two Surfaces share one image per size until both detach."
+  (let ((starts 0) (decodes 0) released images app surfaces)
+    (let* ((loader
+            (lambda (_context _input success _failure)
+              (cl-incf starts)
+              (funcall success
+                       (appkit-resource-presentation-create
+                        'avatar-bytes (lambda (image) (push image released))))
+              (appkit-cancellation-create :kind 'transport :cancel #'ignore)))
+           (type
+            (appkit-surface-type-create
+             :name 'presentation-consumer :mode #'special-mode
+             :init (lambda (_context _input) (appkit-next :model nil :render t))
+             :update (lambda (_context model _message)
+                       (appkit-next :model model :render t))
+             :renderer-factory
+             (lambda (_surface)
+               (appkit-generated-renderer-create
+                :mount #'ignore :unmount #'ignore
+                :merge (lambda (_old new) new) :resource-request (lambda (_keys) t)
+                :render
+                (lambda (surface _view _model _change)
+                  (when-let* ((state (appkit-resource-state surface 'avatar))
+                              ((eq (appkit-resource-state-status state) 'ready)))
+                    (dotimes (_ 10)
+                      (dolist (size '(40 80))
+                        (push
+                         (appkit-resource-presentation-get
+                          (appkit-resource-state-value state) size
+                          (lambda (source)
+                            (cl-incf decodes)
+                            (list source size)))
+                         images))))
+                  (appkit-resource-rows-result
+                   (list (list 'row
+                               (appkit-resource-demand-create
+                                :key 'avatar :input 'avatar :loader loader
+                                :acquisition-identity 'avatar :sharing-policy 'app-private
+                                :cache-policy 'while-interested)))
+                   '(row))))))))
+      (unwind-protect
+          (progn
+            (setq app (appkit-app-start appkit-resource-test--app-type
+                                       :identity (make-symbol "presentation")))
+            (dotimes (index 2)
+              (push (appkit-open-generated-surface type :app app :identity index) surfaces))
+            (appkit-loop-run-pass (appkit-app-loop app))
+            (dolist (surface surfaces) (appkit-loop-run-pass (appkit-surface-loop surface)))
+            (should (= starts 1))
+            (should (= decodes 2))
+            (should (= (length (delete-dups (copy-sequence images))) 2))
+            (appkit-surface-stop (car surfaces))
+            (should-not released)
+            (appkit-surface-stop (cadr surfaces))
+            (should (= (length released) 2)))
+        (dolist (surface surfaces)
+          (when (buffer-live-p (appkit-surface-buffer surface))
+            (kill-buffer (appkit-surface-buffer surface))))
+        (when app (appkit-app-close app))))))
+
+(ert-deftest appkit-resource-presentation-retries-unavailable-decoders ()
+  (let* ((wrapped (appkit-resource-presentation-create 'source #'ignore))
+         (value (appkit-resource-value-value wrapped))
+         (calls 0)
+         (decode (lambda (_source) (when (> (cl-incf calls) 1) (list 'image)))))
+    (should-not (appkit-resource-presentation-get value 40 decode))
+    (let ((image (appkit-resource-presentation-get value 40 decode)))
+      (should image)
+      (should (eq image (appkit-resource-presentation-get value 40 decode)))
+      (should (= calls 2)))))
+
+(ert-deftest appkit-resource-rows-share-one-visible-budget ()
+  (let* ((demand (lambda (key) (appkit-resource-demand-create :key key)))
+         (base (appkit-render-result-create
+                :resource-demands (list (funcall demand 'lease))
+                :resource-interest-update
+                (appkit-resource-interest-update-create
+                 :mode 'replace
+                 :entries (list (appkit-resource-interest-create :key 'lease :row-keys '(one))))))
+         (result (appkit-resource-rows-result
+                  (list (list 'hidden (funcall demand 'hidden))
+                        (list 'one (funcall demand 'avatar) (funcall demand 'avatar))
+                        (list 'two (funcall demand 'avatar) (funcall demand 'overflow)))
+                  '(one two) :budget 2 :result base))
+         (interests (appkit-resource-interest-update-entries
+                     (appkit-render-result-resource-interest-update result))))
+    (should (equal '(lease avatar)
+                   (mapcar #'appkit-resource-demand-key (appkit-render-result-resource-demands result))))
+    (should (= 2 (length interests)))
+    (should (equal '(one two)
+                   (appkit-resource-interest-row-keys
+                    (seq-find (lambda (interest) (eq (appkit-resource-interest-key interest) 'avatar)) interests))))))
 (provide 'appkit-resource-test)
 
 ;;; appkit-resource-test.el ends here
