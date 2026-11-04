@@ -93,4 +93,79 @@
        (funcall render surface nil nil (appkit-projection-change-create :resources '(unrelated)))
        (should (= printed 0))))))
 
+
+(ert-deftest appkit-chat-render-composes-promotions-in-one-pass ()
+  (appkit-test-with-surface
+   (let* ((surface (appkit-current-surface)) (key 'local)
+          (renderer
+           (appkit-chat-renderer-create
+            :ensure (lambda (&rest _)
+                      (appkit-chat-timeline-ensure
+                       :anchor-property 'message-key
+                       :printer (lambda (row)
+                                  (insert (propertize "message\n" 'message-key
+                                                      (appkit-chat-timeline-row-key row))))))
+            :project (lambda (&rest _)
+                       (list (appkit-chat-timeline-row-create :key key :payload 'body)))))
+          (render (appkit-generated-renderer-render renderer)))
+     (funcall render surface nil nil (appkit-projection-change-create :full-p t))
+     (goto-char (ewoc-location (appkit-chat-timeline-node 'local)))
+     (let ((node (appkit-chat-timeline-node 'local)))
+       (setq key 'official)
+       (funcall render surface nil nil
+                (appkit-projection-change-merge
+                 (appkit-projection-change-create :rekeys '((local . accepted)))
+                 (appkit-projection-change-create :rekeys '((accepted . official)))))
+       (should (eq node (appkit-chat-timeline-node 'official)))
+       (should (eq 'official (appkit-chat-timeline-key-at-point)))))))
+
+(ert-deftest appkit-chat-render-rejects-ambiguous-identity-promotions ()
+  (appkit-test-with-surface
+   (appkit-chat-timeline-ensure :printer (lambda (_row) (insert "message\n")))
+   (appkit-chat-timeline-sync
+    (list (appkit-chat-timeline-row-create :key 'one)
+          (appkit-chat-timeline-row-create :key 'two)))
+   (let ((rows (list (appkit-chat-timeline-row-create :key 'official))))
+     (should-error (appkit-chat-render--rekeys rows '((one . official) (one . other))))
+     (should-error (appkit-chat-render--rekeys rows '((one . other) (other . one))))
+     (should-error (appkit-chat-render--rekeys rows '((one . official) (two . official)))))))
+(ert-deftest appkit-chat-render-recovery-restores-composer-and-selection ()
+  (appkit-test-with-surface
+   (let* ((surface (appkit-current-surface)) (focus-after nil) result-point
+          (renderer (appkit-chat-renderer-create
+                     :ensure (lambda (&rest _) (appkit-chat-timeline-ensure
+                                               :anchor-property 'message-key
+                                               :printer (lambda (row)
+                                                          (insert (propertize "message\n" 'message-key
+                                                                              (appkit-chat-timeline-row-key row))))))
+                     :project (lambda (&rest _) (list (appkit-chat-timeline-row-create :key 'message)))
+                     :frame (lambda (&rest _)
+                              (appkit-chat-timeline-set-footer
+                               "footer\n" :composer-visible-p t
+                               :bind-input-function
+                               (lambda () (appkit-chatbuf-bind-input-region
+                                           :visible-p t :prompt "> "
+                                           :input-text (appkit-chatbuf-input-state)))))
+                     :after-render (lambda (&rest _) (when focus-after (goto-char (point-max))))
+                     :result (lambda (&rest _) (setq result-point (point)) nil))))
+     (appkit-chatbuf-input-state-set "draft")
+     (funcall (appkit-generated-renderer-render renderer) surface nil nil
+              (appkit-projection-change-create :full-p t))
+     (goto-char (point-max))
+     (insert "!")
+     (goto-char (+ 2 (appkit-chatbuf-input-start-position)))
+     (set-mark (+ 4 (appkit-chatbuf-input-start-position)))
+     (setq mark-active t)
+     (funcall (appkit-generated-renderer-recover renderer) surface nil nil '(error "test"))
+     (should (equal "draft!" (appkit-chatbuf-input-state)))
+     (should (equal "draft!" (buffer-substring-no-properties (appkit-chatbuf-input-start-position) (point-max))))
+     (should (= 2 (- (point) (appkit-chatbuf-input-start-position))))
+     (should (= result-point (point)))
+     (should mark-active)
+     (should (= 4 (- (mark) (appkit-chatbuf-input-start-position))))
+     (setq mark-active nil focus-after t)
+     (funcall (appkit-generated-renderer-recover renderer) surface nil nil '(error "test"))
+     (should (= (point-max) (point)))
+     (should (= result-point (point))))))
+
 (provide 'appkit-chat-render-test)
