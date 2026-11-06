@@ -616,6 +616,58 @@
         (when (buffer-live-p buffer) (kill-buffer buffer))
         (when app (appkit-app-close app))))))
 
+(ert-deftest appkit-resource-late-interest-redraws-settled-state ()
+  (dolist (status '(ready failed pending))
+    (let (resolve reject app surfaces (starts 0)
+          (renders (make-hash-table :test #'eq)))
+      (let* ((type
+              (appkit-resource-test--retained-surface
+               (lambda (_context _input success failure)
+                 (cl-incf starts)
+                 (setq resolve success reject failure)
+                 (appkit-cancellation-create :cancel #'ignore))))
+             (factory (appkit-surface-type-renderer-factory type)))
+        (setf (appkit-surface-type-renderer-factory type)
+              (lambda (owner)
+                (let* ((renderer (funcall factory owner))
+                       (render (appkit-generated-renderer-render renderer)))
+                  (setf (appkit-generated-renderer-render renderer)
+                        (lambda (surface view model request)
+                          (let ((state (appkit-resource-state surface 'cover)))
+                            (push (and state
+                                       (list (appkit-resource-state-status state)
+                                             (appkit-resource-state-value state)
+                                             (appkit-resource-state-reason state)))
+                                  (gethash (appkit-surface-identity surface) renders)))
+                          (funcall render surface view model request)))
+                  renderer)))
+        (unwind-protect
+            (progn
+              (setq app (appkit-app-start appkit-resource-test--app-type
+                                         :identity (make-symbol "late-resource")))
+              (push (appkit-open-generated-surface type :app app :identity 'first) surfaces)
+              (pcase status
+                ('ready (funcall resolve "ready-bytes"))
+                ('failed (funcall reject "download-failed")))
+              (appkit-loop-run-pass (appkit-app-loop app))
+              (appkit-loop-run-pass (appkit-surface-loop (car surfaces)))
+              (push (appkit-open-generated-surface type :app app :identity 'second) surfaces)
+              (should (equal (gethash 'second renders) '(nil)))
+              (should (= (appkit-loop-run-pass (appkit-surface-loop (car surfaces)))
+                         (if (eq status 'pending) 0 1)))
+              (should
+               (equal (gethash 'second renders)
+                      (pcase status
+                        ('ready '((ready "ready-bytes" nil) nil))
+                        ('failed '((failed nil "download-failed") nil))
+                        (_ '(nil)))))
+              (should (= starts 1))
+              (should (= 0 (appkit-loop-run-pass (appkit-surface-loop (car surfaces))))))
+          (dolist (surface surfaces)
+            (appkit-surface-stop surface)
+            (kill-buffer (appkit-surface-buffer surface)))
+          (when app (appkit-app-close app)))))))
+
 (ert-deftest appkit-resource-retained-value-follows-last-interest-and-replacement ()
   (dolist (synchronous '(nil t))
     (let ((starts 0) (released 0) callbacks app surfaces)

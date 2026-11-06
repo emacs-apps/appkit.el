@@ -484,7 +484,8 @@ The first completion wakes the App; later completions share that wake."
 
 (defun appkit-resource--notify-surface (coordinator surface keys)
   "Post resource KEYS to interested SURFACE using one pending wake."
-  (when (appkit-surface-live-p surface)
+  (when (and (appkit-surface--owns-host-p surface)
+             (appkit-app-live-p (appkit-surface-app surface)))
     (let* ((pending (appkit-resource--pending-state coordinator t))
            (surfaces (appkit-resource--pending-surfaces pending))
            (extra-keys (gethash surface surfaces)))
@@ -651,17 +652,29 @@ The first completion wakes the App; later completions share that wake."
     table))
 
 (defun appkit-resource--replace-interests (coordinator surface table)
-  "Replace SURFACE interests in COORDINATOR with validated TABLE."
-  (if (= (hash-table-count table) 0)
-      (remhash surface (appkit-resource--coordinator-interests coordinator))
-    (puthash surface table
-             (appkit-resource--coordinator-interests coordinator)))
-  (when-let* ((pending (appkit-resource--pending-state coordinator))
-              (keys (gethash surface (appkit-resource--pending-surfaces pending))))
-    (maphash (lambda (key _present)
-               (unless (gethash key table) (remhash key keys)))
-             keys))
-  table)
+  "Replace SURFACE interests with TABLE and wake new settled resources."
+  (let ((previous (appkit-resource--surface-interests coordinator surface))
+        settled)
+    (if (= (hash-table-count table) 0)
+        (remhash surface (appkit-resource--coordinator-interests coordinator))
+      (puthash surface table
+               (appkit-resource--coordinator-interests coordinator)))
+    (when-let* ((pending (appkit-resource--pending-state coordinator))
+                (keys (gethash surface (appkit-resource--pending-surfaces pending))))
+      (maphash (lambda (key _present)
+                 (unless (gethash key table) (remhash key keys)))
+               keys))
+    (maphash
+     (lambda (key _rows)
+       (unless (and previous (gethash key previous))
+         (when-let* ((entry (gethash key (appkit-resource--coordinator-entries coordinator)))
+                     ((memq (appkit-resource-state-status
+                             (appkit-resource--entry-state entry)) '(ready failed))))
+           (push key settled))))
+     table)
+    (when settled
+      (appkit-resource--notify-surface coordinator surface settled))
+    table))
 
 (defun appkit-resource--key-interested-p (coordinator key)
   "Return non-nil when any Surface is interested in KEY."
