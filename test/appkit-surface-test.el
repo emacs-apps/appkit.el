@@ -623,7 +623,7 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
                   (appkit-surface-effect-runtime surface))
                  0)))))
 
-(ert-deftest appkit-surface-discards-folded-work-on-command-overflow ()
+(ert-deftest appkit-surface-discards-folded-work-on-invalid-command ()
   (let ((events nil))
     (appkit-surface-test--with-surface
         (surface
@@ -636,12 +636,12 @@ KEY.  CANCEL-ERROR makes physical cleanup fail after recording the attempt."
             (appkit-next
              :model key
              :render key
-             :commands (list (appkit-command-cancel-effect key))))
+             :commands (if (eq key 'second) '(unsupported-command)
+                         (list (appkit-command-cancel-effect key)))))
           :renderer-factory
           (lambda (_surface)
             (appkit-surface-test--renderer
-             (lambda (event) (push event events)))))
-         :folded-command-limit 1)
+             (lambda (event) (push event events))))))
       (appkit-surface-post surface 'first)
       (appkit-surface-post surface 'second)
       (should (= (appkit-loop-run-pass (appkit-surface-loop surface)) 2))

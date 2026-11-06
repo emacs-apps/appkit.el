@@ -60,7 +60,6 @@
   source-runtime
   topic-subscriber
   command-batch
-  command-limit
   renderer
   handles
   pending-render
@@ -147,8 +146,7 @@
   "Fold NEXT's deferred work and return its model."
   (appkit-command--batch-add
    (appkit-surface-command-batch surface)
-   (appkit-next-commands next)
-   (appkit-surface-command-limit surface))
+   (appkit-next-commands next))
   (appkit-command--stage-revocations
    (appkit-surface-effect-runtime surface) (appkit-next-commands next))
   (appkit-surface--merge-render surface (appkit-next-render next))
@@ -427,8 +425,6 @@ Return the successful Renderer's closed companion result."
 
 (cl-defun appkit-open-generated-surface
     (type &key app identity input buffer buffer-name select
-          (command-limit appkit-command-default-per-next-limit)
-          (folded-command-limit appkit-command-default-folded-limit)
           (max-active-effects 32) (max-sources 32)
           (max-subscriptions appkit-topic-default-subscription-limit))
   "Create and mount one generated Surface of TYPE.
@@ -438,12 +434,11 @@ supplied together.  INPUT is passed to TYPE's init function with a transition
 context.  BUFFER, when non-nil, must be live and unattached; otherwise a fresh
 buffer is created using BUFFER-NAME.  Major mode initialization always
 precedes Surface attachment.  SELECT displays the buffer only after initial
-presentation succeeds.  COMMAND-LIMIT, FOLDED-COMMAND-LIMIT, and
-MAX-ACTIVE-EFFECTS bound deferred work.  MAX-SUBSCRIPTIONS bounds the topics
-an attached Surface may follow."
+presentation succeeds. MAX-ACTIVE-EFFECTS and MAX-SOURCES bound active
+runtime resources. MAX-SUBSCRIPTIONS bounds the topics an attached Surface
+may follow."
   (appkit-loop--assert-main-thread)
   (cl-check-type type appkit-surface-type)
-  (appkit-command--check-limit "Per-next command limit" command-limit)
   (unless (or (null (appkit-surface-type-sources type))
               (functionp (appkit-surface-type-sources type)))
     (signal 'wrong-type-argument
@@ -483,8 +478,7 @@ an attached Surface may follow."
                    :effect-runtime nil
                    :source-runtime nil
                    :command-batch
-                   (appkit-command--batch-create folded-command-limit)
-                   :command-limit command-limit
+                   (appkit-command--batch-create)
                    :renderer nil
                    :handles nil
                    :pending-render appkit-render-none

@@ -21,7 +21,7 @@
     (should-not (appkit-next-render next))))
 
 (ert-deftest appkit-command-fold-keeps-only-final-keyed-deltas ()
-  (let* ((batch (appkit-command--batch-create 3))
+  (let* ((batch (appkit-command--batch-create))
          (first-a
           (appkit-command-start-effect
            (appkit-command-test--effect 'a)))
@@ -29,8 +29,8 @@
           (appkit-command-start-effect
            (appkit-command-test--effect 'b)))
          (cancel-a (appkit-command-cancel-effect 'a)))
-    (appkit-command--batch-add batch (list first-a start-b) 2)
-    (appkit-command--batch-add batch (list cancel-a) 2)
+    (appkit-command--batch-add batch (list first-a start-b))
+    (appkit-command--batch-add batch (list cancel-a))
     (let ((work (appkit-command--batch-drain batch)))
       (should-not (appkit-command-work-posts work))
       (should
@@ -43,7 +43,7 @@
       (should-not (appkit-command-work-source-intents work)))))
 
 (ert-deftest appkit-command-source-intents-preserve-fifo ()
-  (let* ((batch (appkit-command--batch-create 2))
+  (let* ((batch (appkit-command--batch-create))
          (first
           (appkit-command-source-intent
            :key 'stream
@@ -56,7 +56,7 @@
            :expected-identity 'one
            :payload 'second
            :result-mapper #'ignore)))
-    (appkit-command--batch-add batch (list first second) 2)
+    (appkit-command--batch-add batch (list first second))
     (let ((work (appkit-command--batch-drain batch)))
       (should
        (equal (appkit-command-work-source-intents work)
@@ -69,56 +69,38 @@
     :result-mapper (lambda (&rest _arguments)))
    :type 'error))
 
-(ert-deftest appkit-command-enforces-folded-key-boundary ()
-  (let ((batch (appkit-command--batch-create 1)))
-    (appkit-command--batch-add
-     batch (list (appkit-command-cancel-effect 'same)) 1)
-    (appkit-command--batch-add
-     batch
-     (list
-      (appkit-command-start-effect
-       (appkit-command-test--effect 'same)))
-     1)
-    (should-error
-     (appkit-command--batch-add
-      batch (list (appkit-command-cancel-effect 'other)) 1)
-     :type 'error)))
-
-(ert-deftest appkit-command-bounds-circular-command-lists ()
-  (let* ((commands (list (appkit-command-cancel-effect 'same)))
-         (batch (appkit-command--batch-create 1)))
-    (setcdr commands commands)
-    (should-error (appkit-command--batch-add batch commands 1) :type 'error)))
-
-(ert-deftest appkit-command-default-capacities-have-hard-boundaries ()
-  (let* ((command (appkit-command-cancel-effect 'same))
-         (at-limit
-          (make-list appkit-command-default-per-next-limit command)))
-    (appkit-command--batch-add
-     (appkit-command--batch-create appkit-command-default-folded-limit)
-     at-limit
-     appkit-command-default-per-next-limit)
-    (should-error
-     (appkit-command--batch-add
-      (appkit-command--batch-create appkit-command-default-folded-limit)
-      (cons command at-limit)
-      appkit-command-default-per-next-limit)
-     :type 'error))
-  (let ((batch
-         (appkit-command--batch-create
-          appkit-command-default-folded-limit)))
-    (dotimes (key appkit-command-default-folded-limit)
+(ert-deftest appkit-command-folds-large-batches-in-final-keyed-order ()
+  (let* ((batch (appkit-command--batch-create))
+         (starts (cl-loop for key below 256
+                          collect (appkit-command-start-effect
+                                   (appkit-command-test--effect key))))
+         (cancels (cl-loop for key downfrom 255 to 0
+                           collect (appkit-command-cancel-effect key))))
+    (appkit-command--batch-add batch (append starts cancels))
+    (should (equal (appkit-command-work-effects
+                    (appkit-command--batch-drain batch))
+                   cancels)))
+  (let ((batch (appkit-command--batch-create)))
+    (dotimes (key 256)
       (appkit-command--batch-add
-       batch (list (appkit-command-cancel-effect key))
-       appkit-command-default-per-next-limit))
-    (should-error
-     (appkit-command--batch-add
-      batch
-      (list
-       (appkit-command-cancel-effect
-        appkit-command-default-folded-limit))
-      appkit-command-default-per-next-limit)
-     :type 'error)))
+       batch (list (appkit-command-cancel-effect key))))
+    (should (= (length (appkit-command-work-effects
+                        (appkit-command--batch-drain batch)))
+               256))))
+
+(ert-deftest appkit-command-rejects-malformed-lists-before-folding ()
+  (let* ((command (appkit-command-cancel-effect 'same))
+         (circular (list command))
+         (batch (appkit-command--batch-create)))
+    (setcdr circular circular)
+    (dolist (commands (list circular (cons command 'tail) 'not-a-list))
+      (should-error (appkit-command--batch-add batch commands) :type 'error)
+      (let ((work (appkit-command--batch-drain batch)))
+        (should-not (appkit-command-work-effects work))
+        (should-not (appkit-command-work-posts work))
+        (should-not (appkit-command-work-source-intents work))))))
+
+
 
 (ert-deftest appkit-next-rejection-is-not-a-loop-result ()
   (let ((result (appkit-next-reject 'not-allowed)))

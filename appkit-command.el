@@ -25,12 +25,6 @@
 (defconst appkit-render-none 'appkit-render-none
   "Explicit disposition requesting no presentation work.")
 
-(defconst appkit-command-default-per-next-limit 32
-  "Default maximum command count returned by one transition.")
-
-(defconst appkit-command-default-folded-limit 64
-  "Default maximum distinct keyed commands retained by one pass.")
-
 (cl-defstruct (appkit-next
                (:constructor appkit-next--create)
                (:copier nil))
@@ -164,7 +158,6 @@ Only App transitions may publish.  TOPIC is compared with `equal'."
   reverse-posts
   reverse-source-intents
   effect-deltas
-  folded-limit
   publish-p)
 
 (defun appkit-command--check-limit (name value)
@@ -173,14 +166,12 @@ Only App transitions may publish.  TOPIC is compared with `equal'."
     (error "%s must be positive: %S" name value))
   value)
 
-(defun appkit-command--batch-create (folded-limit &optional publish-p)
-  "Create an empty command batch retaining at most FOLDED-LIMIT keys.
+(defun appkit-command--batch-create (&optional publish-p)
+  "Create an empty command batch.
 PUBLISH-P admits topic publications, which only an App may issue."
-  (appkit-command--check-limit "Folded command limit" folded-limit)
   (appkit-command--batch-create-internal
    :reverse-effects nil
    :effect-deltas (make-hash-table :test #'equal)
-   :folded-limit folded-limit
    :publish-p publish-p))
 
 (defun appkit-command--effect-key (command)
@@ -194,47 +185,30 @@ PUBLISH-P admits topic publications, which only an App may issue."
    (t
     (error "Unsupported AppKit command: %S" command))))
 
-(defun appkit-command--batch-add (batch commands per-next-limit)
-  "Fold one transition's COMMANDS into BATCH.
-
-PER-NEXT-LIMIT bounds traversal as well as valid command count, so circular and
-oversized lists fail without an unbounded scan."
-  (let ((remaining commands)
-        (count 0)
-        (deltas (appkit-command--batch-effect-deltas batch)))
-    (while (consp remaining)
-      (setq count (1+ count))
-      (when (> count per-next-limit)
-        (error "Per-next command limit exceeded: %S" per-next-limit))
-      (let ((command (pop remaining)))
-        (cond
-         ((appkit-command-post-message-p command)
-          (push command (appkit-command--batch-reverse-posts batch)))
-         ((appkit-command-publish-p command)
-          (unless (appkit-command--batch-publish-p batch)
-            (error "Only an App transition can publish topics"))
-          (push command (appkit-command--batch-reverse-posts batch)))
-         ((appkit-command-source-intent-p command)
-          (push command
-                (appkit-command--batch-reverse-source-intents batch)))
-         ((or (appkit-command-start-effect-p command)
-              (appkit-command-cancel-effect-p command))
-          (let ((key (appkit-command--effect-key command)))
-            (unless (gethash key deltas)
-              (when (>= (hash-table-count deltas)
-                        (appkit-command--batch-folded-limit batch))
-                (error "Folded command limit exceeded: %S"
-                       (appkit-command--batch-folded-limit batch))))
-            ;; Every list cell is a unique occurrence token.  Superseded cells
-            ;; stay in the bounded log and are skipped during the linear drain.
-            (let ((entry (cons key command)))
-              (puthash key entry deltas)
-              (push entry
-                    (appkit-command--batch-reverse-effects batch)))))
-         (t
-          (error "Unsupported AppKit command: %S" command)))))
-    (when remaining
-      (error "Commands must be a proper list: %S" commands))))
+(defun appkit-command--batch-add (batch commands)
+  "Fold one transition's finite, proper COMMANDS list into BATCH."
+  (unless (proper-list-p commands)
+    (error "Commands must be a proper list"))
+  (let ((deltas (appkit-command--batch-effect-deltas batch)))
+    (dolist (command commands)
+      (cond
+       ((appkit-command-post-message-p command)
+        (push command (appkit-command--batch-reverse-posts batch)))
+       ((appkit-command-publish-p command)
+        (unless (appkit-command--batch-publish-p batch)
+          (error "Only an App transition can publish topics"))
+        (push command (appkit-command--batch-reverse-posts batch)))
+       ((appkit-command-source-intent-p command)
+        (push command (appkit-command--batch-reverse-source-intents batch)))
+       ((or (appkit-command-start-effect-p command)
+            (appkit-command-cancel-effect-p command))
+        (let* ((key (appkit-command--effect-key command))
+               (entry (cons key command)))
+          ;; Each occurrence is a unique token. Superseded entries are
+          ;; skipped during the linear drain.
+          (puthash key entry deltas)
+          (push entry (appkit-command--batch-reverse-effects batch))))
+       (t (error "Unsupported AppKit command: %S" command))))))
 
 (defun appkit-command--batch-clear (batch)
   "Discard all deferred commands retained by BATCH."

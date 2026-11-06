@@ -48,7 +48,6 @@
   resource-coordinator
   topic-hub
   command-batch
-  command-limit
   surfaces
   handles
   surface-limit
@@ -119,8 +118,7 @@ the caller then opens a fresh Surface on the detached buffer."
   "Fold NEXT's deferred work and return its model."
   (appkit-command--batch-add
    (appkit-app-command-batch app)
-   (appkit-next-commands next)
-   (appkit-app-command-limit app))
+   (appkit-next-commands next))
   (appkit-command--stage-revocations
    (appkit-app-effect-runtime app) (appkit-next-commands next))
   (appkit-next-model next))
@@ -284,14 +282,12 @@ the caller then opens a fresh Surface on the detached buffer."
 
 (cl-defun appkit-app-start
     (type &key input identity
-          (command-limit appkit-command-default-per-next-limit)
-          (folded-command-limit appkit-command-default-folded-limit)
           (max-active-effects 32) (max-sources 32) (surface-limit 32))
   "Start a UI-free App of TYPE with INPUT and return it.
 
-IDENTITY defaults to a fresh opaque symbol.  COMMAND-LIMIT,
-FOLDED-COMMAND-LIMIT, MAX-ACTIVE-EFFECTS, and SURFACE-LIMIT are positive hard
-bounds owned by this App incarnation."
+IDENTITY defaults to a fresh opaque symbol. MAX-ACTIVE-EFFECTS,
+MAX-SOURCES, and SURFACE-LIMIT are positive resource bounds owned by this
+App incarnation."
   (appkit-loop--assert-main-thread)
   (cl-check-type type appkit-app-type)
   (dolist (callback (list (appkit-app-type-init type)
@@ -310,7 +306,6 @@ bounds owned by this App incarnation."
               (functionp (appkit-app-type-shutdown type)))
     (signal 'wrong-type-argument
             (list 'functionp (appkit-app-type-shutdown type))))
-  (appkit-command--check-limit "Per-next command limit" command-limit)
   (appkit-command--check-limit "Surface limit" surface-limit)
   (let (app completed-p)
     (unwind-protect
@@ -339,8 +334,7 @@ bounds owned by this App incarnation."
                  (appkit-topic-hub-create
                   loop (appkit-app-type-subscribed type))
                  :command-batch
-                 (appkit-command--batch-create folded-command-limit t)
-                 :command-limit command-limit
+                 (appkit-command--batch-create t)
                  :handles nil
                  :surfaces (make-hash-table :test #'equal)
                  :surface-limit surface-limit
