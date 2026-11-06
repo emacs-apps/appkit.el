@@ -20,6 +20,7 @@
 (declare-function appkit-app-loop "appkit-app")
 (declare-function appkit-app-resource-coordinator "appkit-app")
 (declare-function appkit-surface-app "appkit-surface")
+(declare-function appkit-surface-buffer "appkit-surface")
 (declare-function appkit-surface-live-p "appkit-surface")
 (declare-function appkit-surface-loop "appkit-surface")
 (declare-function appkit-surface-renderer "appkit-surface")
@@ -587,7 +588,9 @@ The first completion wakes the App; later completions share that wake."
             (maphash (lambda (key _present)
                        (when (gethash key interests) (push key keys)))
                      extra-keys))
-          (when keys (funcall mapper (nreverse keys))))))))
+          (when keys
+            (with-current-buffer (appkit-surface-buffer surface)
+              (funcall mapper (nreverse keys)))))))))
 
 (defun appkit-resource-state (surface key)
   "Return presentation resource state for SURFACE and KEY, or nil."

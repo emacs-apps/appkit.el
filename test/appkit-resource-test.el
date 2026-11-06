@@ -572,6 +572,50 @@
                           :key 'cover :row-keys '(row))))))
       :recover nil :resource-request (lambda (_keys) 'render) :unmount #'ignore))))
 
+(ert-deftest appkit-resource-mapper-runs-in-owning-buffer ()
+  (let (resolve app surface buffer mapped)
+    (let* ((type
+            (appkit-resource-test--retained-surface
+             (lambda (_context _input success _failure)
+               (setq resolve success)
+               (appkit-cancellation-create :cancel #'ignore))))
+           (factory (appkit-surface-type-renderer-factory type)))
+      (setf (appkit-surface-type-renderer-factory type)
+            (lambda (owner)
+              (let* ((renderer (funcall factory owner))
+                     (mapper (appkit-generated-renderer-resource-request renderer)))
+                (setf (appkit-generated-renderer-resource-request renderer)
+                      (lambda (keys)
+                        (should (eq (current-buffer) buffer))
+                        (should (eq header-line-format 'resource-owner))
+                        (setq mapped keys)
+                        (funcall mapper keys)))
+                renderer)))
+      (unwind-protect
+          (progn
+            (setq app (appkit-app-start appkit-resource-test--app-type
+                                       :identity (make-symbol "resource-owner"))
+                  surface (appkit-open-generated-surface type :app app :identity 'resource)
+                  buffer (appkit-surface-buffer surface))
+            (with-current-buffer buffer
+              (setq-local header-line-format 'resource-owner))
+            (with-temp-buffer
+              (setq-local header-line-format 'caller)
+              (let ((caller (current-buffer)))
+                (funcall resolve "ready-bytes")
+                (appkit-loop-run-pass (appkit-app-loop app))
+                (should (eq (current-buffer) caller))
+                (appkit-loop-run-pass (appkit-surface-loop surface))
+                (should (eq (current-buffer) caller))
+                (should (eq header-line-format 'caller))))
+            (should (equal mapped '(cover)))
+            (should (eq (appkit-loop-status (appkit-surface-loop surface)) 'running))
+            (should (eq (appkit-resource-state-status
+                         (appkit-resource-state surface 'cover)) 'ready)))
+        (when surface (appkit-surface-stop surface))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (when app (appkit-app-close app))))))
+
 (ert-deftest appkit-resource-retained-value-follows-last-interest-and-replacement ()
   (dolist (synchronous '(nil t))
     (let ((starts 0) (released 0) callbacks app surfaces)
