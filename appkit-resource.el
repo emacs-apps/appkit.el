@@ -91,8 +91,10 @@ once after all interests detach, including for a stale or late completion."
   app
   entries
   interests
+  idle
   max-entries
   max-interests
+  max-idle
   alive-p)
 
 (cl-defstruct (appkit-resource--acquisition
@@ -141,6 +143,8 @@ once after all interests detach, including for a stale or late completion."
 
 (defconst appkit-resource-default-entry-limit 256)
 (defconst appkit-resource-default-interest-limit 512)
+(defconst appkit-resource-default-idle-limit 64
+  "Ready `while-interested' entries an App keeps after their last interest.")
 (defconst appkit-resource-default-broker-active-limit 32)
 (defconst appkit-resource-default-broker-queue-limit 128)
 
@@ -205,14 +209,18 @@ valid across source reloads.")
                   :surfaces (make-hash-table :test #'eq))
                  appkit-resource--pending-by-coordinator))))
 
-(defun appkit-resource-coordinator-create (app &optional entry-limit interest-limit)
-  "Create APP's logical resource coordinator."
+(defun appkit-resource-coordinator-create
+    (app &optional entry-limit interest-limit idle-limit)
+  "Create APP's logical resource coordinator.
+IDLE-LIMIT bounds the ready `while-interested' entries kept after their last
+interest, so a row scrolled away and back does not acquire again."
   (appkit-resource--coordinator-create-internal
    :app app
    :entries (make-hash-table :test #'equal)
    :interests (make-hash-table :test #'eq)
    :max-entries (or entry-limit appkit-resource-default-entry-limit)
    :max-interests (or interest-limit appkit-resource-default-interest-limit)
+   :max-idle (or idle-limit appkit-resource-default-idle-limit)
    :alive-p t))
 
 (defun appkit-resource--broker-key (coordinator demand)
@@ -601,7 +609,9 @@ The first completion wakes the App; later completions share that wake."
            (table (and coordinator
                        (appkit-resource--surface-interests
                         coordinator surface)))
-           (entry (and table (gethash key table)
+           (entry (and coordinator
+                       (or (and table (gethash key table))
+                           (member key (appkit-resource--coordinator-idle coordinator)))
                        (gethash key
                                 (appkit-resource--coordinator-entries
                                  coordinator)))))
@@ -695,10 +705,28 @@ The first completion wakes the App; later completions share that wake."
     (when-let* ((condition (car conditions)))
       (signal (car condition) (cdr condition)))))
 
+(defun appkit-resource--unpark (coordinator key)
+  "Stop keeping KEY as an idle entry of COORDINATOR."
+  (setf (appkit-resource--coordinator-idle coordinator)
+        (delete key (appkit-resource--coordinator-idle coordinator))))
+
+(defun appkit-resource--evict-idle (coordinator)
+  "Release COORDINATOR's least recently used idle entry, if any."
+  (when-let* ((key (car (last (appkit-resource--coordinator-idle coordinator))))
+              (entries (appkit-resource--coordinator-entries coordinator))
+              (entry (gethash key entries)))
+    (appkit-resource--unpark coordinator key)
+    (remhash key entries)
+    (appkit-resource--release-entries (list entry))
+    t))
+
 (defun appkit-resource--release-uninterested (coordinator)
-  "Remove and release every while-interested entry with no interest."
+  "Settle every while-interested entry that no Surface is interested in.
+A ready entry becomes idle, newest first, and is released once it falls
+beyond the idle limit.  Any other entry is released at once."
   (let ((entries (appkit-resource--coordinator-entries coordinator))
-        releases)
+        (old (appkit-resource--coordinator-idle coordinator))
+        idle releases)
     (maphash
      (lambda (key entry)
        (when (and (eq (or (appkit-resource-demand-cache-policy
@@ -706,9 +734,21 @@ The first completion wakes the App; later completions share that wake."
                           'retain)
                       'while-interested)
                   (not (appkit-resource--key-interested-p coordinator key)))
-         (remhash key entries)
-         (push entry releases)))
+         (if (when-let* ((state (appkit-resource--entry-state entry)))
+               (eq (appkit-resource-state-status state) 'ready))
+             (push key idle)
+           (remhash key entries)
+           (push entry releases))))
      (copy-hash-table entries))
+    (setq idle (append (cl-set-difference idle old :test #'equal)
+                       (cl-remove-if-not (lambda (key) (member key idle)) old)))
+    (when-let* ((overflow (nthcdr (or (appkit-resource--coordinator-max-idle coordinator) 0)
+                                  idle)))
+      (dolist (key overflow)
+        (push (gethash key entries) releases)
+        (remhash key entries))
+      (setq idle (butlast idle (length overflow))))
+    (setf (appkit-resource--coordinator-idle coordinator) idle)
     (appkit-resource--release-entries releases)))
 
 (defun appkit-resource--prepare-demands (coordinator demands interest-table)
@@ -753,7 +793,9 @@ The first completion wakes the App; later completions share that wake."
                            'retain)))))
               (error "Resource demand contract changed for key %S" key))
           (setq new-count (1+ new-count)))))
-    (when (> (+ (hash-table-count entries) new-count)
+    (when (> (+ (hash-table-count entries) new-count
+                (- (cl-count-if-not (lambda (key) (gethash key seen))
+                                    (appkit-resource--coordinator-idle coordinator))))
              (appkit-resource--coordinator-max-entries coordinator))
       (error "App resource entry limit exceeded"))
     (when interest-table
@@ -771,6 +813,7 @@ The first completion wakes the App; later completions share that wake."
   (let* ((key (appkit-resource-demand-key demand))
          (entries (appkit-resource--coordinator-entries coordinator))
          (existing (gethash key entries)))
+    (appkit-resource--unpark coordinator key)
     (when (and existing
                (not (equal (appkit-resource--entry-input existing)
                            (appkit-resource-demand-input demand))))
@@ -779,6 +822,9 @@ The first completion wakes the App; later completions share that wake."
       (setq existing nil))
     (or existing
         (progn
+          (while (and (>= (hash-table-count entries)
+                          (appkit-resource--coordinator-max-entries coordinator))
+                      (appkit-resource--evict-idle coordinator)))
           (when (>= (hash-table-count entries)
                     (appkit-resource--coordinator-max-entries coordinator))
             (error "App resource entry limit exceeded"))
@@ -844,6 +890,7 @@ The first completion wakes the App; later completions share that wake."
                (appkit-resource--coordinator-entries coordinator))
       (clrhash (appkit-resource--coordinator-entries coordinator))
       (clrhash (appkit-resource--coordinator-interests coordinator))
+      (setf (appkit-resource--coordinator-idle coordinator) nil)
       (remhash coordinator appkit-resource--pending-by-coordinator)
       (appkit-resource--release-entries entries)
       t)))

@@ -711,7 +711,7 @@
 
 
 (ert-deftest appkit-resource-presentation-follows-the-last-visible-consumer ()
-  "Repeated rows and two Surfaces share one image per size until both detach."
+  "Repeated rows and two Surfaces share one image per size until the App closes."
   (let ((starts 0) (decodes 0) released images app surfaces)
     (let* ((loader
             (lambda (_context _input success _failure)
@@ -765,11 +765,100 @@
             (appkit-surface-stop (car surfaces))
             (should-not released)
             (appkit-surface-stop (cadr surfaces))
+            (should-not released)
+            (appkit-app-close (prog1 app (setq app nil)))
             (should (= (length released) 2)))
         (dolist (surface surfaces)
           (when (buffer-live-p (appkit-surface-buffer surface))
             (kill-buffer (appkit-surface-buffer surface))))
         (when app (appkit-app-close app))))))
+
+;; A Surface whose rows are exactly the keys VISIBLE returns, demanded
+;; `while-interested' through LOADER.
+(defun appkit-resource-test--keyed-surface (app loader visible)
+  (appkit-open-generated-surface
+   (appkit-surface-type-create
+    :name 'keyed-consumer :mode #'special-mode
+    :init (lambda (_context _input) (appkit-next :model nil :render t))
+    :update (lambda (_context model _message) (appkit-next :model model :render t))
+    :renderer-factory
+    (lambda (_surface)
+      (appkit-generated-renderer-create
+       :mount #'ignore :unmount #'ignore
+       :merge (lambda (_old new) new) :resource-request (lambda (_keys) t)
+       :render
+       (lambda (_surface _view _model _change)
+         (appkit-resource-rows-result
+          (mapcar (lambda (key)
+                    (list key (appkit-resource-demand-create
+                               :key key :input key :loader loader
+                               :acquisition-identity key :sharing-policy 'app-private
+                               :cache-policy 'while-interested)))
+                  (funcall visible))
+          t)))))
+   :app app :identity (make-symbol "keyed")))
+
+(defmacro appkit-resource-test--with-keyed-surface (&rest body)
+  "Run BODY with `app', `surface', `visible', `starts', `released' and `show'.
+`show' sets the visible keys and settles the resulting render."
+  (declare (indent 0))
+  `(let (starts released visible app surface)
+     (let ((loader (lambda (_context input success _failure)
+                     (push input starts)
+                     (funcall success (appkit-resource-value-create
+                                       :value input :release (lambda () (push input released))))
+                     (appkit-cancellation-create :kind 'logical :cancel #'ignore))))
+       (cl-flet ((show (keys)
+                   (setq visible keys)
+                   (if surface (appkit-surface-send surface 'scroll)
+                     (setq surface (appkit-resource-test--keyed-surface
+                                    app loader (lambda () visible))))
+                   (appkit-loop-run-pass (appkit-app-loop app))
+                   (appkit-loop-run-pass (appkit-surface-loop surface))))
+         (unwind-protect
+             (progn
+               (setq app (appkit-app-start appkit-resource-test--app-type
+                                          :identity (make-symbol "keyed-app")))
+               ,@body)
+           (when (and surface (buffer-live-p (appkit-surface-buffer surface)))
+             (kill-buffer (appkit-surface-buffer surface)))
+           (when app (appkit-app-close app)))))))
+
+(defun appkit-resource-test--status (surface key)
+  (when-let* ((state (appkit-resource-state surface key)))
+    (appkit-resource-state-status state)))
+
+(ert-deftest appkit-resource-idle-entry-returns-without-acquiring-again ()
+  "A ready row scrolled away stays readable and comes back without a load."
+  (appkit-resource-test--with-keyed-surface
+    (show '(a))
+    (should (eq (appkit-resource-test--status surface 'a) 'ready))
+    (show nil)
+    (should-not released)
+    (should (eq (appkit-resource-test--status surface 'a) 'ready))
+    (show '(a))
+    (should (equal starts '(a)))
+    (should-not released)))
+
+(ert-deftest appkit-resource-idle-limit-releases-the-oldest-entry ()
+  (let ((appkit-resource-default-idle-limit 1))
+    (appkit-resource-test--with-keyed-surface
+      (show '(a))
+      (show '(b))
+      (should-not released)
+      (show nil)
+      (should (equal released '(a)))
+      (should-not (appkit-resource-test--status surface 'a))
+      (should (eq (appkit-resource-test--status surface 'b) 'ready)))))
+
+(ert-deftest appkit-resource-entry-capacity-evicts-idle-entries-first ()
+  (let ((appkit-resource-default-entry-limit 2))
+    (appkit-resource-test--with-keyed-surface
+      (show '(a b))
+      (show nil)
+      (show '(c))
+      (should (= (length released) 1))
+      (should (eq (appkit-resource-test--status surface 'c) 'ready)))))
 
 (ert-deftest appkit-resource-presentation-retries-unavailable-decoders ()
   (let* ((wrapped (appkit-resource-presentation-create 'source #'ignore))
