@@ -93,10 +93,13 @@ Returns nil in terminal frames or when SVG is unavailable."
 
 GUI frames get an SVG image; terminal frames get a plain ▏ character.  The
 result is display-only presentation and may safely stand in for source text
-that remains in the buffer."
+that remains in the buffer.  Each call carries its own display spec: Emacs
+merges adjacent `eq' display values into one replacement, which would fold
+nested bars into a single column."
   (let ((image (appkit-ui--create-vbar-svg face)))
     (if image
-        (propertize " " 'display image 'rear-nonsticky '(display))
+        (propertize " " 'display (copy-sequence image)
+                    'rear-nonsticky '(display))
       (if face (propertize "▏" 'face face) "▏"))))
 
 (defun appkit-ui--rgb-triple-p (value)
